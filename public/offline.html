@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Offline — Smart Tool Monitoring System</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; min-height: 100vh; display: grid; place-items: center;
+        background: #0b1220; color: #e2e8f2; padding: 24px;
+        font-family: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
+      }
+      .card {
+        max-width: 420px; text-align: center; background: #131c2b;
+        border: 1px solid #2a3a63; border-radius: 16px; padding: 40px 28px;
+      }
+      .badge {
+        width: 64px; height: 64px; margin: 0 auto 20px; border-radius: 16px;
+        background: rgba(247, 201, 72, .12); border: 1px solid rgba(247, 201, 72, .3);
+        display: grid; place-items: center; font-size: 30px;
+      }
+      h1 { font-size: 20px; margin: 0 0 10px; letter-spacing: -0.01em; }
+      p { color: #9aadcd; font-size: 14px; line-height: 1.6; margin: 0 0 24px; }
+      button {
+        background: #f7c948; color: #0b1220; border: 0; border-radius: 10px;
+        padding: 12px 22px; font-weight: 700; font-size: 14px; cursor: pointer;
+      }
+      button:hover { background: #f0b429; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="badge">🔧</div>
+      <h1>You are offline</h1>
+      <p>
+        This page is not cached yet. Tool records already stored on this device remain
+        available — reopen the app to continue working in the laboratory.
+      </p>
+      <button onclick="location.href='/'">Return to app</button>
+    </div>
+  </body>
+</html>

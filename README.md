@@ -21,7 +21,11 @@ npm run build      # production bundle + service worker
 npm run preview    # serve the build on http://localhost:4173
 
 npm run verify           # 123 checks (logic, workflow, boot, UI) — no browser needed
-npm run verify:browser   # 21 checks in real Chromium; needs `npm run dev` running
+npm run verify:browser   # 22 checks in real Chromium; needs a server running
+
+# against the dev server            against the production build
+npm run dev                          npm run build && npm run serve:dist
+npm run verify:browser               npm run verify:browser http://localhost:4180
 ```
 
 Install the PWA from the browser's install button, or from the in-app prompt. Once installed it
@@ -39,6 +43,52 @@ back of the bay.
 The first launch seeds a realistic laboratory: **42 tools, 12 users, 24 transactions, 11
 maintenance records, 12 notifications and 61 activity-log entries**. The seeded dates are relative
 to today, so there are always loans due tomorrow and loans already overdue.
+
+---
+
+## Deploying to Vercel
+
+The repository is deploy-ready: `vercel.json` pins the Vite preset, rewrites every unmatched path
+to `index.html` so a hard refresh on `/tools/TOOL-00001` works, and sets the cache headers a PWA
+needs.
+
+**From the dashboard** — import the GitHub repo at [vercel.com/new](https://vercel.com/new).
+Everything is read from `vercel.json`, so leave the build settings alone and deploy. No environment
+variables are required; the app has no backend.
+
+**From the CLI**
+
+```bash
+npm i -g vercel
+vercel          # preview deployment
+vercel --prod   # production
+```
+
+### Why `vercel.json` matters here
+
+- **SPA rewrites.** React Router uses real URLs. Without the rewrite, opening `/dashboard`
+  directly returns 404, because no such file exists in `dist/`. Vercel checks the filesystem
+  *before* applying rewrites, so `/assets/*`, `/sw.js` and `/icons/*` still resolve normally.
+- **`sw.js` must not be cached.** It is served `max-age=0, must-revalidate`; a cached service
+  worker would pin users to an old build forever. Hashed assets get `immutable` instead.
+- **`"framework": "vite"`** is pinned explicitly so Vercel cannot mis-detect the project.
+- **HTTPS comes free**, which the QR scanner needs — browsers refuse camera access on plain HTTP
+  outside `localhost`. `Permissions-Policy: camera=(self)` is set for the same reason.
+
+Verify the deployable artifact locally before pushing — `scripts/serve-static.mjs` reproduces
+Vercel's filesystem-then-rewrite routing and applies the same headers:
+
+```bash
+npm run build && npm run serve:dist
+npm run verify:browser http://localhost:4180
+```
+
+### Data lives in the browser, not on Vercel
+
+There is no backend, so nothing is shared between devices or visitors. Each browser seeds its own
+demo laboratory on first visit and keeps its records in that browser's IndexedDB. Two people
+opening the deployed URL get two independent datasets. That is the intended behaviour for this
+build; wiring `services/db.js` to a real API is the step that would change it.
 
 ---
 

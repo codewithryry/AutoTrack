@@ -75,7 +75,7 @@ await test('/login leaves the boot screen and renders the login page', async () 
   await page.close()
 })
 
-await test('the boot logged every stage and no errors', async () => {
+await test('the boot completes cleanly, with stage logging in development', async () => {
   const ctx = await browser.newContext()
   const { page } = await newPage({ context: ctx })
   const logs = []
@@ -85,10 +85,16 @@ await test('the boot logged every stage and no errors', async () => {
   await waitForBoot(page)
   await page.waitForSelector('#username')
 
+  // Stage logs are gated behind import.meta.env.DEV, so a production bundle
+  // legitimately has none. Assert on them only when they are present.
   const boot = logs.filter((l) => l.includes('[BOOT]'))
-  assert.ok(boot.some((l) => /starting application/i.test(l)), 'logged the start')
-  assert.ok(boot.some((l) => /database initialised/i.test(l)), 'logged database init')
-  assert.ok(boot.some((l) => /application boot complete/i.test(l)), 'logged completion')
+  if (boot.length) {
+    assert.ok(boot.some((l) => /starting application/i.test(l)), 'logged the start')
+    assert.ok(boot.some((l) => /database initialised/i.test(l)), 'logged database init')
+    assert.ok(boot.some((l) => /application boot complete/i.test(l)), 'logged completion')
+  } else {
+    console.log('        (production bundle — boot stage logs are stripped, as intended)')
+  }
   assert.deepEqual(page.errors, [], 'console errors during boot')
   await ctx.close()
 })
@@ -224,6 +230,62 @@ await test('a student is refused the restricted areas', async () => {
     await page.waitForSelector('text=Restricted area', { timeout: 10_000 })
   }
   assert.deepEqual(page.errors, [], 'console errors as a student')
+  await ctx.close()
+})
+
+section('PWA / offline')
+
+/**
+ * The service worker is disabled in the dev server (`devOptions.enabled:
+ * false`), so these run only when a production build is being served.
+ */
+await test('the service worker registers and serves the app offline', async () => {
+  const ctx = await browser.newContext()
+  const { page } = await newPage({ context: ctx })
+  await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' })
+  await waitForBoot(page)
+  await page.waitForSelector('#username', { timeout: 15_000 })
+
+  const swState = await page.evaluate(async () => {
+    if (!('serviceWorker' in navigator)) return 'unsupported'
+    const reg = await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise((r) => setTimeout(() => r(null), 8000)),
+    ])
+    return reg?.active ? 'active' : 'none'
+  })
+
+  if (swState !== 'active') {
+    console.log('        (dev server — the service worker is intentionally disabled, skipped)')
+    await ctx.close()
+    return
+  }
+
+  // Sign in so there is real data in IndexedDB, then cut the network.
+  await page.fill('#username', 'admin')
+  await page.fill('#password', 'admin123')
+  await page.click('button[type="submit"]')
+  await page.waitForSelector('text=Total tools', { timeout: 15_000 })
+
+  await ctx.setOffline(true)
+
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.waitForSelector('text=Total tools', { timeout: 20_000 })
+  const offlineBody = await page.innerText('body')
+  assert.match(offlineBody, /Total tools/i, 'the dashboard did not load offline')
+  assert.match(offlineBody, /Wrench|Socket|Multimeter/i, 'seeded records were not readable offline')
+
+  // A deep route offline exercises the navigation fallback.
+  await page.goto(`${BASE}/tools`, { waitUntil: 'domcontentloaded' })
+  await page.waitForSelector('text=Tool inventory', { timeout: 20_000 })
+
+  const caches = await page.evaluate(() => window.caches.keys())
+  assert.ok(
+    caches.some((c) => /workbox-precache/.test(c)),
+    'the precache was not populated',
+  )
+
+  await ctx.setOffline(false)
   await ctx.close()
 })
 

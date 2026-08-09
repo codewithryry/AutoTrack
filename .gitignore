@@ -1,5 +1,9 @@
 node_modules/
 dist/
+
+# Next.js artifacts (this is a Vite app — these come from running Next by mistake)
+.next/
+.vercel/
 dist-ssr/
 .vite/
 *.local

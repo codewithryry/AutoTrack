@@ -22,6 +22,7 @@ import {
   SearchInput,
   SectionCard,
   SelectField,
+  SkeletonRows,
   Spinner,
   StatusBadge,
   TextAreaField,
@@ -60,19 +61,16 @@ const borrowTour = (student) =>
           target: 'borrow-list',
           title: 'Pick your tool',
           text: 'Only tools that are free right now are listed. Search by name, ID or shelf, then tap one to select it.',
-          icon: Wrench,
         },
         {
           target: 'borrow-form',
           title: 'Check the dates',
           text: 'Your own name is filled in — you borrow under your account. Set the return date, or tap a quick-set button.',
-          icon: CalendarDays,
         },
         {
           target: 'borrow-submit',
           title: 'Confirm and collect',
           text: 'Confirming records the loan against your account and marks the tool as borrowed. It then shows on your dashboard until you return it.',
-          icon: ArrowRight,
         },
       ]
     : [
@@ -80,19 +78,16 @@ const borrowTour = (student) =>
           target: 'borrow-list',
           title: 'Select the tool',
           text: 'Everything available for issue, searchable by name, ID, brand or location.',
-          icon: Wrench,
         },
         {
           target: 'borrow-form',
           title: 'Borrower and dates',
           text: 'Issue to any active user, then set the due date. Your name is recorded as the issuing staff member.',
-          icon: UserCheck,
         },
         {
           target: 'borrow-submit',
           title: 'Confirm the issue',
           text: 'Confirming creates the transaction, marks the tool as borrowed and writes the activity log.',
-          icon: ArrowRight,
         },
       ]
 
@@ -237,16 +232,24 @@ export default function BorrowPage() {
         description="Issue laboratory equipment and create a transaction record."
         icon={Repeat}
         hideTitleMobile
+        hideTitle={isStudent(user)}
       >
-        <Link to="/scan" className="btn btn-outline">
-          <QrCode className="h-4 w-4" />
-          Scan instead
-        </Link>
-        {can(PERM.RETURN) && (
-          <Link to="/return" className="btn btn-outline">
-            <Undo2 className="h-4 w-4" />
-            Return a tool
-          </Link>
+        {/* A student reaches Scan and Return from the bottom bar, so the header
+            shortcuts only repeat navigation they already have. Staff, whose bar
+            does not carry these routes, keep both. */}
+        {!isStudent(user) && (
+          <>
+            <Link to="/scan" className="btn btn-outline">
+              <QrCode className="h-4 w-4" />
+              Scan instead
+            </Link>
+            {can(PERM.RETURN) && (
+              <Link to="/return" className="btn btn-outline">
+                <Undo2 className="h-4 w-4" />
+                Return a tool
+              </Link>
+            )}
+          </>
         )}
       </PageHeader>
 
@@ -273,11 +276,7 @@ export default function BorrowPage() {
               onRetry={reloadTools}
             />
           ) : loadingTools && !tools.length ? (
-            <div className="space-y-2 p-4">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="skeleton h-14 rounded-lg" />
-              ))}
-            </div>
+            <SkeletonRows rows={5} columns={2} />
           ) : visibleTools.length === 0 ? (
             <EmptyState
               icon={Wrench}
@@ -511,7 +510,7 @@ export default function BorrowPage() {
         </div>
       </div>
 
-      <Walkthrough steps={tourSteps} open={tour.open} onClose={tour.close} />
+      <Walkthrough steps={tourSteps} open={tour.open} onClose={tour.close} compact={isStudent(user)} />
     </>
   )
 }

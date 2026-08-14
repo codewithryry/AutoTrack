@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { assistantLine } from '../services/assistant'
 import { cx } from '../utils/helpers'
 
 /* ------------------------------------------------------------------ *
@@ -59,6 +60,46 @@ export const MASCOT_STATES = {
     glow: CYAN,
     prop: 'qr',
     body: 'bob-fast',
+    leftArm: 'rest',
+  },
+  inspecting: {
+    label: 'Looking over the tools',
+    message: 'Every tool on the shelf, with its record.',
+    eyes: 'open',
+    mouth: 'smile',
+    glow: CYAN,
+    prop: 'wrench',
+    body: 'bob',
+    leftArm: 'point',
+  },
+  checking: {
+    label: 'Reading the log',
+    message: 'Going back through the records.',
+    eyes: 'open',
+    mouth: 'small',
+    glow: CYAN,
+    prop: 'clipboard',
+    body: 'bob',
+    leftArm: 'rest',
+  },
+  tuning: {
+    label: 'Adjusting',
+    message: 'Setting how the laboratory runs.',
+    eyes: 'wink',
+    mouth: 'smile',
+    glow: CYAN,
+    prop: 'gear',
+    body: 'bob',
+    leftArm: 'rest',
+  },
+  curious: {
+    label: 'Nothing here yet',
+    message: 'There is nothing on this list so far.',
+    eyes: 'confused',
+    mouth: 'small',
+    glow: CYAN,
+    prop: 'question',
+    body: 'tilt',
     leftArm: 'rest',
   },
   borrowing: {
@@ -514,7 +555,7 @@ function Mouth({ kind, color }) {
  * ------------------------------------------------------------------ */
 
 /** Props actually gripped by the right hand, which sits at ≈(98, 97) when raised. */
-const HELD = new Set(['qr', 'toolbox', 'wrench', 'bell', 'offline'])
+const HELD = new Set(['qr', 'toolbox', 'wrench', 'bell', 'offline', 'clipboard', 'gear'])
 
 function Prop({ kind, animated }) {
   if (!kind) return null
@@ -566,6 +607,59 @@ function PropArt({ kind, animated }) {
             stroke="#64748B"
             strokeWidth="1"
           />
+        </g>
+      )
+    case 'clipboard':
+      return (
+        <g>
+          <rect
+            x="83"
+            y="58"
+            width="19"
+            height="24"
+            rx="2.5"
+            fill="#F1F5F9"
+            stroke="#CBD5E1"
+            strokeWidth="1"
+          />
+          <rect x="88" y="55" width="9" height="5" rx="2.5" fill="#64748B" />
+          <g stroke="#94A3B8" strokeWidth="1.6" strokeLinecap="round">
+            <path d="M87 66h11M87 70h11" />
+          </g>
+          {/* the one tick that says this is a checked record, not a notepad */}
+          <path
+            d="M87.5 75.5l2.5 2.5 5-5"
+            stroke={GREEN}
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            fill="none"
+          />
+        </g>
+      )
+    case 'gear':
+      // The same cog as the one on the helmet, in the hand and turning at the
+      // same slow rate, so the figure reads as adjusting something.
+      return (
+        <g
+          className={cx(animated && 'animate-mascot-spin-slow', 'motion-reduce:animate-none')}
+          style={ORIGIN}
+        >
+          <g fill={STEEL}>
+            {[0, 45, 90, 135].map((angle) => (
+              <rect
+                key={angle}
+                x="92.4"
+                y="57"
+                width="3.2"
+                height="22"
+                rx="1.4"
+                transform={`rotate(${angle} 94 68)`}
+              />
+            ))}
+          </g>
+          <circle cx="94" cy="68" r="8" fill={STEEL} stroke="#64748B" strokeWidth="1" />
+          <circle cx="94" cy="68" r="3.4" fill="#1B2537" />
         </g>
       )
     case 'check':
@@ -682,80 +776,231 @@ export function deriveMascotState({
 }
 
 /**
- * What the mascot says when tapped. The contextual lines come first — whatever
- * the signals say needs attention — then the general ones, and a tap moves to
- * the next. Nothing is scheduled and nothing is fetched: the text is derived
- * from the figures the dashboard already has.
+ * The one thing the mascot volunteers without being asked.
+ *
+ * It speaks up by itself for a lost connection and for nothing else: everything
+ * else the app has to say is already written on the page, and a bubble that
+ * appeared for all of it would be noise. A dropped connection is different —
+ * nothing on screen says the figures are a stored copy, so the mascot says it.
+ *
+ * A constant, not a generated line, so it is right the instant the connection
+ * changes and needs nothing fetched to show it.
  */
-function speechFor(signals = {}, name) {
-  const who = name ? `Hi, ${name}!` : 'Hi there!'
-  const lines = [`${who} Need help with your tools?`]
+const OFFLINE_LINE =
+  'You are offline — this is the copy saved on this device. Anything you record syncs when the connection returns.'
 
-  // `online` defaults to true here exactly as it does in `deriveMascotState`, so
-  // an omitted signal never reads as "offline".
-  if (signals.online === false) {
-    lines.push('You are offline — I am using the copy saved on this device.')
-  }
-  if (signals.overdue > 0) lines.push('Remember to return your borrowed tools on time.')
-  if (signals.dueSoon > 0) lines.push('Some tools are due back soon — keep an eye on the dates.')
-  if (signals.activeLoans > 0) lines.push('Scan a tool to borrow it, or hand one back when you are done.')
-  if (!signals.overdue && !signals.dueSoon && signals.online !== false) {
-    lines.push('You are all caught up!')
-  }
-  lines.push('Need help? I am here!')
-  return lines
+/**
+ * What the assistant is doing on each screen, and the short lines it offers when
+ * it is tapped there.
+ *
+ * One table, matched against the route, so the character is the same everywhere
+ * and only its pose, its prop and what it says change with the page — which is
+ * the whole point of a single mascot. The lines describe the screen the student
+ * or member of staff is actually on; none of them is a greeting, and none claims
+ * anything role-specific, since the same figure stands on an administrator's
+ * Settings page and a student's Scan page.
+ *
+ * `pathname` is passed in rather than read from the router here: this file draws
+ * a figure and knows nothing about routing, services or data, and it stays that
+ * way.
+ */
+const CONTEXTS = [
+  {
+    test: /^\/dashboard/,
+    state: 'happy',
+    lines: [
+      'Everything you have out, and what is due back, is on this screen.',
+      'Scan to borrow is the quickest way to check a tool out.',
+    ],
+  },
+  {
+    test: /^\/tools\/[^/]/,
+    state: 'inspecting',
+    lines: [
+      'This is the tool’s full record — condition, where it lives, and its history.',
+      'If it says Available, it is on the shelf and can be borrowed.',
+    ],
+  },
+  {
+    test: /^\/tools/,
+    state: 'inspecting',
+    lines: [
+      'Every registered tool, with its status, condition and location.',
+      'Search by name, tool ID, brand or serial number to find one fast.',
+    ],
+  },
+  {
+    test: /^\/scan/,
+    state: 'scanning',
+    lines: [
+      'Point the camera at the QR label on the tool and hold steady.',
+      'No camera? Type the tool ID from the label instead.',
+    ],
+  },
+  {
+    test: /^\/borrow/,
+    state: 'borrowing',
+    lines: [
+      'Pick the tool, check the return date, and confirm to take it out.',
+      'The due date is set from the laboratory’s borrowing period.',
+    ],
+  },
+  {
+    test: /^\/return/,
+    state: 'returning',
+    lines: [
+      'Choose the tool you are handing back and say what condition it is in.',
+      'Report any damage here — it goes straight onto the tool’s record.',
+    ],
+  },
+  {
+    test: /^\/transactions/,
+    state: 'checking',
+    lines: [
+      'Every borrow and return on record, newest first.',
+      'Filter by status to pull out what is still out or already late.',
+    ],
+  },
+  {
+    test: /^\/notifications/,
+    state: 'notification',
+    lines: [
+      'Alerts addressed to you — due dates, overdue tools and account news.',
+      'Anything with a link opens the record it is about.',
+    ],
+  },
+  {
+    test: /^\/maintenance/,
+    state: 'maintenance',
+    lines: [
+      'Tools booked in for servicing, and what is due next.',
+      'A tool in maintenance cannot be borrowed until it is back.',
+    ],
+  },
+  {
+    test: /^\/reports/,
+    state: 'checking',
+    lines: ['The laboratory’s figures over time.', 'Export any table for a report.'],
+  },
+  {
+    test: /^\/settings/,
+    state: 'tuning',
+    lines: [
+      'How the laboratory runs: borrowing periods, reminders and its details.',
+      'A change here applies to everybody using the system.',
+    ],
+  },
+  {
+    test: /^\/users/,
+    state: 'idle',
+    lines: ['Every account, its role, and anything waiting for approval.'],
+  },
+  {
+    test: /^\/profile/,
+    state: 'idle',
+    lines: [
+      'Your own details, and how the app looks on this device.',
+      'Changes to your name or course go to an administrator to approve.',
+    ],
+  },
+]
+
+const FALLBACK = { state: 'idle', lines: ['Tap a card to open the record behind it.'] }
+
+/** The pose and the lines for one route. */
+export function mascotContextFor(pathname = '') {
+  return CONTEXTS.find((context) => context.test.test(pathname)) ?? FALLBACK
 }
 
 /**
- * The mascot as it stands beside a greeting: the figure alone — no card, no
- * border, no background. It floats next to the text, is sized by the caller, and
- * answers a tap with one short line in a speech bubble.
+ * The figure as an assistant: drawn alone — no card, no border, no fill — sized
+ * by the caller, and answering a tap with one short line about the screen it is
+ * standing on.
  *
- * `signals` is passed straight to `deriveMascotState`, so the expression still
- * reflects the real dashboard figures; a tap only lifts it to a friendly face
- * for a moment, and never while it is reporting something that needs attention.
+ * Two things make it speak, and they are deliberately different:
+ *
+ *   • **A lost connection speaks for itself.** No tap, no timer: the notice
+ *     appears the moment the connection drops and is taken down the moment it
+ *     returns. The effect is keyed to that one boolean, so a re-render while
+ *     offline never re-opens a notice that has already been read and dismissed,
+ *     and nothing is fetched or scheduled to produce it.
+ *
+ *   • **Everything else waits to be asked.** A tap moves through the lines for
+ *     this page, one at a time, and the bubble lets itself out after a few
+ *     seconds. The lines are written in `CONTEXTS`, so they cost nothing, are
+ *     right offline, and never repeat a generic greeting.
+ *
+ * The bubble is portalled to the body and positioned `fixed`, so it is painted
+ * over every card on the page, cannot be clipped by one, and never takes part in
+ * layout — nothing moves or resizes when the mascot speaks.
  */
-export function MascotGreeter({ signals, name, className, size = 132 }) {
-  const state = useMemo(() => deriveMascotState(signals), [signals])
-  const lines = useMemo(() => speechFor(signals, name), [signals, name])
-
+function TalkingMascot({ state, lines, offline, size, className, label }) {
   const [turn, setTurn] = useState(-1) // -1 = nothing said yet
   const [pop, setPop] = useState(false)
   const timers = useRef([])
+  const anchor = useRef(null)
 
   // Every timer is cleared on unmount, so a tap right before a route change
-  // cannot set state on a gone component.
+  // cannot set state on a component that is already gone.
   useEffect(() => () => timers.current.forEach(clearTimeout), [])
 
-  const schedule = (fn, ms) => {
-    const id = setTimeout(fn, ms)
-    timers.current.push(id)
-  }
-
-  function say() {
+  // Whatever was being said belongs to the screen it was said on.
+  useEffect(() => {
     timers.current.forEach(clearTimeout)
     timers.current = []
-    setTurn((n) => n + 1)
+    setTurn(-1)
+    setGenerated(null)
+  }, [lines])
+
+  // What the text service made of the current line, if it answered in time.
+  // The written line is what shows until then, so the bubble never waits on the
+  // network and reads identically when there is none.
+  const [generated, setGenerated] = useState(null)
+
+  const say = () => {
+    timers.current.forEach(clearTimeout)
+    timers.current = []
+    setGenerated(null)
+    const next = turn + 1
+    setTurn(next)
     setPop(true)
-    schedule(() => setPop(false), 500)
-    schedule(() => setTurn(-1), 5200) // the bubble lets itself out
+    timers.current.push(setTimeout(() => setPop(false), 500))
+    timers.current.push(setTimeout(() => setTurn(-1), 6000)) // the bubble lets itself out
+
+    const written = lines[next % lines.length]
+    if (!written || offline) return
+    assistantLine(written, { page: label, offline }).then((text) => {
+      // Only if this is still the line on screen: a second tap has its own.
+      if (text !== written) setGenerated({ for: written, text })
+    })
   }
 
-  const speaking = turn >= 0
-  const line = speaking ? lines[turn % lines.length] : null
-  const anchor = useRef(null)
-  // A warning state keeps its own face while talking — a cheerful wave over an
-  // overdue tool would misreport the situation.
-  const calm = state === 'happy' || state === 'idle' || state === 'borrowing'
-  const shown = speaking && calm ? 'happy' : state
+  const [dismissed, setDismissed] = useState(false)
+  useEffect(() => {
+    setDismissed(false)
+  }, [offline])
+
+  const written = turn >= 0 ? lines[turn % lines.length] : null
+  // The generated wording replaces the written one only while that same line is
+  // the one being said; anything else falls back to what is in the source.
+  const spoken = generated?.for === written ? generated.text : written
+  // The connection outranks a tapped line: a stored copy is the more important
+  // thing to know, and it is also the reason the rest of the screen may be stale.
+  // The offline notice is never generated — it has to be right with no network.
+  const line = offline && !dismissed ? OFFLINE_LINE : spoken
+
+  // A reporting face keeps its own expression while it talks — a cheerful wave
+  // over an overdue tool would misreport the situation.
+  const calm = state === 'happy' || state === 'idle' || state === 'inspecting'
+  const shown = offline ? 'offline' : turn >= 0 && calm ? 'happy' : state
 
   return (
     // `items-end` is what keeps the figure standing on the bottom of whatever box
-    // the caller gives it: the greeting beside it grows and shrinks by a line as
-    // its subtitle wraps, and a centred mascot would drift up and down with it.
-    // The height comes entirely from `className`, and the SVG takes only the
-    // width that height needs (`h-full w-auto`) — so a caller sizes the mascot
-    // per breakpoint without the figure ever stretching or being clipped.
+    // the caller gives it: text beside it grows and shrinks by a line as it wraps,
+    // and a centred mascot would drift up and down with it. The height comes
+    // entirely from `className`, and the SVG takes only the width that height
+    // needs (`h-full w-auto`) — so a caller sizes the mascot per breakpoint
+    // without the figure ever stretching or being clipped.
     <div
       className={cx('flex shrink-0 items-end justify-end leading-none', className)}
       data-mascot-state={shown}
@@ -764,7 +1009,7 @@ export function MascotGreeter({ signals, name, className, size = 132 }) {
         ref={anchor}
         type="button"
         onClick={say}
-        aria-label={line ?? 'Talk to the laboratory assistant'}
+        aria-label={label}
         className="block h-full rounded-full border-0 bg-transparent p-0 outline-offset-4
                    transition-transform active:scale-95 motion-reduce:transition-none"
       >
@@ -772,8 +1017,67 @@ export function MascotGreeter({ signals, name, className, size = 132 }) {
           <Mascot state={shown} size={size} className="h-full w-auto" />
         </span>
       </button>
-      {line && <SpeechBubble anchor={anchor} text={line} onDismiss={() => setTurn(-1)} />}
+      {line && (
+        <SpeechBubble
+          anchor={anchor}
+          text={line}
+          onDismiss={() => {
+            if (offline && !dismissed) setDismissed(true)
+            setTurn(-1)
+          }}
+        />
+      )}
     </div>
+  )
+}
+
+/**
+ * The dashboard's assistant: the same figure, standing large beside the greeting.
+ *
+ * `signals` is passed straight to `deriveMascotState`, so its expression reports
+ * whichever dashboard figure needs attention first — overdue tools, a lost
+ * connection, a page still loading — rather than a fixed pose.
+ */
+export function MascotGreeter({ signals, className, size = 132 }) {
+  const state = useMemo(() => deriveMascotState(signals), [signals])
+  const lines = useMemo(() => mascotContextFor('/dashboard').lines, [])
+
+  return (
+    <TalkingMascot
+      state={state}
+      lines={lines}
+      // `online` defaults to true here exactly as it does in `deriveMascotState`,
+      // so an omitted signal never reads as "offline".
+      offline={signals?.online === false}
+      size={size}
+      className={className}
+      label="What can I help with?"
+    />
+  )
+}
+
+/**
+ * The assistant in the application bar: the same character, small, on every page.
+ *
+ * This is the one that makes the mascot a system rather than a dashboard
+ * ornament — it stands in the shell, so it is present at the same size and in the
+ * same place on every route, on a desktop and in the installed app alike, and its
+ * pose and its lines come from the route it is standing on. The dashboard already
+ * has the large one beside its greeting, so the bar leaves that page to it rather
+ * than showing the character twice.
+ */
+export function PageMascot({ pathname, online = true, className, size = 40 }) {
+  const context = useMemo(() => mascotContextFor(pathname), [pathname])
+
+  return (
+    <TalkingMascot
+      state={context.state}
+      lines={context.lines}
+      offline={!online}
+      size={size}
+      className={className}
+      label="What is this page for?"
+    />
   )
 }
 
@@ -790,35 +1094,91 @@ export function MascotGreeter({ signals, name, className, size = 132 }) {
  */
 function SpeechBubble({ anchor, text, onDismiss }) {
   const [box, setBox] = useState(null)
+  // The rectangle of an open menu — the account dropdown that carries the
+  // offline notice, and any other menu the shell opens. The bubble steps out of
+  // its way rather than being painted over it or under it.
+  const [menu, setMenu] = useState(null)
 
   useEffect(() => {
+    // Rectangles are stored as plain numbers and only when they have actually
+    // moved. The bubble is portalled into the body, so re-rendering it is itself
+    // a DOM mutation — writing state on every observation would feed the
+    // observer back into itself and the bubble would never settle.
+    const rect = (el) => {
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { top: r.top, left: r.left, right: r.right, bottom: r.bottom, width: r.width }
+    }
+    const same = (a, b) =>
+      a === b ||
+      (!!a &&
+        !!b &&
+        a.top === b.top &&
+        a.left === b.left &&
+        a.right === b.right &&
+        a.bottom === b.bottom &&
+        a.width === b.width)
+
     const place = () => {
-      const el = anchor.current
-      if (!el) return
-      setBox(el.getBoundingClientRect())
+      const next = rect(anchor.current)
+      if (next) setBox((prev) => (same(prev, next) ? prev : next))
+      // The shell's dropdowns are mounted and unmounted, so the rectangle is
+      // read from whatever menu is in the document right now.
+      const openMenu = rect(document.querySelector('[role="menu"]'))
+      setMenu((prev) => (same(prev, openMenu) ? prev : openMenu))
     }
     place()
     // Following the anchor keeps the caret on the mascot while the dashboard
     // scrolls underneath; `capture` catches the scrolling ancestor too.
     window.addEventListener('scroll', place, true)
     window.addEventListener('resize', place)
+    // A menu appears a render *after* the click that opened it, so the DOM
+    // itself is what is watched rather than the click. The bubble's own subtree
+    // is excluded from the reaction by the equality check above.
+    const observer = new MutationObserver(place)
+    observer.observe(document.body, { childList: true, subtree: true })
     return () => {
       window.removeEventListener('scroll', place, true)
       window.removeEventListener('resize', place)
+      observer.disconnect()
     }
   }, [anchor])
 
   if (!box) return null
 
   const GAP = 10
-  const width = Math.min(280, window.innerWidth - 24)
+  // Deliberately narrow, and narrower again on a small phone: the bubble is one
+  // short line of help over a page of real content, so it takes the smallest
+  // footprint that stays readable.
+  const width = Math.min(window.innerWidth < 380 ? 196 : 224, window.innerWidth - 24)
   // Right-aligned to the mascot, then clamped so it can never leave the screen.
-  const right = Math.max(12, Math.min(window.innerWidth - box.right, window.innerWidth - width - 12))
-  const caret = Math.max(16, Math.min(width - 28, window.innerWidth - right - box.left - box.width / 2))
+  let right = Math.max(12, Math.min(window.innerWidth - box.right, window.innerWidth - width - 12))
   // Above the mascot by default; below it if there is no room up there.
-  const below = box.top < 96
-  const top = below ? box.bottom + GAP : undefined
-  const bottom = below ? undefined : window.innerHeight - box.top + GAP
+  let below = box.top < 96
+  let top = below ? box.bottom + GAP : undefined
+  let bottom = below ? undefined : window.innerHeight - box.top + GAP
+  let caretHidden = false
+
+  // An open menu owns its space outright. Rather than guess whether the two
+  // rectangles meet, the bubble simply moves out from under the menu: alongside
+  // it when the screen is wide enough, otherwise directly beneath it, clear of
+  // the options and of the cards the menu is covering.
+  if (menu) {
+    caretHidden = true
+    if (menu.left - width - GAP >= 12) {
+      right = window.innerWidth - menu.left + GAP
+      below = true
+      top = menu.top
+      bottom = undefined
+    } else {
+      right = Math.max(12, window.innerWidth - menu.right)
+      below = true
+      top = menu.bottom + GAP
+      bottom = undefined
+    }
+  }
+
+  const caret = Math.max(16, Math.min(width - 28, window.innerWidth - right - box.left - box.width / 2))
 
   return createPortal(
     <div
@@ -828,22 +1188,25 @@ function SpeechBubble({ anchor, text, onDismiss }) {
       className="animate-slide-up cursor-pointer select-none"
     >
       <div
-        className="rounded-2xl border px-3.5 py-2.5 text-left text-[13px] font-semibold leading-snug shadow-panel"
+        className="rounded-xl border px-3 py-2 text-left text-[12px] font-semibold leading-[1.35] shadow-lift"
         style={{ background: 'rgb(var(--surface))' }}
       >
         {text}
       </div>
-      {/* the caret, pointing back at the mascot */}
-      <div
-        aria-hidden
-        className="absolute h-3 w-3 rotate-45 border-b border-r"
-        style={{
-          background: 'rgb(var(--surface))',
-          right: caret,
-          [below ? 'top' : 'bottom']: -6,
-          transform: below ? 'rotate(225deg)' : 'rotate(45deg)',
-        }}
-      />
+      {/* The caret points back at the mascot — dropped when the bubble has been
+          moved clear of an open menu and no longer sits over it. */}
+      {!caretHidden && (
+        <div
+          aria-hidden
+          className="absolute h-2.5 w-2.5 border-b border-r"
+          style={{
+            background: 'rgb(var(--surface))',
+            right: caret,
+            [below ? 'top' : 'bottom']: -5,
+            transform: below ? 'rotate(225deg)' : 'rotate(45deg)',
+          }}
+        />
+      )}
     </div>,
     document.body,
   )

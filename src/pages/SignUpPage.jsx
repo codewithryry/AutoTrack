@@ -12,7 +12,11 @@ import {
   UserPlus,
   Wrench,
 } from 'lucide-react'
-import { AuthBrandLockup } from '../components/AuthBranding'
+import {
+  AuthBrandLockup,
+  InstitutionLogos,
+  InstitutionNames,
+} from '../components/AuthBranding'
 import { SelectField, Spinner, TextField } from '../components/ui'
 import { useToast } from '../context/ToastContext'
 import * as userService from '../services/users'
@@ -183,24 +187,36 @@ export default function SignUpPage() {
       </section>
 
       {/* --------------------------- form --------------------------- */}
-      <section className="flex min-w-0 flex-col justify-center px-5 py-10 sm:px-10">
+      <section
+        // On a phone the column starts at the top rather than sitting centred,
+        // so the marks are the first thing on screen instead of floating in the
+        // middle of it. From `sm` the centred desktop layout is unchanged.
+        className="flex min-w-0 flex-col justify-start px-5 sm:justify-center sm:px-10
+                   pb-[calc(env(safe-area-inset-bottom,0px)+2.5rem)]
+                   pt-[calc(env(safe-area-inset-top,0px)+2.5rem)] sm:py-10"
+      >
         <div className="mx-auto w-full max-w-md">
 
-          <div className="mb-7 flex flex-col items-center text-center lg:items-start lg:text-left">
-            <div className="w-full lg:hidden">
-              <AuthBrandLockup />
-            </div>
-            <h2 className="mt-5 text-2xl font-extrabold tracking-tight lg:mt-0">Create account</h2>
+          {/* The institutional marks sit across the top of the phone screen,
+              above everything else, rather than inside the form block. The
+              desktop keeps them on the brand panel to the left. */}
+          <div className="mb-5 lg:hidden">
+            <InstitutionNames className="mb-2" />
+            <InstitutionLogos size="sm" />
+          </div>
+
+          <div className="mb-7 mt-2 flex flex-col items-center text-center">
+            <h2 className="text-2xl font-extrabold tracking-tight">Create account</h2>
             <p className="muted mt-1.5 text-sm">
               Register for access to the laboratory tool monitoring system.
             </p>
           </div>
 
-          <form onSubmit={submit} className="space-y-5" noValidate>
+          <form onSubmit={submit} className="auth-form space-y-5" noValidate>
             {errors.form && (
               <div
                 role="alert"
-                className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-sm
+                className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-3 text-sm
                            font-medium text-red-700 dark:border-red-500/30 dark:bg-red-500/10
                            dark:text-red-300"
               >
@@ -238,9 +254,7 @@ export default function SignUpPage() {
                       />
                       <span className="text-sm font-bold">{title}</span>
                       <span className="subtle text-xs leading-snug">{text}</span>
-                      <span className="subtle text-[11px] font-bold uppercase tracking-wide">
-                        {note}
-                      </span>
+                      <span className="subtle text-[11.5px] font-bold">{note}</span>
                     </button>
                   )
                 })}
@@ -281,7 +295,7 @@ export default function SignUpPage() {
               </label>
               <div className="relative">
                 <Mail
-                  className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2"
+                  className="pointer-events-none absolute left-3.5 top-1/2 h-[18px] w-[18px] -translate-y-1/2"
                   style={{ color: 'rgb(var(--text-subtle))' }}
                 />
                 <input
@@ -294,7 +308,7 @@ export default function SignUpPage() {
                   value={form.email}
                   onChange={setField('email')}
                   placeholder="name@autolab.edu.ph"
-                  className={cx('input pl-9', errors.email && 'input-error')}
+                  className={cx('input pl-11', errors.email && 'input-error')}
                   aria-invalid={!!errors.email}
                 />
               </div>
@@ -370,7 +384,7 @@ export default function SignUpPage() {
               </label>
               <div className="relative">
                 <Lock
-                  className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2"
+                  className="pointer-events-none absolute left-3.5 top-1/2 h-[18px] w-[18px] -translate-y-1/2"
                   style={{ color: 'rgb(var(--text-subtle))' }}
                 />
                 <input
@@ -381,14 +395,14 @@ export default function SignUpPage() {
                   value={form.password}
                   onChange={setField('password')}
                   placeholder="At least 8 characters"
-                  className={cx('input px-9', errors.password && 'input-error')}
+                  className={cx('input px-11', errors.password && 'input-error')}
                   aria-invalid={!!errors.password}
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword((v) => !v)}
-                  className="absolute right-2 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center
-                             rounded-md transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+                  className="absolute right-2 top-1/2 grid h-9 w-9 -translate-y-1/2 place-items-center
+                             rounded-lg transition-colors hover:bg-black/5 dark:hover:bg-white/10"
                   aria-label={showPassword ? 'Hide password' : 'Show password'}
                 >
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -426,18 +440,25 @@ export default function SignUpPage() {
               </div>
             )}
 
-            <button type="submit" className="btn btn-primary btn-lg w-full" disabled={submitting}>
+            <button type="submit" className="btn btn-primary btn-lg w-full rounded-xl" disabled={submitting}>
               {submitting ? <Spinner /> : <UserPlus className="h-4 w-4" />}
               {submitting ? 'Creating account…' : 'Create account'}
             </button>
 
-            <p className="subtle text-center text-xs leading-relaxed">
+            <p className="subtle text-xs leading-relaxed">
               Already have an account?{' '}
               <Link to="/login" className="font-bold text-amberline-700 hover:underline dark:text-amberline-400">
                 Sign in
               </Link>
             </p>
           </form>
+
+          {/* Kept with the form column so it centres under it at every width and
+              stays clear of the phone's home indicator via the section's own
+              safe-area padding. */}
+          <p className="subtle mt-8 text-center text-[11px] font-semibold">
+            Powered by Student BTVTED
+          </p>
         </div>
       </section>
     </div>

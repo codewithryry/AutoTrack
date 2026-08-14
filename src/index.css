@@ -281,6 +281,26 @@
     background: rgb(var(--surface-3));
     @apply cursor-not-allowed opacity-70;
   }
+
+  /* The two public authentication screens only: fields sized for a thumb on a
+     phone rather than a mouse on a desktop form. Scoped to `.auth-form`, so
+     every other page keeps the compact `.input` above. */
+  /* Vertical only: the horizontal padding is left to `.input` and to whatever
+     `pl-*` / `px-*` a field with an icon sets, which this rule would otherwise
+     override on specificity and push the text under the icon. */
+  .auth-form .input {
+    @apply rounded-xl;
+    min-height: 48px;
+    font-size: 15px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+  /* Sentence case on the auth screens: uppercase with wide tracking reads as a
+     second typeface next to the centred heading above it. Every other page keeps
+     the small-caps `.label` above. */
+  .auth-form .label {
+    @apply text-[13px] normal-case tracking-normal;
+  }
   .input-error {
     @apply border-red-500;
   }

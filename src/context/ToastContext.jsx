@@ -1,31 +1,47 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, CheckCircle2, Info, X, XCircle } from 'lucide-react'
-import { cx } from '../utils/helpers'
+import {
+  createContext,
+  useCallback,
+  useContext,
+
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
+import { AlertTriangle, CheckCircle2, Info, XCircle } from 'lucide-react'
 
 /** Toast notifications — the app's feedback channel for every action. */
 
 const ToastContext = createContext(null)
+const ToastFeedContext = createContext([])
 
-const VARIANTS = {
+/**
+ * What each kind of notice looks like.
+ *
+ * The icon is the point: a submission accepted, a warning and a failure all
+ * carry the same two lines of text, and the glyph is what tells them apart
+ * before the sentence is read. Icons come from lucide, the project's own set,
+ * and the tint is the same status palette the badges use.
+ */
+export const TOAST_VARIANTS = {
   success: {
     icon: CheckCircle2,
-    bar: 'bg-emerald-500',
-    iconClass: 'text-emerald-500',
+    chip: 'bg-emerald-500/12 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400',
+    edge: 'ring-emerald-500/25',
   },
   error: {
     icon: XCircle,
-    bar: 'bg-red-500',
-    iconClass: 'text-red-500',
+    chip: 'bg-red-500/12 text-red-600 dark:bg-red-500/15 dark:text-red-400',
+    edge: 'ring-red-500/25',
   },
   warning: {
     icon: AlertTriangle,
-    bar: 'bg-orange-500',
-    iconClass: 'text-orange-500',
+    chip: 'bg-orange-500/12 text-orange-600 dark:bg-orange-500/15 dark:text-orange-400',
+    edge: 'ring-orange-500/25',
   },
   info: {
     icon: Info,
-    bar: 'bg-blue-500',
-    iconClass: 'text-blue-500',
+    chip: 'bg-blue-500/12 text-blue-600 dark:bg-blue-500/15 dark:text-blue-400',
+    edge: 'ring-blue-500/25',
   },
 }
 
@@ -50,6 +66,11 @@ export function ToastProvider({ children }) {
         variant,
         message,
         title: options.title,
+        // A CSS selector for the control or section this notice is about. When
+        // it matches something on screen the card is placed against it; when it
+        // does not — or none was given — the card falls to the foot of the
+        // screen. Optional, so every existing caller is unchanged.
+        anchor: options.anchor,
         duration: options.duration ?? (variant === 'error' ? 6000 : 4000),
       }
       setToasts((list) => [...list.slice(-3), toast])
@@ -75,58 +96,23 @@ export function ToastProvider({ children }) {
     [push, dismiss],
   )
 
+  // The provider no longer paints anything itself: the shell's account control
+  // is the one place a notice appears, and it reads the queue through
+  // `useToastFeed`. Every message, variant, duration and timer above is
+  // untouched — only where they are shown has moved.
   return (
     <ToastContext.Provider value={api}>
-      {children}
-      <div
-        // On the phone the toasts sit along the bottom, the reachable end of the
-        // screen, stacked just above the fixed bottom bar: 4rem of bar plus its
-        // safe-area inset plus a gap, so they clear the navigation and the raised
-        // scan button instead of covering them. `inset-x-3` keeps them inside the
-        // viewport on the narrowest phone.
-        //
-        // From `lg` — where the desktop rail replaces the bottom bar — they
-        // return to the upper right exactly as before, safe-area inset included.
-        className="fixed z-[100] flex flex-col gap-2 pointer-events-none
-                   inset-x-3 bottom-[calc(env(safe-area-inset-bottom,0px)+4.75rem)]
-                   lg:inset-x-auto lg:bottom-auto
-                   lg:right-4 lg:top-[calc(env(safe-area-inset-top,0px)+1rem)] lg:w-96"
-        role="region"
-        aria-live="polite"
-        aria-label="Notifications"
-      >
-        {toasts.map((toast) => {
-          const variant = VARIANTS[toast.variant] ?? VARIANTS.info
-          const Icon = variant.icon
-          return (
-            <div
-              key={toast.id}
-              className="card relative pointer-events-auto flex items-start gap-3 overflow-hidden
-                         p-3 pl-4 shadow-panel animate-slide-up"
-              role={toast.variant === 'error' ? 'alert' : 'status'}
-            >
-              <span className={cx('absolute left-0 top-0 h-full w-1', variant.bar)} />
-              <Icon className={cx('mt-0.5 h-5 w-5 shrink-0', variant.iconClass)} />
-              <div className="min-w-0 flex-1">
-                {toast.title && <p className="text-sm font-bold leading-tight">{toast.title}</p>}
-                <p className={cx('text-sm leading-snug', toast.title && 'muted mt-0.5')}>
-                  {toast.message}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => dismiss(toast.id)}
-                className="btn btn-ghost btn-icon -mr-1 -mt-1 shrink-0"
-                aria-label="Dismiss notification"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          )
-        })}
-      </div>
+      <ToastFeedContext.Provider value={toasts}>{children}</ToastFeedContext.Provider>
     </ToastContext.Provider>
   )
+}
+
+/**
+ * The live queue, newest last. The shell subscribes to this to show the current
+ * notice in place of the account control; nothing else should need it.
+ */
+export function useToastFeed() {
+  return useContext(ToastFeedContext)
 }
 
 export function useToast() {

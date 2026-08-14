@@ -16,9 +16,10 @@ import {
 } from 'lucide-react'
 import {
   EmptyState,
-  LoadingBlock,
   PageHeader,
   SectionCard,
+  Skeleton,
+  SkeletonRows,
   StatusBadge,
   ConditionBadge,
 } from '../components/ui'
@@ -52,7 +53,22 @@ export default function ToolHistoryPage() {
   const { tool, loading } = useTool(id)
   const { entries, loading: loadingEntries } = useToolActivity(id)
 
-  if (loading && !tool) return <LoadingBlock label="Loading tool history…" />
+  // The same shape this page settles into: back link, heading, timeline card.
+  if (loading && !tool) {
+    return (
+      <div className="animate-fade-in">
+        <Skeleton className="mb-3 h-4 w-36 rounded" />
+        <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0 flex-1 space-y-2">
+            <Skeleton className="h-6 w-44 rounded" />
+            <Skeleton className="h-3.5 w-56 max-w-full rounded" />
+          </div>
+          <Skeleton className="h-6 w-32 rounded-full" />
+        </div>
+        <Skeleton className="h-72 rounded-xl" />
+      </div>
+    )
+  }
 
   if (!tool) {
     return (
@@ -103,7 +119,7 @@ export default function ToolHistoryPage() {
         bodyClassName="p-0"
       >
         {loadingEntries && !entries.length ? (
-          <LoadingBlock label="Loading timeline…" />
+          <SkeletonRows rows={5} columns={2} />
         ) : entries.length === 0 ? (
           <EmptyState
             icon={History}

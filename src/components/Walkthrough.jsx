@@ -25,6 +25,19 @@ import { createPortal } from 'react-dom'
  *    short screen — it falls back to a bottom sheet, which is also what a step
  *    with no target gets.
  *
+ *  * **A target longer than the screen keeps the card at the top.** The tool
+ *    inventory and the loans list both run past the fold, so the card is parked
+ *    at the top of the free band and the highlight begins immediately below it:
+ *    the assistant, its message and the first tool records read as one block
+ *    instead of the message ending up a whole phone away from the top of the list
+ *    it describes.
+ *
+ *  * **The highlight is trimmed to the screen.** The spotlight is a ring on the
+ *    cutout's own edge, so an edge past the viewport is an edge the student
+ *    cannot see — a full-width element padded outwards loses its left and right
+ *    sides that way, and a long list its bottom. The cutout is clipped to the
+ *    visible area so the ring always closes.
+ *
  *  * **The app's own furniture is measured, not assumed.** The sticky header,
  *    the fixed bottom bar and the desktop rail are read from the DOM, and the
  *    target is scrolled into the band between them. Hard-coding those heights
@@ -42,6 +55,10 @@ const SPOTLIGHT_PAD = 8
 const GAP = 12
 /** Smallest margin between the card and the edge of the viewport. */
 const EDGE = 12
+/** Width of the spotlight's ring, which has to stay inside the viewport to show. */
+const RING = 3
+/** How far below the card the target may start before the page is scrolled. */
+const SLACK = 88
 
 /** Remembers a finished or skipped tour. Cleared only by clearing site data. */
 export function tourSeen(key) {
@@ -73,6 +90,9 @@ export const TOUR_PAGES = [
   'scan',
   'borrow',
   'transactions',
+  'maintenance',
+  'users',
+  'reports',
   'notifications',
   'account',
 ]
@@ -80,10 +100,18 @@ export const TOUR_PAGES = [
 /** The storage key for one page's tour. Null while the session is still loading. */
 export const tourKeyFor = (page, userId) => (userId ? `stms.tour.${page}.${userId}` : null)
 
+/**
+ * A legacy flag from when one finished tour ended the whole walkthrough — which
+ * meant an account only ever saw the first page it happened to open. It is no
+ * longer read; it is still cleared by `resetTours` so an account carrying it is
+ * not left in the old state.
+ */
+const walkthroughKeyFor = (userId) => (userId ? `stms.tour.done.${userId}` : null)
+
 /** Forgets every tour for one account, so they run again from the start. */
 export function resetTours(userId) {
-  for (const page of TOUR_PAGES) {
-    const key = tourKeyFor(page, userId)
+  const keys = [...TOUR_PAGES.map((page) => tourKeyFor(page, userId)), walkthroughKeyFor(userId)]
+  for (const key of keys) {
     if (!key) continue
     try {
       localStorage.removeItem(key)
@@ -95,6 +123,13 @@ export function resetTours(userId) {
 
 /**
  * Runs one page's tour on its first visit and remembers that it has been seen.
+ *
+ * Each page is remembered on its own, per account — so an administrator, an
+ * instructor and a student each work through their own role's pages once, and
+ * finishing or skipping one page's tour never suppresses the rest of that
+ * role's walkthrough. Once a page's tour has been closed it does not return on
+ * a later sign-in, refresh or revisit; only "Show tours again" in Settings
+ * brings the walkthrough back.
  *
  * Held one frame so the page has painted and the walkthrough can measure the
  * elements it highlights.
@@ -144,8 +179,12 @@ function shellInsets() {
   const bottomBar = document.querySelector('nav[aria-label="Primary"]')
   if (visible(bottomBar)) {
     const box = bottomBar.getBoundingClientRect()
-    // Only counts while it is actually pinned to the bottom of the viewport.
-    if (box.bottom >= window.innerHeight - 1) inset.bottom = box.height
+    // The bar floats: its wrapper holds it clear of the bottom edge and adds the
+    // device's safe-area inset underneath, so it never reaches the very bottom of
+    // the viewport. Testing for that exactly reported it as absent and let the
+    // card sit under it. The whole strip from its top edge down is unusable —
+    // including the gap below it, which is where the home indicator lives.
+    if (box.bottom >= window.innerHeight - 64) inset.bottom = window.innerHeight - box.top
   }
 
   const rail = document.querySelector('aside.fixed')
@@ -177,7 +216,13 @@ function scrollParent(element) {
 }
 
 
-export default function Walkthrough({ steps, open, onClose, labelledBy = 'walkthrough-title' }) {
+export default function Walkthrough({
+  steps,
+  open,
+  onClose,
+  labelledBy = 'walkthrough-title',
+  compact = false,
+}) {
   // Only steps whose element is on the page right now, resolved once per opening
   // so the sequence cannot change length underneath the index.
   const [live, setLive] = useState([])
@@ -205,54 +250,111 @@ export default function Walkthrough({ steps, open, onClose, labelledBy = 'walkth
     const viewportH = window.innerHeight
     const inset = shellInsets()
 
+    const minLeft = Math.max(EDGE, inset.left + EDGE)
+    const bandTop = inset.top + EDGE
+    const bandBottom = viewportH - inset.bottom - EDGE
+    // The band the shell leaves free: everything below the sticky header and
+    // above the bottom bar. A card sharing a short screen with a large target may
+    // take at most part of it; beyond that it scrolls inside itself. Without this
+    // the camera viewfinder — a full-width square — and the card cannot both be
+    // seen on a phone, and the card wins by covering the thing it describes.
+    const bandHeight = bandBottom - bandTop
+
     if (!element) {
-      const noTargetInset = shellInsets()
       setRect(null)
       setPlacement({
         mode: 'sheet',
-        bottom: noTargetInset.bottom + EDGE,
-        left: Math.max(EDGE, noTargetInset.left + EDGE),
+        bottom: inset.bottom + EDGE,
+        left: minLeft,
         right: EDGE,
-        maxHeight: Math.max(160, viewportH - noTargetInset.top - noTargetInset.bottom - EDGE * 2),
+        maxHeight: Math.max(160, bandHeight),
       })
       return
     }
 
     const box = element.getBoundingClientRect()
+
+    // The card has to be on screen before it can be measured, so the first pass
+    // runs with a sensible guess and the second corrects it — but the guess is
+    // also a ceiling. Before a placement exists the card is absolutely positioned
+    // with no width of its own, so a paragraph of text stretches it to the full
+    // width of the overlay; measuring that once would fix the card a whole margin
+    // wider than the screen for the rest of the tour.
+    const widest = Math.min(compact ? 352 : 384, viewportW - EDGE * 2)
+    const cardW = Math.min(card?.offsetWidth || widest, widest)
+
+    // Yield to a large target: the card gives up as much height as the target
+    // needs, down to a floor where it is still readable — below which it would be
+    // a scrollbar with a button in it. A compact card keeps a little more of the
+    // band, since it carries the assistant beside its message.
+    //
+    // Yielding only makes sense while there is something to yield to. A target
+    // longer than the whole band — the tool inventory, a full loans list — cannot
+    // be fitted alongside the card however small the card is made, so squeezing
+    // it there buys nothing and costs the step its last two lines to an internal
+    // scrollbar. In that case the card simply takes its usual share.
+    const share = Math.round(bandHeight * (compact ? 0.56 : 0.45))
+    const alongside = bandHeight - (box.height + SPOTLIGHT_PAD * 2) - GAP
+    const cardMax = alongside < 190 ? share : Math.max(190, Math.min(share, alongside))
+    const cardH = Math.min(card?.offsetHeight ?? 260, cardMax)
+
+    const clampX = (x) => Math.min(Math.max(x, minLeft), Math.max(minLeft, viewportW - cardW - EDGE))
+    const clampY = (y) => Math.min(Math.max(y, bandTop), Math.max(bandTop, bandBottom - cardH))
+
+    /**
+     * Trim a cutout to the part of the screen that can actually show it.
+     *
+     * The spotlight is a ring drawn on the cutout's own edge, so it only reads as
+     * a highlight where that edge is inside the viewport. Two targets on this app
+     * break that without the clamp: a full-width element padded outwards puts its
+     * left and right edges past the screen, and the inventory list is taller than
+     * the phone, so its bottom edge is somewhere far below the fold. Trimming
+     * leaves a ring that closes around what the student can see.
+     */
+    const clip = (spot) => {
+      const left = Math.max(spot.left, inset.left + RING)
+      const right = Math.min(spot.left + spot.width, viewportW - RING)
+      const top = Math.max(spot.top, inset.top + RING)
+      const bottom = Math.min(spot.top + spot.height, viewportH - inset.bottom - RING)
+      return { top, left, width: Math.max(0, right - left), height: Math.max(0, bottom - top) }
+    }
+
     const spot = {
       top: box.top - SPOTLIGHT_PAD,
       left: box.left - SPOTLIGHT_PAD,
       width: box.width + SPOTLIGHT_PAD * 2,
       height: box.height + SPOTLIGHT_PAD * 2,
     }
-    setRect(spot)
 
-    // The card has to be on screen before it can be measured, so the first pass
-    // runs with a sensible guess and the second corrects it.
-    const cardW = card?.offsetWidth ?? Math.min(384, viewportW - EDGE * 2)
+    /*
+     * A target that cannot share the band with the card at all — the tool
+     * inventory and the loans list both run the whole length of the page — is
+     * placed deliberately rather than left to fall through to a bottom sheet: the
+     * card goes to the top of the band and the highlight begins directly under
+     * it, so the assistant, its message and the first tool records it is
+     * describing read as one block at the top of the screen. A sheet would strand
+     * the message at the far end of the phone from the top of the list it
+     * explains, and the student would have to scroll to connect the two.
+     */
+    if (spot.height > bandHeight - cardH - GAP) {
+      const lit = bandTop + cardH + GAP
+      const top = Math.max(spot.top, lit)
+      setRect(clip({ ...spot, top, height: spot.top + spot.height - top }))
+      setPlacement({
+        mode: 'anchored',
+        top: bandTop,
+        left: clampX(spot.left + spot.width / 2 - cardW / 2),
+        width: cardW,
+        maxHeight: cardMax,
+        topAlign: lit,
+      })
+      return
+    }
 
-    // A card sharing a short screen with a large target may take at most part of
-    // the free band; beyond that it scrolls inside itself. Without this the
-    // camera viewfinder — a full-width square — and the card cannot both be
-    // seen on a phone, and the card wins by covering the thing it describes.
-    const bandHeight = viewportH - inset.top - inset.bottom - EDGE * 2
-    // Yield further to a large target: the card gives up as much height as the
-    // target needs, down to a floor where it is still readable (below which it
-    // would be a scrollbar with a button in it).
-    const cardMax = Math.max(
-      190,
-      Math.min(Math.round(bandHeight * 0.45), bandHeight - (box.height + SPOTLIGHT_PAD * 2) - GAP),
-    )
-    const cardH = Math.min(card?.offsetHeight ?? 260, cardMax)
+    setRect(clip(spot))
 
     const spotBottom = spot.top + spot.height
     const spotRight = spot.left + spot.width
-    const minLeft = Math.max(EDGE, inset.left + EDGE)
-    const bandTop = inset.top + EDGE
-    const bandBottom = viewportH - inset.bottom - EDGE
-
-    const clampX = (x) => Math.min(Math.max(x, minLeft), Math.max(minLeft, viewportW - cardW - EDGE))
-    const clampY = (y) => Math.min(Math.max(y, bandTop), Math.max(bandTop, bandBottom - cardH))
 
     // Below, then above, then beside. A large target — the camera viewfinder is
     // a full-width square — leaves no room vertically but often plenty to the
@@ -296,7 +398,7 @@ export default function Walkthrough({ steps, open, onClose, labelledBy = 'walkth
       width: cardW,
       maxHeight: cardMax,
     })
-  }, [step?.target])
+  }, [step?.target, compact])
 
   /**
    * Scroll the target into the space the card actually leaves free.
@@ -319,6 +421,19 @@ export default function Walkthrough({ steps, open, onClose, labelledBy = 'walkth
       const inset = shellInsets()
       const card = cardRef.current
       const cardBox = card?.getBoundingClientRect()
+
+      // A target taller than the band: the card is parked at the top of the
+      // screen and the target's own top edge belongs at the top of the lit region
+      // just below it. Anything else would hide the start of the list behind the
+      // card. The tolerance is what keeps the page still — a list that already
+      // starts within a screenful of the right place is left exactly where it is,
+      // so stepping through the tour does not shunt the page about.
+      if (place?.topAlign != null) {
+        const delta = element.getBoundingClientRect().top - SPOTLIGHT_PAD - place.topAlign
+        if (delta > -2 && delta < SLACK) return
+        scrollParent(element).scrollBy({ top: delta, behavior: 'smooth' })
+        return
+      }
 
       let freeTop = inset.top + EDGE
       let freeBottom = window.innerHeight - inset.bottom - EDGE
@@ -408,7 +523,10 @@ export default function Walkthrough({ steps, open, onClose, labelledBy = 'walkth
   const revealedRef = useRef(null)
   useEffect(() => {
     if (!open || !step || !placement) return
-    const key = `${index}:${placement.mode}`
+    // The lit region's top edge is part of the key: it is only known once the
+    // card has been measured, and the corrected value is what the scroll has to
+    // aim at. Its own guard keeps a page that is already in the right place still.
+    const key = `${index}:${placement.mode}:${Math.round(placement.topAlign ?? -1)}`
     if (revealedRef.current === key) return
     revealedRef.current = key
     // Called straight away rather than on a timer: `placement` is a fresh object
@@ -447,7 +565,6 @@ export default function Walkthrough({ steps, open, onClose, labelledBy = 'walkth
 
   if (!open || !step) return null
 
-  const Icon = step.icon
   const anchored = placement?.mode === 'anchored'
 
   // A step with no target, or one whose card cannot fit beside it, is presented
@@ -468,7 +585,22 @@ export default function Walkthrough({ steps, open, onClose, labelledBy = 'walkth
           marginInline: 'auto',
           maxWidth: '28rem',
         }
-      : undefined
+      : // Not measured yet. Kept narrow, because this first render is what
+        // `measure` reads the card's width from: absolutely positioned with no
+        // width of its own it would otherwise stretch to the whole overlay.
+        { maxWidth: compact ? '22rem' : '24rem' }
+
+  // `compact` trades a little breathing room for height: the step counter and
+  // progress dots share one line and the heading steps down, so the whole card
+  // fits the band without scrolling on a short phone screen. The student tours
+  // pass it; the staff tours keep the roomier layout.
+  //
+  // Neither layout has a decorative block at the top any more. The step counter
+  // is the first thing in the card, and the height the icon tile used to take is
+  // spent on the title and the description instead — a step reads as a sentence
+  // about the thing being highlighted, not as an illustrated slide.
+  const cardPad = compact ? 'p-4' : 'p-5 sm:p-6'
+  const stepGap = compact ? 'mt-4' : 'mt-5'
 
   return createPortal(
     <div
@@ -480,18 +612,22 @@ export default function Walkthrough({ steps, open, onClose, labelledBy = 'walkth
       {/* Dim. With a target it is the spotlight's own outward shadow, so the
           highlighted element stays lit; without one it is a plain scrim. */}
       {rect ? (
+        // A lighter touch than a hard outline on a heavy scrim: the page stays
+        // readable through the dim, and the highlight is a soft edge rather than
+        // a marker pen around the card — the tour is a hand pointing at the
+        // screen, not a warning.
         <div
-          className="pointer-events-none absolute rounded-xl ring-2 ring-emerald-400 animate-fade-in"
+          className="pointer-events-none absolute rounded-2xl ring-2 ring-emerald-400/60 animate-fade-in"
           style={{
             top: rect.top,
             left: rect.left,
             width: rect.width,
             height: rect.height,
-            boxShadow: '0 0 0 9999px rgb(8 14 26 / 0.72)',
+            boxShadow: '0 0 0 9999px rgb(8 14 26 / 0.62)',
           }}
         />
       ) : (
-        <div className="absolute inset-0 bg-navy-950/70 animate-fade-in" aria-hidden="true" />
+        <div className="absolute inset-0 bg-navy-950/60 animate-fade-in" aria-hidden="true" />
       )}
 
       {/* Click-catcher so the page underneath cannot be operated mid-tour. It
@@ -503,43 +639,79 @@ export default function Walkthrough({ steps, open, onClose, labelledBy = 'walkth
         style={cardStyle}
         className={
           anchored
-            ? 'card absolute flex flex-col overflow-y-auto overscroll-contain p-5 shadow-panel animate-fade-in sm:p-6'
+            ? `card absolute flex flex-col overflow-y-auto overscroll-contain ${cardPad} shadow-panel animate-fade-in`
             : // Bottom sheet: inside its margins and above the bottom bar. The
               // offsets are inline, from `placement`, so the shell is respected.
-              'card absolute flex flex-col overflow-y-auto overscroll-contain p-5 ' +
-              'shadow-panel animate-slide-up sm:p-6'
+              `card absolute flex flex-col overflow-y-auto overscroll-contain ${cardPad} shadow-panel animate-slide-up`
         }
       >
-        {Icon && (
-          <span className="mb-3 grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-emerald-500/12">
-            <Icon className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
-          </span>
+        {compact ? (
+          <div className="flex items-center justify-between gap-3">
+            <p className="subtle text-[11px] font-bold uppercase tracking-wider">
+              Step {index + 1} of {total}
+            </p>
+            <div className="flex items-center gap-1.5" role="presentation">
+              {live.map((s, i) => (
+                <span
+                  key={s.title}
+                  className={
+                    i === index
+                      ? 'h-1.5 w-5 rounded-full bg-emerald-500 transition-all'
+                      : 'h-1.5 w-1.5 rounded-full transition-all'
+                  }
+                  style={i === index ? undefined : { background: 'rgb(var(--surface-3))' }}
+                />
+              ))}
+            </div>
+          </div>
+        ) : (
+          <p className="subtle text-[11px] font-bold uppercase tracking-wider">
+            Step {index + 1} of {total}
+          </p>
         )}
 
-        <p className="subtle text-[11px] font-bold uppercase tracking-wider">
-          Step {index + 1} of {total}
-        </p>
-        <h2 id={labelledBy} className="mt-1 text-lg font-extrabold leading-tight">
-          {step.title}
-        </h2>
-        <p className="muted mt-2 text-sm leading-relaxed">{step.text}</p>
-
-        {/* step indicators */}
-        <div className="mt-5 flex flex-wrap items-center gap-1.5" role="presentation">
-          {live.map((s, i) => (
-            <span
-              key={s.title}
+        <div className="mt-2.5">
+          <div className="min-w-0 flex-1">
+            <h2
+              id={labelledBy}
               className={
-                i === index
-                  ? 'h-1.5 w-6 rounded-full bg-emerald-500 transition-all'
-                  : 'h-1.5 w-1.5 rounded-full transition-all'
+                compact
+                  ? 'text-[15.5px] font-extrabold leading-snug tracking-tight'
+                  : 'text-[19px] font-extrabold leading-snug tracking-tight'
               }
-              style={i === index ? undefined : { background: 'rgb(var(--surface-3))' }}
-            />
-          ))}
+            >
+              {step.title}
+            </h2>
+            <p
+              className={
+                compact
+                  ? 'muted mt-2 text-[13px] leading-[1.55]'
+                  : 'muted mt-2.5 text-sm leading-relaxed'
+              }
+            >
+              {step.text}
+            </p>
+          </div>
         </div>
 
-        <div className="mt-5 flex shrink-0 items-center justify-between gap-2">
+        {/* step indicators */}
+        {!compact && (
+          <div className="mt-5 flex flex-wrap items-center gap-1.5" role="presentation">
+            {live.map((s, i) => (
+              <span
+                key={s.title}
+                className={
+                  i === index
+                    ? 'h-1.5 w-6 rounded-full bg-emerald-500 transition-all'
+                    : 'h-1.5 w-1.5 rounded-full transition-all'
+                }
+                style={i === index ? undefined : { background: 'rgb(var(--surface-3))' }}
+              />
+            ))}
+          </div>
+        )}
+
+        <div className={`flex shrink-0 items-center justify-between gap-2 ${stepGap}`}>
           <button type="button" onClick={finish} className="btn btn-ghost btn-sm">
             Skip
           </button>
@@ -549,7 +721,11 @@ export default function Walkthrough({ steps, open, onClose, labelledBy = 'walkth
                 Back
               </button>
             )}
-            <button type="button" onClick={next} className="btn btn-success">
+            <button
+              type="button"
+              onClick={next}
+              className={compact ? 'btn btn-success btn-sm px-4' : 'btn btn-success'}
+            >
               {isLast ? 'Got it' : 'Next'}
             </button>
           </div>

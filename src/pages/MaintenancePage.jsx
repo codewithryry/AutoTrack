@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   CalendarClock,
   CheckCircle2,
@@ -14,8 +14,8 @@ import {
   ErrorState,
   FilterSelect,
   MaintenanceStatusBadge,
+  MobileFilterBar,
   Modal,
-  PageHeader,
   SearchInput,
   SectionCard,
   SelectField,
@@ -38,16 +38,50 @@ import {
   MAINTENANCE_TYPES,
   TOOL_STATUS,
 } from '../utils/constants'
+import Walkthrough, { usePageTour } from '../components/Walkthrough'
 import { cx, formatCurrency } from '../utils/helpers'
 import { addDaysISO, fromDateInput, toDateInput, todayInput } from '../utils/dates'
 import { formatDate } from '../utils/dates'
+
+/**
+ * The servicing walkthrough. Both staff roles manage maintenance, so both get
+ * the same three steps — the records, the filters and the schedule ahead. Steps
+ * whose target is absent are dropped by `Walkthrough`, so a read-only account
+ * never sees a step about a control it does not have.
+ */
+const maintenanceTour = [
+  {
+    target: 'maint-filters',
+    title: 'Find a job',
+    text: 'Search by tool, technician or notes, then narrow by status or type — the records below follow as you type.',
+  },
+  {
+    target: 'maint-list',
+    title: 'The service records',
+    text: 'Every calibration, repair and inspection in the laboratory, newest first, with its technician, date and cost.',
+  },
+  {
+    target: 'maint-actions',
+    title: 'Close a job out',
+    text: 'Complete records the work and sets the condition the tool came back in; the red control cancels a job that is no longer needed. Both ask for confirmation first.',
+  },
+  {
+    target: 'maint-upcoming',
+    title: 'What is due next',
+    text: 'Tools approaching their next service date, so a job can be scheduled before it falls overdue. Open one to see its record.',
+  },
+  {
+    title: 'Scheduling a new job',
+    text: 'Use Schedule maintenance to book a service: pick the tool, the type of work and the date, and the tool is marked as in maintenance until the job is completed.',
+  },
+]
 
 export default function MaintenancePage() {
   const { user, can, settings } = useApp()
   const toast = useToast()
   const { records, loading, error, reload } = useMaintenance()
   const { tools } = useTools()
-  const { upcoming } = useUpcomingMaintenance(45)
+  const { upcoming, loading: loadingUpcoming } = useUpcomingMaintenance(45)
 
   const [search, setSearch] = useState('')
   const debouncedSearch = useDebounced(search, 200)
@@ -58,6 +92,7 @@ export default function MaintenancePage() {
   const [presetTool, setPresetTool] = useState('')
   const [completing, setCompleting] = useState(null)
   const [confirm, setConfirm] = useState(null)
+  const tour = usePageTour('maintenance', user?.id)
   const [busy, setBusy] = useState(false)
 
   const canManage = can(PERM.MAINTENANCE_MANAGE)
@@ -67,24 +102,24 @@ export default function MaintenancePage() {
     [records, debouncedSearch, status, type],
   )
 
-  const stats = useMemo(
-    () => ({
-      open: records.filter(
-        (r) =>
-          r.status === MAINTENANCE_STATUS.SCHEDULED ||
-          r.status === MAINTENANCE_STATUS.IN_PROGRESS,
-      ).length,
-      completed: records.filter((r) => r.status === MAINTENANCE_STATUS.COMPLETED).length,
-      cost: records.reduce((sum, r) => sum + (Number(r.cost) || 0), 0),
-      due: upcoming.filter((row) => row.daysUntil <= 0).length,
-    }),
-    [records, upcoming],
-  )
-
   const openScheduler = (toolId = '') => {
     setPresetTool(toolId)
     setFormOpen(true)
   }
+
+  /**
+   * `?schedule=1` opens the existing scheduler dialog — how the phone's bottom
+   * bar reaches it while this page is open. The parameter is dropped again the
+   * moment it is honoured, so a back navigation does not reopen the form.
+   */
+  const [searchParams, setSearchParams] = useSearchParams()
+  useEffect(() => {
+    if (!searchParams.get('schedule')) return
+    if (canManage) openScheduler()
+    const next = new URLSearchParams(searchParams)
+    next.delete('schedule')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, canManage, setSearchParams])
 
   const requestCancel = (record) =>
     setConfirm({
@@ -107,38 +142,54 @@ export default function MaintenancePage() {
 
   return (
     <>
-      <PageHeader
-        title="Maintenance"
-        description="Service, calibration and repair records for laboratory equipment."
-        icon={HardHat}
-      >
-        {canManage && (
-          <button type="button" onClick={() => openScheduler()} className="btn btn-primary">
-            <Plus className="h-4 w-4" />
-            Schedule maintenance
-          </button>
-        )}
-      </PageHeader>
-
-      {/* -------------------------------- summary -------------------------------- */}
-      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Tile label="Open jobs" value={stats.open} tone="text-orange-600 dark:text-orange-400" />
-        <Tile label="Completed" value={stats.completed} tone="text-emerald-600 dark:text-emerald-400" />
-        <Tile label="Service due" value={stats.due} tone="text-red-600 dark:text-red-400" />
-        <Tile label="Total cost" value={formatCurrency(stats.cost)} small />
-      </div>
+      {/* No heading row and no page action: the sticky top bar names the page, and
+          scheduling is reached from the bottom bar's raised slot while this page is
+          open. The filter card is the first thing in the content area, exactly as
+          it is on Tools and Transactions. */}
 
       <div className="grid gap-4 xl:grid-cols-3">
         {/* ------------------------------ records ------------------------------ */}
         <div className="space-y-4 xl:col-span-2">
-          <div className="card p-3">
+          <div className="card p-3" data-tour="maint-filters">
             <div className="space-y-3">
+              {/* Same full-width search box the Tools and Transactions pages
+                  open their filter card with. */}
               <SearchInput
                 value={search}
                 onChange={setSearch}
                 placeholder="Search by tool, technician or notes…"
               />
-              <div className="no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 pb-0.5">
+              {/* The same two-tier pattern the Tools and Transactions pages use:
+                  rounded filter chips on a phone, the inline dropdowns from `sm`
+                  up. Same values, same options, same filtering. */}
+              <div className="sm:hidden">
+                <MobileFilterBar
+                  filters={[
+                    {
+                      key: 'status',
+                      label: 'Status',
+                      value: status,
+                      onChange: setStatus,
+                      options: [{ value: 'all', label: 'All statuses' }, ...MAINTENANCE_STATUSES],
+                    },
+                    {
+                      key: 'type',
+                      label: 'Type',
+                      value: type,
+                      onChange: setType,
+                      options: [{ value: 'all', label: 'All types' }, ...MAINTENANCE_TYPES],
+                    },
+                  ]}
+                  hasFilters={!!search || status !== 'all' || type !== 'all'}
+                  onClear={() => {
+                    setSearch('')
+                    setStatus('all')
+                    setType('all')
+                  }}
+                />
+              </div>
+
+              <div className="no-scrollbar -mx-1 hidden gap-2 overflow-x-auto px-1 pb-0.5 sm:flex">
                 <FilterSelect
                   label="Status"
                   value={status}
@@ -158,6 +209,7 @@ export default function MaintenancePage() {
           <SectionCard
             title={`${filtered.length} maintenance record${filtered.length === 1 ? '' : 's'}`}
             bodyClassName="p-0"
+            data-tour="maint-list"
           >
             {error ? (
               <ErrorState
@@ -281,7 +333,7 @@ export default function MaintenancePage() {
                             <td>
                               {record.status !== MAINTENANCE_STATUS.COMPLETED &&
                                 record.status !== MAINTENANCE_STATUS.CANCELLED && (
-                                  <div className="flex justify-end gap-1">
+                                  <div className="flex justify-end gap-1" data-tour="maint-actions">
                                     <button
                                       type="button"
                                       onClick={() => setCompleting(record)}
@@ -316,8 +368,11 @@ export default function MaintenancePage() {
           title="Service schedule"
           description="Tools approaching their next maintenance date"
           bodyClassName="p-0"
+          data-tour="maint-upcoming"
         >
-          {upcoming.length === 0 ? (
+          {loadingUpcoming && !upcoming.length ? (
+            <SkeletonRows rows={4} columns={2} />
+          ) : upcoming.length === 0 ? (
             <EmptyState
               icon={CalendarClock}
               title="Nothing due soon."
@@ -390,6 +445,8 @@ export default function MaintenancePage() {
         intervalDays={settings.maintenanceIntervalDays}
       />
 
+      <Walkthrough steps={maintenanceTour} open={tour.open} onClose={tour.close} />
+
       <ConfirmDialog
         open={!!confirm}
         onClose={() => setConfirm(null)}
@@ -403,22 +460,6 @@ export default function MaintenancePage() {
   )
 }
 
-function Tile({ label, value, tone, small }) {
-  return (
-    <div className="card p-3">
-      <p className="subtle text-[11px] font-bold uppercase tracking-wider">{label}</p>
-      <p
-        className={cx(
-          'mono mt-1 font-extrabold leading-none',
-          small ? 'text-lg' : 'text-2xl',
-          tone,
-        )}
-      >
-        {value}
-      </p>
-    </div>
-  )
-}
 
 /* ------------------------------------------------------------------ *
  * Scheduling form

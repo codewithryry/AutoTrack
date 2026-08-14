@@ -18,8 +18,8 @@ import { cx } from '../utils/helpers'
  */
 
 const THEME_OPTIONS = [
-  { value: 'light', label: 'Light mode', icon: Sun },
-  { value: 'dark', label: 'Dark mode', icon: Moon },
+  { value: 'light', label: 'Light', icon: Sun },
+  { value: 'dark', label: 'Dark', icon: Moon },
 ]
 
 /**
@@ -30,7 +30,7 @@ const THEME_OPTIONS = [
  * was simplified) is shown as whichever mode the device prefers until the person
  * picks one of the two options outright.
  */
-export function AppearanceControl({ className }) {
+function useThemeChoice() {
   const { settings, saveSettings } = useApp()
   const toast = useToast()
 
@@ -52,11 +52,17 @@ export function AppearanceControl({ className }) {
     }
   }
 
+  return { current, select }
+}
+
+export function AppearanceControl({ className }) {
+  const { current, select } = useThemeChoice()
+
   return (
     <div
       role="radiogroup"
       aria-label="Interface theme"
-      className={cx('grid grid-cols-2 gap-1 rounded-xl border p-1', className)}
+      className={cx('grid grid-cols-2 gap-1 rounded-lg border p-1', className)}
       style={{ background: 'rgb(var(--surface-2))' }}
     >
       {THEME_OPTIONS.map(({ value, label, icon: Icon }) => {
@@ -69,8 +75,10 @@ export function AppearanceControl({ className }) {
             aria-checked={active}
             onClick={() => select(value)}
             className={cx(
-              'flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold transition-all',
-              active ? 'shadow-sm' : 'hover:bg-black/[0.03] dark:hover:bg-white/5',
+              'flex min-h-[36px] items-center justify-center gap-1.5 rounded-lg px-2.5 text-[13px] font-semibold transition-all',
+              active
+                ? 'shadow-sm ring-1 ring-amberline-400/40'
+                : 'hover:bg-black/[0.03] dark:hover:bg-white/5',
             )}
             style={
               active
@@ -78,12 +86,39 @@ export function AppearanceControl({ className }) {
                 : { color: 'rgb(var(--text-subtle))' }
             }
           >
-            <Icon className="h-4 w-4" />
+            <Icon className="h-3.5 w-3.5" />
             {label}
           </button>
         )
       })}
     </div>
+  )
+}
+
+/**
+ * The same choice as one icon — for the header bar, where there is room for a
+ * single control. It shows the mode it switches to and uses the same hook, so
+ * there is no second piece of theme logic anywhere.
+ */
+export function AppearanceToggleButton({ className }) {
+  const { current, select } = useThemeChoice()
+  const next = current === 'dark' ? 'light' : 'dark'
+  const Icon = next === 'dark' ? Moon : Sun
+
+  return (
+    <button
+      type="button"
+      onClick={() => select(next)}
+      className={cx(
+        'grid h-11 w-11 shrink-0 place-items-center rounded-full transition-colors',
+        'hover:bg-black/5 dark:hover:bg-white/5',
+        className,
+      )}
+      aria-label={`Switch to ${next} mode`}
+      title={`Switch to ${next} mode`}
+    >
+      <Icon className="h-5 w-5" />
+    </button>
   )
 }
 

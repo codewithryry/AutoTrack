@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { CalendarClock, ClipboardList, Download, Filter, Search, Undo2, XCircle } from 'lucide-react'
+import { CalendarClock, Filter, Search, Undo2, XCircle } from 'lucide-react'
 import Walkthrough, { usePageTour } from '../components/Walkthrough'
 import {
   ConfirmDialog,
   ErrorState,
   FilterSelect,
+  MobileFilterBar,
   PageHeader,
   SearchInput,
   SectionCard,
@@ -18,9 +19,8 @@ import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import { useDebounced, useMediaQuery, useTools, useTransactions, useUsers } from '../hooks'
 import * as txnService from '../services/transactions'
-import { canReturnTransaction, isStudent, PERM } from '../utils/permissions'
+import { canReturnTransaction, isInstructor, isStudent, PERM } from '../utils/permissions'
 import { ACTIVE_TXN_STATUSES, TXN_STATUS, TXN_STATUSES } from '../utils/constants'
-import { downloadCSV } from '../utils/helpers'
 import { formatDate, fromDateInput, toDateInput } from '../utils/dates'
 
 const SORT_OPTIONS = [
@@ -31,7 +31,7 @@ const SORT_OPTIONS = [
   { value: 'borrower', label: 'Borrower' },
 ]
 
-const CSV_COLUMNS = [
+export const TRANSACTIONS_CSV_COLUMNS = [
   { key: 'id', label: 'Transaction ID' },
   { key: 'toolId', label: 'Tool ID' },
   { key: 'toolName', label: 'Tool' },
@@ -56,60 +56,50 @@ const transactionsTour = (student) =>
         {
           title: 'Your borrowing history',
           text: 'Every tool you have taken out and handed back, newest first. Only your own loans appear here.',
-          icon: ClipboardList,
         },
         {
           target: 'txn-summary',
           title: 'At a glance',
           text: 'Your total records, what you are holding now, anything overdue, and what you have already returned.',
-          icon: ClipboardList,
         },
         {
           target: 'txn-search',
           title: 'Find a loan',
           text: 'Search by tool name or transaction ID to pull up a single record.',
-          icon: Search,
         },
         {
           target: 'txn-filters',
           title: 'Narrow the list',
           text: 'Filter by status or date range — handy for checking what is still out.',
-          icon: Filter,
         },
         {
           title: 'Open a record',
           text: 'Tap a row for the full record: the dates, the condition it went out in, and its due date.',
-          icon: ClipboardList,
         },
       ]
     : [
         {
           title: 'Borrowing history',
           text: 'Every issue and return in the laboratory, newest first, so you can trace any tool.',
-          icon: ClipboardList,
         },
         {
           target: 'txn-summary',
           title: 'At a glance',
           text: 'The tiles show total records, tools currently out, overdue loans and returns.',
-          icon: ClipboardList,
         },
         {
           target: 'txn-search',
           title: 'Find a record',
           text: 'Search by transaction ID, tool, borrower or purpose.',
-          icon: Search,
         },
         {
           target: 'txn-filters',
           title: 'Filter the history',
           text: 'Narrow by status, borrower, tool or date range to focus on what matters.',
-          icon: Filter,
         },
         {
           title: 'Open a transaction',
           text: 'Select a row to see the full record, extend a loan, or report a tool lost.',
-          icon: ClipboardList,
         },
       ]
 
@@ -141,7 +131,12 @@ export default function TransactionsPage() {
 
   // The phone shell — the same breakpoint the layout switches its rail on.
   const isPwa = useMediaQuery('(max-width: 1023px)')
-  const showExport = !(isStudent(user) && isPwa)
+
+  // An instructor works this page at the counter: no summary strip and a short
+  // list. Filters, sorting and the records themselves are untouched — only how
+  // much of the list is painted changes.
+  const instructor = isInstructor(user)
+  const VISIBLE_LIMIT = 5
 
   const canManage = can(PERM.TXN_EDIT)
   const canSeeAll = can(PERM.TXN_VIEW_ALL)
@@ -173,6 +168,42 @@ export default function TransactionsPage() {
   const hasFilters =
     !!debouncedSearch || status !== 'all' || userId !== 'all' || toolId !== 'all' || !!from || !!to
 
+  // The same filters the desktop row holds, described once for the phone's chips.
+  const mobileFilters = [
+    {
+      key: 'status',
+      label: 'Status',
+      value: status,
+      onChange: setStatus,
+      options: [{ value: 'all', label: 'All statuses' }, ...TXN_STATUSES],
+    },
+    ...(canSeeAll
+      ? [
+          {
+            key: 'user',
+            label: 'Borrower',
+            value: userId,
+            onChange: setUserId,
+            options: [
+              { value: 'all', label: 'All borrowers' },
+              ...users.map((u) => ({ value: u.id, label: u.fullName })),
+            ],
+          },
+        ]
+      : []),
+    {
+      key: 'tool',
+      label: 'Tool',
+      value: toolId,
+      onChange: setToolId,
+      options: [
+        { value: 'all', label: 'All tools' },
+        ...tools.map((t) => ({ value: t.id, label: t.name })),
+      ],
+    },
+    { key: 'sort', label: 'Sort', value: sort, onChange: setSort, options: SORT_OPTIONS },
+  ]
+
   const resetFilters = () => {
     setSearch('')
     setStatus('all')
@@ -180,15 +211,6 @@ export default function TransactionsPage() {
     setToolId('all')
     setFrom('')
     setTo('')
-  }
-
-  const exportCSV = () => {
-    downloadCSV(
-      filtered,
-      CSV_COLUMNS,
-      `transactions-${new Date().toISOString().slice(0, 10)}.csv`,
-    )
-    toast.success(`${filtered.length} transactions exported to CSV.`)
   }
 
   const requestMarkLost = (txn) =>
@@ -258,33 +280,24 @@ export default function TransactionsPage() {
 
   return (
     <>
-      <PageHeader hideTitle>
-        {/* A student on the phone has no use for a CSV export; staff and the
-            desktop shell keep it exactly as it was. */}
-        {showExport && (
-          <button
-            type="button"
-            onClick={exportCSV}
-            className="btn btn-outline"
-            disabled={!filtered.length}
-          >
-            <Download className="h-4 w-4" />
-            <span className="hidden sm:inline">Export CSV</span>
-          </button>
-        )}
-      </PageHeader>
+      <PageHeader hideTitle />
 
-      {/* -------------------------------- summary -------------------------------- */}
-      <div data-tour="txn-summary" className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <SummaryTile label="Records" value={summary.total} />
-        <SummaryTile label="Currently out" value={summary.active} tone="text-blue-600 dark:text-blue-400" />
-        <SummaryTile label="Overdue" value={summary.overdue} tone="text-red-600 dark:text-red-400" />
-        <SummaryTile
-          label="Returned"
-          value={summary.returned}
-          tone="text-emerald-600 dark:text-emerald-400"
-        />
-      </div>
+      {/* -------------------------------- summary --------------------------------
+          A student's dashboard already carries these four totals, so repeating
+          them here only pushes their own records down the page. Staff keep the
+          strip: this is the only screen that gives them the figures. */}
+      {!isStudent(user) && !instructor && (
+        <div data-tour="txn-summary" className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <SummaryTile label="Records" value={summary.total} />
+          <SummaryTile label="Currently out" value={summary.active} tone="text-blue-600 dark:text-blue-400" />
+          <SummaryTile label="Overdue" value={summary.overdue} tone="text-red-600 dark:text-red-400" />
+          <SummaryTile
+            label="Returned"
+            value={summary.returned}
+            tone="text-emerald-600 dark:text-emerald-400"
+          />
+        </div>
+      )}
 
       {/* -------------------------------- filters -------------------------------- */}
       <div className="card mb-4 p-3">
@@ -297,10 +310,38 @@ export default function TransactionsPage() {
             />
           </div>
 
-          <div
-            data-tour="txn-filters"
-            className="no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 pb-0.5"
-          >
+          {/* Phones get the same chip toolbar as the Tools page — one chip per
+              filter, plus one holding the date range; the desktop keeps its
+              inline dropdowns and date fields. */}
+          <div data-tour="txn-filters" className="sm:hidden">
+            <MobileFilterBar
+              filters={mobileFilters}
+              hasFilters={hasFilters}
+              onClear={resetFilters}
+              extra={{
+                label: from || to ? 'Dates set' : 'Dates',
+                active: !!from || !!to,
+                children: (
+                  <div className="space-y-3">
+                    <TextField
+                      label="From"
+                      type="date"
+                      value={from}
+                      onChange={(e) => setFrom(e.target.value)}
+                    />
+                    <TextField
+                      label="To"
+                      type="date"
+                      value={to}
+                      onChange={(e) => setTo(e.target.value)}
+                    />
+                  </div>
+                ),
+              }}
+            />
+          </div>
+
+          <div className="no-scrollbar -mx-1 hidden gap-2 overflow-x-auto px-1 pb-0.5 sm:flex">
             <FilterSelect
               label="Status"
               value={status}
@@ -330,7 +371,7 @@ export default function TransactionsPage() {
             <FilterSelect label="Sort" value={sort} onChange={setSort} options={SORT_OPTIONS} />
           </div>
 
-          <div className="flex flex-wrap items-end gap-2">
+          <div className="hidden flex-wrap items-end gap-2 sm:flex">
             <TextField
               label="From"
               type="date"
@@ -357,6 +398,11 @@ export default function TransactionsPage() {
       {/* -------------------------------- results -------------------------------- */}
       <SectionCard
         title={`${filtered.length} transaction${filtered.length === 1 ? '' : 's'}`}
+        description={
+          instructor && filtered.length > VISIBLE_LIMIT
+            ? `Showing the ${VISIBLE_LIMIT} most recent — narrow the filters to find an older record.`
+            : undefined
+        }
         bodyClassName="p-0"
       >
         {error ? (
@@ -366,10 +412,10 @@ export default function TransactionsPage() {
             onRetry={reload}
           />
         ) : loading && !transactions.length ? (
-          <SkeletonRows rows={6} columns={5} />
+          <SkeletonRows rows={instructor ? VISIBLE_LIMIT : 6} columns={5} />
         ) : (
           <TransactionTable
-            transactions={filtered}
+            transactions={instructor ? filtered.slice(0, VISIBLE_LIMIT) : filtered}
             onSelect={(txn) => {
               setSelected(txn)
               setExtendDate(toDateInput(txn.dueDate))
@@ -415,7 +461,7 @@ export default function TransactionsPage() {
         loading={busy}
       />
 
-      <Walkthrough steps={tourSteps} open={tour.open} onClose={tour.close} />
+      <Walkthrough steps={tourSteps} open={tour.open} onClose={tour.close} compact={isStudent(user)} />
     </>
   )
 }

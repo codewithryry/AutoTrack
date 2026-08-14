@@ -17,8 +17,43 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="ToolTrack" />
-    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <!-- iOS uses its own 180px mark, which is already in `public/icons`; it was
+         being handed the 192px Android icon instead and rescaling it. -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
     <title>ToolTrack AutoLab</title>
+
+    <!-- The app background, painted before the stylesheet and the bundle load.
+         Without it the browser shows its own white page for the first frames of
+         a refresh, whatever the theme is. The values are the `--app-bg` tokens
+         from index.css; keep the two in step. -->
+    <script>
+      ;(function () {
+        var theme
+        try {
+          theme = localStorage.getItem('stms.theme') || 'light'
+        } catch (e) {
+          theme = 'light'
+        }
+        if (theme === 'system') {
+          theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        }
+        var resolved = theme === 'dark' ? 'dark' : 'light'
+        var root = document.documentElement
+        root.setAttribute('data-theme', resolved)
+        root.style.colorScheme = resolved
+        root.style.background = resolved === 'dark' ? 'rgb(8 13 23)' : 'rgb(241 244 249)'
+      })()
+    </script>
+    <style>
+      /* Colour only. This runs before `index.css`, so anything geometric here
+         would silently outlive the stylesheet and fight the app's own layout —
+         `min-height` in particular, since the shell already sizes itself with
+         `min-h-[100dvh]` and the bottom bar is positioned against the viewport. */
+      body,
+      #root {
+        background: inherit;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

@@ -21,10 +21,10 @@ import {
   ConfirmDialog,
   DetailItem,
   EmptyState,
-  LoadingBlock,
   MaintenanceStatusBadge,
   PageHeader,
   SectionCard,
+  Skeleton,
   Spinner,
   StatusBadge,
   TextField,
@@ -58,19 +58,16 @@ const toolDetailTour = (student) =>
           target: 'detail-record',
           title: 'The tool record',
           text: 'Status, condition, category and the shelf it lives on — everything you need before collecting it.',
-          icon: ClipboardList,
         },
         {
           target: 'detail-action',
           title: 'Borrow or hand back',
           text: 'When the tool is free, Borrow tool appears here. While you are holding it, Return tool takes its place.',
-          icon: ArrowRight,
         },
         {
           target: 'detail-location',
           title: 'Put it back where it came from',
           text: 'This is the storage position to return the tool to after use.',
-          icon: MapPin,
         },
       ]
     : [
@@ -78,19 +75,16 @@ const toolDetailTour = (student) =>
           target: 'detail-record',
           title: 'The tool record',
           text: 'Status, condition, serial number, servicing dates and how often the tool has been borrowed.',
-          icon: ClipboardList,
         },
         {
           target: 'detail-edit',
           title: 'Correct the record',
           text: 'Fix a detail, change the category or update the serial number. The full activity timeline sits beside it.',
-          icon: Pencil,
         },
         {
           target: 'detail-status',
           title: 'Take it in or out of service',
           text: 'Send the tool for maintenance, mark it damaged or lost, or restore it to the borrowable pool.',
-          icon: HardHat,
         },
       ]
 
@@ -113,7 +107,33 @@ export default function ToolDetailPage() {
   const [confirm, setConfirm] = useState(null)
   const [busy, setBusy] = useState(false)
 
-  if (loading && !tool) return <LoadingBlock label="Loading tool record…" />
+  // A skeleton in the shape this page settles into — header, alert strip, then
+  // the two-column body — so nothing jumps when the record arrives.
+  if (loading && !tool) {
+    return (
+      <div className="animate-fade-in">
+        <Skeleton className="mb-3 h-4 w-32 rounded" />
+        <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0 flex-1 space-y-2">
+            <Skeleton className="h-6 w-2/3 max-w-xs rounded" />
+            <Skeleton className="h-3.5 w-40 rounded" />
+          </div>
+          <Skeleton className="h-9 w-full rounded-lg sm:w-40" />
+        </div>
+        <Skeleton className="mb-4 h-12 rounded-lg" />
+        <div className="grid gap-4 lg:grid-cols-3">
+          <div className="space-y-4 lg:col-span-2">
+            <Skeleton className="h-56 rounded-xl" />
+            <Skeleton className="h-40 rounded-xl" />
+          </div>
+          <div className="space-y-4">
+            <Skeleton className="h-48 rounded-xl" />
+            <Skeleton className="h-32 rounded-xl" />
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   if (!tool) {
     return (
@@ -510,7 +530,7 @@ export default function ToolDetailPage() {
         open={!!selectedTxn}
         onClose={() => setSelectedTxn(null)}
       />
-      <Walkthrough steps={tourSteps} open={tour.open} onClose={tour.close} />
+      <Walkthrough steps={tourSteps} open={tour.open} onClose={tour.close} compact={isStudent(user)} />
 
       <ConfirmDialog
         open={!!confirm}

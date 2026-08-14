@@ -63,6 +63,13 @@ export function validate(input) {
   if (!input.labName?.trim()) errors.labName = 'Laboratory name is required.'
   if (!input.labLocation?.trim()) errors.labLocation = 'Laboratory location is required.'
 
+  const url = String(input.departmentUrl ?? '').trim()
+  if (url.length > 300) {
+    errors.departmentUrl = 'Keep the address under 300 characters.'
+  } else if (url && !/^https?:\/\//i.test(url)) {
+    errors.departmentUrl = 'Enter a full address beginning with https:// or http://.'
+  }
+
   const days = Number(input.defaultBorrowDays)
   if (!Number.isInteger(days) || days < 1 || days > 90) {
     errors.defaultBorrowDays = 'Enter a whole number of days between 1 and 90.'
@@ -143,6 +150,9 @@ export function applyTheme(theme) {
         : 'light'
   root.setAttribute('data-theme', resolved)
   root.style.colorScheme = resolved
+  // Keeps the pre-paint background set in index.html in step with a theme
+  // switched at runtime, so overscroll never shows the previous colour.
+  root.style.background = resolved === 'dark' ? 'rgb(8 13 23)' : 'rgb(241 244 249)'
   const meta = document.querySelector('meta[name="theme-color"]')
   if (meta) meta.setAttribute('content', resolved === 'dark' ? '#080D17' : '#0B1220')
   return resolved

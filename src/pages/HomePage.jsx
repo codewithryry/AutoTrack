@@ -324,8 +324,8 @@ export default function HomePage() {
 
 function PublicHeader({ isAuthenticated }) {
   return (
-    <header className="sticky top-0 z-30 border-b border-white/10 backdrop-blur"
-      style={{ background: 'rgb(var(--rail) / 0.85)' }}
+    <header className="sticky top-0 z-30 border-b border-white/10"
+      style={{ background: 'rgb(var(--rail))' }}
     >
       <div className="hazard-stripe h-1 w-full" />
       <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-5 py-3 sm:px-8">

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
-  Download,
   KeyRound,
   Mail,
   Pencil,
@@ -8,7 +8,6 @@ import {
   Plus,
   ShieldCheck,
   Trash2,
-  Users as UsersIcon,
   UserX,
 } from 'lucide-react'
 import {
@@ -30,6 +29,7 @@ import {
   UserStatusBadge,
 } from '../components/ui'
 import TransactionTable from '../components/TransactionTable'
+import Walkthrough, { usePageTour } from '../components/Walkthrough'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import { useDebounced, useTransactions, useUsers } from '../hooks'
@@ -46,10 +46,10 @@ import {
   USER_STATUSES,
   YEAR_LEVELS,
 } from '../utils/constants'
-import { cx, downloadCSV, initials } from '../utils/helpers'
+import { cx, initials } from '../utils/helpers'
 import { formatDate } from '../utils/dates'
 
-const CSV_COLUMNS = [
+export const USERS_CSV_COLUMNS = [
   { key: 'id', label: 'Auth UID' },
   { key: 'fullName', label: 'Full Name' },
   { key: 'email', label: 'Email' },
@@ -62,6 +62,33 @@ const CSV_COLUMNS = [
   { key: 'contact', label: 'Contact' },
   { key: 'status', label: 'Status' },
   { key: 'createdAt', label: 'Registered', format: (v) => formatDate(v, '') },
+]
+
+/**
+ * The directory walkthrough — administrators only, since no other role reaches
+ * this page. The approval steps drop themselves when nothing is waiting.
+ */
+const usersTour = [
+  {
+    target: 'users-filters',
+    title: 'Find an account',
+    text: 'Search by name, email, student ID or department, then narrow by role or status.',
+  },
+  {
+    target: 'users-pending',
+    title: 'Accounts awaiting approval',
+    text: 'Self-registered instructors cannot sign in until you approve them here.',
+  },
+  {
+    target: 'users-profile-changes',
+    title: 'Profile changes to review',
+    text: "A student's edits are held until you approve them — the old and new details are shown side by side.",
+  },
+  {
+    target: 'users-list',
+    title: 'The directory',
+    text: 'Open a row for the full record. The pencil edits an account and the bin deletes it, with a confirmation first.',
+  },
 ]
 
 export default function UsersPage() {
@@ -81,8 +108,28 @@ export default function UsersPage() {
   const [viewing, setViewing] = useState(null)
   const [confirm, setConfirm] = useState(null)
   const [busy, setBusy] = useState(false)
+  const tour = usePageTour('users', currentUser?.id)
 
   const canManage = can(PERM.USER_CREATE)
+
+  const openCreate = () => {
+    setEditing(null)
+    setFormOpen(true)
+  }
+
+  /**
+   * `?new=1` opens the same create form — how the phone's bottom bar reaches it
+   * while this page is open. The parameter is dropped again the moment it is
+   * honoured, so a back navigation does not reopen the form.
+   */
+  const [searchParams, setSearchParams] = useSearchParams()
+  useEffect(() => {
+    if (!searchParams.get('new')) return
+    if (canManage) openCreate()
+    const next = new URLSearchParams(searchParams)
+    next.delete('new')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, canManage, setSearchParams])
 
   const filtered = useMemo(
     () => userService.filterUsers(users, { search: debouncedSearch, role, status, sort }),
@@ -193,41 +240,21 @@ export default function UsersPage() {
     }
   }
 
-  const exportCSV = () => {
-    downloadCSV(filtered, CSV_COLUMNS, `users-${new Date().toISOString().slice(0, 10)}.csv`)
-    toast.success(`${filtered.length} users exported to CSV.`)
-  }
-
   return (
     <>
-      <PageHeader
-        title="Users"
-        description={`${users.length} accounts registered — students, instructors and administrators.`}
-        icon={UsersIcon}
-      >
-        <button
-          type="button"
-          onClick={exportCSV}
-          className="btn btn-outline"
-          disabled={!filtered.length}
-        >
-          <Download className="h-4 w-4" />
-          <span className="hidden sm:inline">Export CSV</span>
-        </button>
-        {canManage && (
-          <button
-            type="button"
-            onClick={() => {
-              setEditing(null)
-              setFormOpen(true)
-            }}
-            className="btn btn-primary"
-          >
-            <Plus className="h-4 w-4" />
-            Add user
-          </button>
-        )}
-      </PageHeader>
+      {/* The sticky shell already names the page, and on a phone the bottom
+          bar's "+" carries the add action — so the header row is the desktop's
+          only, exactly as the Tools page opens. */}
+      {canManage && (
+        <div className="hidden lg:block">
+          <PageHeader hideTitle>
+            <button type="button" onClick={openCreate} className="btn btn-primary">
+              <Plus className="h-4 w-4" />
+              Add user
+            </button>
+          </PageHeader>
+        </div>
+      )}
 
       {/* ---------------------- pending profile changes ---------------------- */}
       {canManage && pendingProfiles.length > 0 && (
@@ -238,6 +265,7 @@ export default function UsersPage() {
           description="A student's current details, and what they have asked to change them to."
           bodyClassName="p-0"
           className="mb-4"
+          data-tour="users-profile-changes"
         >
           <ul className="divide-y">
             {pendingProfiles.map((row) => (
@@ -301,6 +329,7 @@ export default function UsersPage() {
           description="Self-registered instructors cannot sign in until an administrator approves them."
           bodyClassName="p-0"
           className="mb-4"
+          data-tour="users-pending"
         >
           <ul className="divide-y">
             {pending.map((row) => (
@@ -340,7 +369,7 @@ export default function UsersPage() {
       )}
 
       {/* -------------------------------- filters -------------------------------- */}
-      <div className="card mb-4 p-3">
+      <div className="card mb-4 p-3" data-tour="users-filters">
         <div className="space-y-3">
           <SearchInput
             value={search}
@@ -376,7 +405,11 @@ export default function UsersPage() {
       </div>
 
       {/* --------------------------------- list --------------------------------- */}
-      <SectionCard title={`${filtered.length} accounts`} bodyClassName="p-0">
+      <SectionCard
+        title={`${filtered.length} accounts`}
+        bodyClassName="p-0"
+        data-tour="users-list"
+      >
         {error ? (
           <ErrorState
             title="The user directory could not be loaded"
@@ -396,11 +429,11 @@ export default function UsersPage() {
             {/* mobile */}
             <ul className="divide-y sm:hidden">
               {filtered.map((row) => (
-                <li key={row.id}>
+                <li key={row.id} className="flex items-center gap-1 pr-2">
                   <button
                     type="button"
                     onClick={() => setViewing(row)}
-                    className="flex w-full items-center gap-3 px-4 py-3 text-left"
+                    className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left"
                   >
                     <Avatar name={row.fullName} />
                     <div className="min-w-0 flex-1">
@@ -420,6 +453,31 @@ export default function UsersPage() {
                       </span>
                     )}
                   </button>
+                  {/* Same handlers, permissions and confirmation as the desktop
+                      table's row actions. */}
+                  {(canManage || row.id === currentUser?.id) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditing(row)
+                        setFormOpen(true)
+                      }}
+                      className="btn btn-ghost btn-icon shrink-0"
+                      aria-label={`Edit ${row.fullName}`}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                  )}
+                  {can(PERM.USER_DELETE) && row.id !== currentUser?.id && (
+                    <button
+                      type="button"
+                      onClick={() => requestDelete(row)}
+                      className="btn btn-ghost btn-icon shrink-0 text-red-600 dark:text-red-400"
+                      aria-label={`Delete ${row.fullName}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
@@ -560,6 +618,8 @@ export default function UsersPage() {
         onToggleStatus={() => toggleStatus(viewing)}
         onApprove={() => approveAccount(viewing)}
       />
+
+      <Walkthrough steps={usersTour} open={tour.open} onClose={tour.close} />
 
       <ConfirmDialog
         open={!!confirm}

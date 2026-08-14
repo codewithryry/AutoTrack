@@ -16,6 +16,11 @@ export default defineConfig({
         description:
           'ToolTrack AutoLab: QR-Based Automotive Laboratory Tool Monitoring System. ' +
           'Scan. Borrow. Track. Return.',
+        // The launch screen is painted in `background_color` before a single
+        // line of the app runs, so it is the same navy the shell's rail and the
+        // sign-in panel use — and the same value `index.html` stamps on the root
+        // element before the stylesheet loads. The hand-over from the system
+        // splash to the first frame is therefore one continuous colour.
         theme_color: '#0B1220',
         background_color: '#0B1220',
         display: 'standalone',
@@ -26,9 +31,20 @@ export default defineConfig({
         // landing page. Signed out, the route guard sends them to /login.
         start_url: '/dashboard',
         categories: ['productivity', 'utilities', 'education'],
+        // Android composes the launch screen from `background_color`, `name` and
+        // the largest icon it can find, so the set has to cover both purposes at
+        // both densities:
+        //
+        //   • `any` — the artwork edge to edge, used where nothing is cropped.
+        //   • `maskable` — the same badge at 66% inside a `#0B1220` square, so
+        //     the circle, squircle or rounded square a launcher crops to never
+        //     cuts into the mark. Without a padded copy Android falls back to
+        //     shrinking the `any` icon inside a white circle, which is what made
+        //     the splash look unfinished.
         icons: [
           { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
           { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: 'icons/icon-maskable-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
           { src: 'icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
         shortcuts: [

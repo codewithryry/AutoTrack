@@ -1,5 +1,6 @@
 import { ROLE } from '../utils/constants'
 import { supabase, TABLES } from '../supabase/config'
+import * as offlineCache from './offlineCache'
 
 /**
  * Data layer — Supabase Postgres.
@@ -27,6 +28,58 @@ import { supabase, TABLES } from '../supabase/config'
  */
 
 const STAFF_ROLES = [ROLE.ADMIN, ROLE.INSTRUCTOR]
+
+/* ------------------------------------------------------------------ *
+ * Working without a connection
+ * ------------------------------------------------------------------ */
+
+/**
+ * Offline mode, set from the shell's Settings page. It is deliberately separate
+ * from `navigator.onLine`: the device's real connectivity is still detected and
+ * still decides whether a write can be attempted, while this flag is the
+ * student's own instruction to read from the copy on this device.
+ */
+let offlineMode = false
+
+export function setOfflineMode(value) {
+  const next = !!value
+  if (offlineMode === next) return
+  offlineMode = next
+  emit('*') // every open screen re-reads through the new source
+}
+
+/** True when nothing should be asked of the network. */
+const isOffline = () =>
+  offlineMode || (typeof navigator !== 'undefined' && navigator.onLine === false)
+
+/**
+ * Did this request fail because it never reached the server?
+ *
+ * Supabase surfaces a lost connection as a `TypeError: Failed to fetch` from the
+ * underlying `fetch`, with no Postgres code — a rejection from the database
+ * always carries one, so the two are distinguishable without guessing.
+ */
+function isNetworkError(error) {
+  if (!error) return false
+  if (error.code) return false
+  const message = String(error.message ?? '').toLowerCase()
+  return (
+    error.name === 'TypeError' ||
+    message.includes('failed to fetch') ||
+    message.includes('networkerror') ||
+    message.includes('load failed') ||
+    message.includes('network request failed')
+  )
+}
+
+/** Writes need the server: there is no queue that could replay them safely. */
+function assertWritable(what) {
+  if (!isOffline()) return
+  throw new DataError(
+    `Cannot ${what} while offline. The change needs the laboratory database — ` +
+      'reconnect and try again.',
+  )
+}
 
 export const COLLECTIONS = {
   users: 'users',
@@ -134,6 +187,14 @@ const isStaff = () => STAFF_ROLES.includes(scope.role)
  * would then drop.
  */
 function scopedQuery(name, query) {
+  // An instructor reads the laboratory's operational stream, not the account and
+  // profile-approval decisions an administrator addresses to individual
+  // students — so their notification query is narrowed to the broadcasts plus
+  // their own, the same shape `notifications.listFor` enforces. Every other
+  // collection keeps the staff-wide read they already had.
+  if (name === COLLECTIONS.notifications && scope.role === ROLE.INSTRUCTOR && scope.uid) {
+    return query.or(`user_id.eq.${scope.uid},user_id.is.null`)
+  }
   if (isStaff() || !scope.role || !scope.uid) return query
 
   switch (name) {
@@ -185,13 +246,42 @@ function emit(name) {
 
 export async function list(name) {
   if (deniedForRole(name)) return []
+
+  // Offline mode is answered from the cache without touching the network at
+  // all — that is what makes it work with no connection rather than merely
+  // looking as though it has none.
+  if (isOffline()) return cachedOrFail(name)
+
   try {
     const { data, error } = await scopedQuery(name, supabase.from(tableFor(name)).select('*'))
     if (error) throw error
-    return toDocs(data)
+    const rows = toDocs(data)
+    // Kept for the next time there is no connection. Best-effort and not awaited
+    // on the read path, so a slow disk never delays a screen.
+    void offlineCache.putCollection(name, scope.uid, rows)
+    return rows
   } catch (err) {
+    // A request that never reached the server is a connectivity failure, not a
+    // rejection: serve the last copy rather than an error the student cannot act
+    // on. A real refusal from Postgres still surfaces.
+    if (isNetworkError(err)) return cachedOrFail(name)
     throw wrap(err, `read "${name}"`)
   }
+}
+
+/**
+ * The cached copy of a collection, or an honest failure.
+ *
+ * A collection that has never been read on this device is missing, not empty —
+ * reporting it as an empty laboratory would be a lie the student would act on.
+ */
+async function cachedOrFail(name) {
+  const rows = await offlineCache.getCollection(name, scope.uid)
+  if (rows) return rows
+  throw new DataError(
+    `"${name}" has not been downloaded to this device yet, so it cannot be opened offline. ` +
+      'Reconnect once to store a copy.',
+  )
 }
 
 export async function listMany(names) {
@@ -201,6 +291,7 @@ export async function listMany(names) {
 
 export async function get(name, id) {
   if (id == null || deniedForRole(name)) return null
+  if (isOffline()) return cachedRecord(name, id)
   try {
     const { data, error } = await scopedQuery(
       name,
@@ -209,8 +300,15 @@ export async function get(name, id) {
     if (error) throw error
     return toDoc(data) ?? null
   } catch (err) {
+    if (isNetworkError(err)) return cachedRecord(name, id)
     throw wrap(err, `read ${name}/${id}`)
   }
+}
+
+/** One record out of the cached collection, or `null` if it was never stored. */
+async function cachedRecord(name, id) {
+  const rows = await offlineCache.getCollection(name, scope.uid)
+  return rows?.find((row) => row.id === id) ?? null
 }
 
 /**
@@ -331,6 +429,7 @@ export async function supportsColumn(name, field) {
 
 export async function insert(name, document) {
   if (!document?.id) throw new DataError(`Cannot insert into "${name}" without an id.`)
+  assertWritable(`save the ${name} record`)
   try {
     const { data, error } = await supabase
       .from(tableFor(name))
@@ -364,6 +463,7 @@ export async function insertMany(name, documents) {
 }
 
 export async function update(name, id, patch) {
+  assertWritable(`update the ${name} record`)
   try {
     const { id: _ignored, ...fields } = patch ?? {}
     const { data, error } = await supabase
@@ -382,6 +482,7 @@ export async function update(name, id, patch) {
 }
 
 export async function upsert(name, document) {
+  assertWritable(`save the ${name} record`)
   if (!document?.id) throw new DataError(`Cannot upsert into "${name}" without an id.`)
   try {
     const { data, error } = await supabase
@@ -398,6 +499,7 @@ export async function upsert(name, document) {
 }
 
 export async function remove(name, id) {
+  assertWritable(`remove the ${name} record`)
   try {
     const { data, error } = await supabase
       .from(tableFor(name))
@@ -490,6 +592,7 @@ export async function clearAll() {
  * first.
  */
 export async function runAtomic(fn) {
+  assertWritable('complete that change')
   /** @type {Array<() => Promise<void>>} */
   const undo = []
 

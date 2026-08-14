@@ -1,6 +1,7 @@
 import * as db from './db'
 import { COLLECTIONS } from './db'
 import { NOTIF_TYPE } from '../utils/constants'
+import { isAdmin } from '../utils/permissions'
 import { uid } from '../utils/helpers'
 import { nowISO } from '../utils/dates'
 
@@ -71,14 +72,22 @@ export async function listAll() {
 /**
  * Notifications visible to one user.
  *
- * The query itself is already restricted by role — staff stream the collection,
- * a student streams `userId == uid` plus the broadcasts — so this only re-checks
- * the ownership rule locally.
+ * The query itself is already restricted by role — an administrator streams the
+ * collection, everybody else streams `userId == uid` plus the broadcasts — so
+ * this only re-checks the ownership rule locally.
+ *
+ * `seeAll` is the whole-inbox view, and it belongs to administrators alone: the
+ * personally addressed alerts are the account and profile-approval decisions,
+ * which are between the administrator who made them and the student they are
+ * about. An instructor's own scope — the laboratory-wide operational stream
+ * (borrowed, returned, overdue, damaged/lost, maintenance, system) plus anything
+ * addressed to them — is exactly the broadcast-plus-own rule below, so the flag
+ * is clamped rather than trusted.
  */
 export async function listFor(user, { seeAll = false } = {}) {
   const rows = await listAll()
-  if (seeAll) return rows
-  if (!user) return []
+  if (!user) return seeAll ? rows : []
+  if (seeAll && isAdmin(user)) return rows
   return rows.filter((n) => !n.userId || n.userId === user.id)
 }
 

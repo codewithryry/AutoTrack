@@ -11,7 +11,12 @@ import {
   ShieldCheck,
   Wrench,
 } from 'lucide-react'
-import { AuthBrandLockup, BRAND_NAME } from '../components/AuthBranding'
+import {
+  AuthBrandLockup,
+  BRAND_NAME,
+  InstitutionLogos,
+  InstitutionNames,
+} from '../components/AuthBranding'
 import { Spinner } from '../components/ui'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
@@ -166,24 +171,36 @@ export default function LoginPage() {
       </section>
 
       {/* --------------------------- form --------------------------- */}
-      <section className="flex min-w-0 flex-col justify-center px-5 py-10 sm:px-10">
+      <section
+        // On a phone the column starts at the top rather than sitting centred,
+        // so the marks are the first thing on screen instead of floating in the
+        // middle of it. From `sm` the centred desktop layout is unchanged.
+        className="flex min-w-0 flex-col justify-start px-5 sm:justify-center sm:px-10
+                   pb-[calc(env(safe-area-inset-bottom,0px)+2.5rem)]
+                   pt-[calc(env(safe-area-inset-top,0px)+2.5rem)] sm:py-10"
+      >
         <div className="mx-auto w-full max-w-sm">
 
-          <div className="mb-7 flex flex-col items-center text-center lg:items-start lg:text-left">
-            <div className="w-full lg:hidden">
-              <AuthBrandLockup />
-            </div>
-            <h2 className="mt-5 text-2xl font-extrabold tracking-tight lg:mt-0">Sign in</h2>
+          {/* The institutional marks sit across the top of the phone screen,
+              above everything else, rather than inside the form block. The
+              desktop keeps them on the brand panel to the left. */}
+          <div className="mb-5 lg:hidden">
+            <InstitutionNames className="mb-2" />
+            <InstitutionLogos size="sm" />
+          </div>
+
+          <div className="mb-7 mt-2 flex flex-col items-center text-center">
+            <h2 className="text-2xl font-extrabold tracking-tight">Sign in</h2>
             <p className="muted mt-1.5 text-sm">
               Use your laboratory account to access the tool monitoring system.
             </p>
           </div>
 
-          <form onSubmit={submit} className="space-y-4" noValidate>
+          <form onSubmit={submit} className="auth-form space-y-4" noValidate>
             {notice && !errors.form && (
               <div
                 role="status"
-                className="rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-sm
+                className="rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-3 text-sm
                            font-medium text-emerald-800 dark:border-emerald-500/30
                            dark:bg-emerald-500/10 dark:text-emerald-200"
               >
@@ -194,7 +211,7 @@ export default function LoginPage() {
             {errors.form && (
               <div
                 role="alert"
-                className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-sm
+                className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-3 text-sm
                            font-medium text-red-700 dark:border-red-500/30 dark:bg-red-500/10
                            dark:text-red-300"
               >
@@ -208,7 +225,7 @@ export default function LoginPage() {
               </label>
               <div className="relative">
                 <Mail
-                  className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2"
+                  className="pointer-events-none absolute left-3.5 top-1/2 h-[18px] w-[18px] -translate-y-1/2"
                   style={{ color: 'rgb(var(--text-subtle))' }}
                 />
                 <input
@@ -221,7 +238,7 @@ export default function LoginPage() {
                   value={form.email}
                   onChange={setField('email')}
                   placeholder="name@autolab.edu.ph"
-                  className={cx('input pl-9', errors.email && 'input-error')}
+                  className={cx('input pl-11', errors.email && 'input-error')}
                   aria-invalid={!!errors.email}
                 />
               </div>
@@ -238,7 +255,7 @@ export default function LoginPage() {
               </label>
               <div className="relative">
                 <Lock
-                  className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2"
+                  className="pointer-events-none absolute left-3.5 top-1/2 h-[18px] w-[18px] -translate-y-1/2"
                   style={{ color: 'rgb(var(--text-subtle))' }}
                 />
                 <input
@@ -249,14 +266,14 @@ export default function LoginPage() {
                   value={form.password}
                   onChange={setField('password')}
                   placeholder="••••••••"
-                  className={cx('input px-9', errors.password && 'input-error')}
+                  className={cx('input px-11', errors.password && 'input-error')}
                   aria-invalid={!!errors.password}
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword((v) => !v)}
-                  className="absolute right-2 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center
-                             rounded-md transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+                  className="absolute right-2 top-1/2 grid h-9 w-9 -translate-y-1/2 place-items-center
+                             rounded-lg transition-colors hover:bg-black/5 dark:hover:bg-white/10"
                   aria-label={showPassword ? 'Hide password' : 'Show password'}
                 >
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -269,7 +286,7 @@ export default function LoginPage() {
               )}
             </div>
 
-            <button type="submit" className="btn btn-primary btn-lg w-full" disabled={submitting}>
+            <button type="submit" className="btn btn-primary btn-lg w-full rounded-xl" disabled={submitting}>
               {submitting ? <Spinner /> : <LogIn className="h-4 w-4" />}
               {submitting ? 'Signing in…' : 'Sign in'}
             </button>
@@ -279,9 +296,7 @@ export default function LoginPage() {
           <div className="mt-8">
             <div className="mb-3 flex items-center gap-2">
               <ShieldCheck className="h-4 w-4" style={{ color: 'rgb(var(--text-subtle))' }} />
-              <span className="subtle text-[11px] font-bold uppercase tracking-wider">
-                Account help
-              </span>
+              <span className="subtle text-[12px] font-bold">Account help</span>
               <span className="h-px flex-1" style={{ background: 'rgb(var(--border))' }} />
             </div>
 
@@ -305,11 +320,11 @@ export default function LoginPage() {
                     Email a reset link to the address above.
                   </span>
                 </span>
-                <span className="subtle shrink-0 text-[11px] font-bold uppercase">Send</span>
+                <span className="subtle shrink-0 text-[12px] font-bold">Send</span>
               </button>
             </div>
 
-            <p className="subtle mt-4 text-center text-xs leading-relaxed lg:text-left">
+            <p className="subtle mt-4 text-xs leading-relaxed">
               No account yet?{' '}
               <Link
                 to="/signup"
@@ -320,6 +335,13 @@ export default function LoginPage() {
               . Students and instructors can sign in as soon as they register.
             </p>
           </div>
+
+          {/* Kept with the form column so it centres under it at every width and
+              stays clear of the phone's home indicator via the section's own
+              safe-area padding. */}
+          <p className="subtle mt-8 text-center text-[11px] font-semibold">
+            Powered by Student BTVTED
+          </p>
         </div>
       </section>
     </div>

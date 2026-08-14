@@ -25,7 +25,8 @@ export async function freshDb() {
   for (const f of ['0001_schema.sql','0002_rls.sql','0003_self_registration_active.sql',
                    '0004_protect_last_admin.sql','0005_bootstrap_first_admin.sql',
                    '0006_profile_change_review.sql','0007_self_delete_account.sql',
-                   '0008_location_checkpoints.sql','0009_tool_delete_preserve_history.sql']) {
+                   '0008_location_checkpoints.sql','0009_tool_delete_preserve_history.sql',
+                   '0010_settings_department_page.sql']) {
     try { await db.exec(readFileSync(`supabase/migrations/${f}`,'utf8')) }
     catch (e) { throw new Error(`${f} failed: ${e.message}`) }
   }

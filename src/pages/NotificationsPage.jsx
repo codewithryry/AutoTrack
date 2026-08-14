@@ -14,11 +14,11 @@ import {
   Undo2,
 } from 'lucide-react'
 import Walkthrough, { usePageTour } from '../components/Walkthrough'
+import Tooltip from '../components/Tooltip'
 import {
   ConfirmDialog,
   EmptyState,
   ErrorState,
-  PageHeader,
   SectionCard,
   SkeletonRows,
 } from '../components/ui'
@@ -97,42 +97,35 @@ const notificationsTour = (student) =>
         {
           title: 'Alerts addressed to you',
           text: 'Due dates, returns and messages about the tools you are holding land here.',
-          icon: Bell,
         },
         {
           target: 'notif-filters',
           title: 'Filter the list',
           text: 'Switch between everything, the unread ones, or a single type such as Overdue.',
-          icon: Filter,
         },
         {
           title: 'Read and act',
           text: 'Tap an alert to open the tool it mentions. The icon beside it marks it read, and you can clear your own.',
-          icon: Bell,
         },
       ]
     : [
         {
           title: 'Laboratory alerts',
           text: 'Overdue tools, returns, damage and maintenance updates land here so nothing slips through.',
-          icon: Bell,
         },
         {
           target: 'notif-filters',
           title: 'Filter the list',
           text: 'Switch between all alerts, unread ones, or a single type like Overdue or Maintenance.',
-          icon: Filter,
         },
         {
           target: 'notif-mark-read',
           title: 'Catch up in one tap',
           text: 'An administrator can mark the whole inbox as read, and clear it out entirely.',
-          icon: CheckCheck,
         },
         {
           title: 'Read and act',
           text: 'Tap a notification to jump to the tool it mentions. The icons beside it mark it read or delete it.',
-          icon: Bell,
         },
       ]
 
@@ -149,12 +142,13 @@ export default function NotificationsPage() {
   const canDelete = (notification) =>
     can(PERM.TXN_VIEW_ALL) || notification.userId === user?.id
 
-  /** Clearing the whole inbox in one go stays with the administrators. */
-  const canMarkAllRead = isAdmin(user)
-
   // The phone shell — the same breakpoint the layout switches its rail on.
   const isPwa = useMediaQuery('(max-width: 1023px)')
-  const showMarkAllRead = !(isStudent(user) && isPwa)
+  // Every role can clear its own unread count: a student and an instructor mark
+  // the alerts addressed to them, an administrator the laboratory-wide ones too.
+  // Only "Clear all" — deleting the inbox outright — stays with the
+  // administrators, behind PERM.DATA_MANAGE below.
+  const ownsAll = isAdmin(user)
 
   const [filter, setFilter] = useState('all')
   const [confirm, setConfirm] = useState(null)
@@ -177,14 +171,19 @@ export default function NotificationsPage() {
   }, [notifications, unread])
 
   const markAllRead = async () => {
-    if (!canMarkAllRead) return
-    const ids = notifications.filter((n) => !n.read).map((n) => n.id)
+    // A non-administrator may only write their own rows, so the laboratory-wide
+    // alerts are left out rather than attempted and reported as skipped.
+    const ids = notifications
+      .filter((n) => !n.read && (ownsAll || n.userId === user?.id))
+      .map((n) => n.id)
     if (!ids.length) return
     setBusy(true)
     try {
       const { updated, skipped } = await notificationService.markAllRead(ids)
       if (updated) {
-        toast.success(`${updated} notification${updated === 1 ? '' : 's'} marked as read.`)
+        toast.success(`${updated} notification${updated === 1 ? '' : 's'} marked as read.`, {
+          anchor: '[data-tour="notif-filters"]',
+        })
       }
       if (skipped) {
         toast.warning(
@@ -209,7 +208,7 @@ export default function NotificationsPage() {
   const removeOne = async (notification) => {
     try {
       await notificationService.remove(notification.id)
-      toast.success('Notification deleted.')
+      toast.success('Notification deleted.', { anchor: '[data-tour="notif-filters"]' })
     } catch (err) {
       toast.error(err.message ?? 'Unable to delete the notification.')
     }
@@ -224,7 +223,7 @@ export default function NotificationsPage() {
         setBusy(true)
         try {
           await notificationService.clearAll()
-          toast.success('Notification centre cleared.')
+          toast.success('Notification centre cleared.', { anchor: '[data-tour="notif-filters"]' })
           setConfirm(null)
         } catch (err) {
           toast.error(err.message ?? 'Unable to clear the notifications.')
@@ -236,46 +235,14 @@ export default function NotificationsPage() {
 
   return (
     <>
-      <PageHeader hideTitle>
-        {/* Marking the whole inbox read is an administrator's action. It stays on
-            the desktop shell for everyone — disabled, with the usual title
-            tooltip, since a disabled button swallows its own hover — while a
-            student's PWA drops it altogether. */}
-        {showMarkAllRead && (
-          <span
-            title={
-              canMarkAllRead ? undefined : 'Only an administrator can mark every alert as read.'
-            }
-          >
-            <button
-              type="button"
-              onClick={markAllRead}
-              className="btn btn-outline"
-              disabled={!canMarkAllRead || !unread || busy}
-              data-tour="notif-mark-read"
-            >
-              <CheckCheck className="h-4 w-4" />
-              <span className="hidden sm:inline">Mark all read</span>
-            </button>
-          </span>
-        )}
-        {can(PERM.DATA_MANAGE) && (
-          <button
-            type="button"
-            onClick={requestClearAll}
-            className="btn btn-outline"
-            disabled={!notifications.length || busy}
-          >
-            <Trash2 className="h-4 w-4" />
-            <span className="hidden sm:inline">Clear all</span>
-          </button>
-        )}
-      </PageHeader>
-
-      {/* -------------------------------- filters -------------------------------- */}
+      {/* ----------------------- filters and inbox actions -----------------------
+          One line: the chips and the two inbox actions are the same `btn-sm`
+          controls in the same strip, so they share a height and a baseline, and
+          the row scrolls sideways on a narrow phone rather than wrapping. Same
+          handlers, permissions and disabled rules as before. */}
       <div
         data-tour="notif-filters"
-        className="no-scrollbar -mx-1 mb-4 flex gap-2 overflow-x-auto px-1 pb-1"
+        className="no-scrollbar -mx-1 mb-4 flex items-center gap-2 overflow-x-auto px-1 pb-1"
       >
         {FILTERS.map((option) => {
           const active = filter === option.value
@@ -285,10 +252,7 @@ export default function NotificationsPage() {
               key={option.value}
               type="button"
               onClick={() => setFilter(option.value)}
-              className={cx(
-                'btn btn-sm shrink-0',
-                active ? 'btn-dark' : 'btn-outline',
-              )}
+              className={cx('btn btn-sm shrink-0', active ? 'btn-dark' : 'btn-outline')}
               aria-pressed={active}
             >
               {option.label}
@@ -305,6 +269,32 @@ export default function NotificationsPage() {
             </button>
           )
         })}
+
+        {/* Marking the whole inbox read is an administrator's action. It stays on
+            the desktop shell for everyone — disabled, with the tooltip saying why,
+            since a disabled button swallows its own hover — while a student's PWA
+            drops it altogether. */}
+        <button
+          type="button"
+          onClick={markAllRead}
+          className="btn btn-outline btn-sm ml-auto shrink-0"
+          disabled={!unread || busy}
+          data-tour="notif-mark-read"
+        >
+          <CheckCheck className="h-4 w-4" />
+          Mark all read
+        </button>
+        {can(PERM.DATA_MANAGE) && (
+          <button
+            type="button"
+            onClick={requestClearAll}
+            className="btn btn-outline btn-sm shrink-0"
+            disabled={!notifications.length || busy}
+          >
+            <Trash2 className="h-4 w-4" />
+            Clear all
+          </button>
+        )}
       </div>
 
       {/* --------------------------------- list --------------------------------- */}
@@ -371,9 +361,9 @@ export default function NotificationsPage() {
                     </div>
                     <p className="muted mt-0.5 text-sm leading-snug">{notification.message}</p>
                     <div className="mt-1.5 flex flex-wrap items-center gap-x-2 text-[11px]">
-                      <span className="subtle" title={formatDateTime(notification.createdAt)}>
-                        {timeAgo(notification.createdAt)}
-                      </span>
+                      <Tooltip label={formatDateTime(notification.createdAt)}>
+                        <span className="subtle">{timeAgo(notification.createdAt)}</span>
+                      </Tooltip>
                       {notification.link && (
                         <>
                           <span className="subtle">·</span>
@@ -389,28 +379,31 @@ export default function NotificationsPage() {
                   </div>
 
                   <div className="flex shrink-0 flex-col gap-1 sm:flex-row">
-                    <button
-                      type="button"
-                      onClick={() => toggleRead(notification)}
-                      className="btn btn-ghost btn-icon"
-                      aria-label={notification.read ? 'Mark as unread' : 'Mark as read'}
-                      title={notification.read ? 'Mark as unread' : 'Mark as read'}
-                    >
-                      {notification.read ? (
-                        <Bell className="h-4 w-4" />
-                      ) : (
-                        <CheckCheck className="h-4 w-4" />
-                      )}
-                    </button>
-                    {canDelete(notification) && (
+                    <Tooltip label={notification.read ? 'Mark as unread' : 'Mark as read'}>
                       <button
                         type="button"
-                        onClick={() => removeOne(notification)}
-                        className="btn btn-ghost btn-icon text-red-600 dark:text-red-400"
-                        aria-label="Delete notification"
+                        onClick={() => toggleRead(notification)}
+                        className="btn btn-ghost btn-icon"
+                        aria-label={notification.read ? 'Mark as unread' : 'Mark as read'}
                       >
-                        <Trash2 className="h-4 w-4" />
+                        {notification.read ? (
+                          <Bell className="h-4 w-4" />
+                        ) : (
+                          <CheckCheck className="h-4 w-4" />
+                        )}
                       </button>
+                    </Tooltip>
+                    {canDelete(notification) && (
+                      <Tooltip label="Delete notification">
+                        <button
+                          type="button"
+                          onClick={() => removeOne(notification)}
+                          className="btn btn-ghost btn-icon text-red-600 dark:text-red-400"
+                          aria-label="Delete notification"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </Tooltip>
                     )}
                   </div>
                 </li>
@@ -430,7 +423,7 @@ export default function NotificationsPage() {
         loading={busy}
       />
 
-      <Walkthrough steps={tourSteps} open={tour.open} onClose={tour.close} />
+      <Walkthrough steps={tourSteps} open={tour.open} onClose={tour.close} compact={isStudent(user)} />
     </>
   )
 }

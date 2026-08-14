@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   AlertTriangle,
@@ -9,16 +9,18 @@ import {
   ClipboardList,
   HardHat,
   Package,
+  PackageX,
   QrCode,
   Repeat,
   ShieldAlert,
   TrendingUp,
+  Undo2,
   UserCheck,
   Users as UsersIcon,
   Wrench,
 } from 'lucide-react'
 import Walkthrough, { usePageTour } from '../components/Walkthrough'
-import { MascotGreeter } from '../components/Mascot'
+import Mascot, { MascotGreeter } from '../components/Mascot'
 import StatCard from '../components/StatCard'
 import TransactionTable from '../components/TransactionTable'
 import TransactionDetail from '../components/TransactionDetail'
@@ -27,13 +29,14 @@ import {
   ErrorState,
   ProgressBar,
   SectionCard,
+  Skeleton,
   SkeletonCards,
   SkeletonRows,
 } from '../components/ui'
 import { useApp } from '../context/AppContext'
 import { useDashboard, useMediaQuery, useNotifications, useUsers } from '../hooks'
 import { pendingAccounts, pendingProfileChanges } from '../services/users'
-import { PERM, isStaff } from '../utils/permissions'
+import { PERM, isInstructor, isStaff } from '../utils/permissions'
 import { cx, initials } from '../utils/helpers'
 import { dueLabel, formatDate, timeAgo } from '../utils/dates'
 
@@ -90,16 +93,38 @@ const ACTIVITY_TONE = {
  * line: the student's carries their two everyday buttons, staff pass nothing and
  * get a purely informational hero.
  */
-function DashboardHero({ eyebrow, title, subtitle, signals, name, actions }) {
+function DashboardHero({
+  eyebrow,
+  title,
+  subtitle,
+  signals,
+  actions,
+  compact = false,
+  ...rest // `data-tour`, so the greeting can be a walkthrough target
+}) {
   return (
-    <section className="mb-5 flex items-end justify-between gap-4 sm:mb-7 sm:gap-8 lg:mb-8 lg:gap-12">
+    // `compact` is the student's desktop: the greeting gives back the height it
+    // was taking above the fold so the tiles and the loan list start higher.
+    // The staff hero is unchanged.
+    <section
+      className={cx(
+        'flex items-end justify-between gap-3 sm:gap-8 lg:gap-12',
+        compact ? 'mb-4 sm:mb-5 lg:mb-6' : 'mb-6 sm:mb-8',
+      )}
+      {...rest}
+    >
       <div className="min-w-0 flex-1 lg:max-w-[65ch]">
         {eyebrow && (
           <p className="subtle truncate text-[10px] font-bold uppercase tracking-[0.16em]">
             {eyebrow}
           </p>
         )}
-        <h1 className="mt-2 text-[21px] font-extrabold leading-[1.12] tracking-tight [overflow-wrap:anywhere] sm:truncate sm:text-[30px] lg:text-[38px]">
+        <h1
+          className={cx(
+            'mt-2 font-extrabold leading-[1.12] tracking-tight [overflow-wrap:anywhere] sm:truncate',
+            compact ? 'text-[21px] sm:text-[26px] lg:text-[32px]' : 'text-[21px] sm:text-[30px] lg:text-[38px]',
+          )}
+        >
           {title}
         </h1>
         {subtitle && (
@@ -112,21 +137,23 @@ function DashboardHero({ eyebrow, title, subtitle, signals, name, actions }) {
         )}
       </div>
       {/* The assistant reports whichever figure below needs attention first — it
-          reads the dashboard data and fetches nothing of its own — idles with a
-          slow bob and a blink, and answers a tap with one short line. The
-          wrapper sets the height; the SVG takes only the width it needs. */}
+          reads the dashboard data and fetches nothing of its own — and idles with
+          a slow bob and a blink. It is not a control: the one line it speaks is
+          the offline notice, which appears on its own when the connection drops.
+          The wrapper sets the height; the SVG takes only the width it needs. */}
       <MascotGreeter
         signals={signals}
-        name={name}
         className={cx(
           'hidden min-[360px]:flex',
           // Sized against the text beside it, not against the screen. Both
           // columns are bottom-aligned, so a figure taller than the text leaves
           // dead space above the greeting — which is exactly what the staff
           // hero, three lines and no button row, used to show.
-          actions
-            ? 'h-[92px] sm:h-[132px] lg:h-[176px] xl:h-[200px]'
-            : 'h-[84px] sm:h-[116px] lg:h-[144px] xl:h-[160px]',
+          compact
+            ? 'h-[100px] sm:h-[124px] lg:h-[150px] xl:h-[164px]'
+            : actions
+              ? 'h-[108px] sm:h-[152px] lg:h-[196px] xl:h-[220px]'
+              : 'h-[96px] sm:h-[132px] lg:h-[160px] xl:h-[176px]',
         )}
       />
     </section>
@@ -151,7 +178,6 @@ export default function DashboardPage() {
           eyebrow={`${settings.labName} · ${settings.labLocation}`}
           title={`Good ${greeting()}, ${firstName}`}
           signals={{ error: true }}
-          name={firstName}
         />
         <div className="panel">
           <ErrorState
@@ -190,8 +216,10 @@ export default function DashboardPage() {
       can={can}
       settings={settings}
       firstName={firstName}
+      userId={user?.id}
       selected={selected}
       onSelect={setSelected}
+      isInstructor={isInstructor(user)}
     />
   )
 }
@@ -206,6 +234,77 @@ export default function DashboardPage() {
  * borrow from it on this screen.
  * ------------------------------------------------------------------ */
 
+/**
+ * The staff walkthrough of the control desk.
+ *
+ * An administrator monitors the whole laboratory; an instructor runs the counter
+ * and has neither the directory, the demand rankings nor the service planner on
+ * this screen — so each role gets its own sequence rather than a shared one with
+ * steps that do not apply. `Walkthrough` drops any step whose target is absent,
+ * so a quiet day (no attention band, no approvals) shortens the tour honestly.
+ */
+const staffDashboardTour = (instructor) => [
+  {
+    target: 'dash-hero',
+    title: instructor ? 'The counter, at a glance' : 'The control desk',
+    text: instructor
+      ? 'Your shift in one line — what is out, what is due and what is overdue — with Scan, Borrow and Return beside it.'
+      : 'The laboratory in one line — what is out, due, overdue and in for service — with the everyday actions beside it.',
+  },
+  {
+    target: 'dash-attention',
+    title: 'What needs a decision',
+    text: 'Overdue tools, loans due shortly and equipment in for service. Each card opens the page that acts on it. It only appears when something is actually waiting.',
+  },
+  {
+    target: 'dash-inventory',
+    title: 'The state of the inventory',
+    text: 'Every tool by where it is right now — on the shelf, out on loan, overdue, in maintenance or written off.',
+  },
+  {
+    target: 'dash-operations',
+    title: "Today's figures",
+    text: instructor
+      ? 'What the counter has handled: tools on the bench, issues and returns logged, and the loans still open.'
+      : 'Movement for the day, the size of the directory, and how much of the inventory is in use.',
+  },
+  {
+    target: 'dash-recent',
+    title: 'Recent transactions',
+    text: 'The latest issues and returns. Open a row for the full record, or View all for the complete history.',
+  },
+  {
+    target: 'dash-overdue',
+    title: 'Overdue summary',
+    text: 'Loans past their return date, with the borrower and how late they are, so they can be chased.',
+  },
+  {
+    target: 'dash-approvals',
+    title: 'Waiting on you',
+    text: 'Instructor accounts to approve and student profile edits to review — Open Users to decide on them.',
+  },
+  {
+    target: 'dash-demand',
+    title: 'Highest demand',
+    text: 'The tools borrowed most often, which is what to keep serviced and in stock.',
+  },
+  {
+    target: 'dash-utilisation',
+    title: 'Utilisation',
+    text: 'How much of the inventory is in circulation rather than sitting on the shelf.',
+  },
+  {
+    target: 'dash-upcoming',
+    title: 'Service coming up',
+    text: 'Tools reaching their next maintenance date within the month. Open the service log to schedule the job.',
+  },
+  {
+    target: 'dash-activity',
+    title: 'The live log',
+    text: 'Everything happening in the tool room as it happens — scans, issues, returns and edits, newest first.',
+  },
+]
+
 function StaffDashboard({
   loading,
   online,
@@ -213,18 +312,40 @@ function StaffDashboard({
   can,
   settings,
   firstName,
+  userId,
   selected,
   onSelect,
+  isInstructor = false,
 }) {
   const busy = loading && !dashboard
   const stats = dashboard?.stats
 
+  // Once per account on this device, remembered separately from every other page.
+  const tour = usePageTour('dashboard', userId)
+  const tourSteps = useMemo(() => staffDashboardTour(isInstructor), [isInstructor])
+
+  // Staff panels each show the three latest rows only, so the whole screen stays
+  // scannable. The queries and totals behind them are untouched; "View all" and
+  // the linked pages still carry the full lists.
+  const cap = (rows = []) => rows.slice(0, 3)
+
   return (
     <>
-      {/* No action buttons here: the sidebar on a desktop and the bottom bar on a
-          phone both already carry Scan and Borrow / Return, and a control desk
-          leads with what is wrong, not with a shortcut. */}
+      {/* No action buttons here for an administrator: the sidebar on a desktop and
+          the bottom bar on a phone both already carry Scan and Borrow / Return,
+          and a control desk leads with what is wrong, not with a shortcut.
+          An instructor is the exception — they run the counter rather than
+          monitor it, and on a phone their bar carries Borrow and Return only
+          behind "More", so the three counter actions are on the hero itself. */}
       <DashboardHero
+        // The tighter greeting: it gives back the height it was taking at the
+        // top so the stat bands and the queues below start higher.
+        compact
+        // The same counter actions an instructor has, in the same place: the
+        // administrator's greeting now opens the screen exactly as the
+        // instructor's and the student's do. Routes and guards are unchanged.
+        actions={<CribActions can={can} />}
+        data-tour="dash-hero"
         eyebrow={`${settings.labName} · ${settings.labLocation}`}
         title={`Good ${greeting()}, ${firstName}`}
         subtitle={
@@ -240,7 +361,6 @@ function StaffDashboard({
           dueSoon: stats?.dueSoon ?? 0,
           activeLoans: stats?.activeLoans ?? 0,
         }}
-        name={firstName}
       />
 
       {/* ----------------------- what needs a decision ----------------------- */}
@@ -252,9 +372,19 @@ function StaffDashboard({
       {/* --------------------------- inventory state --------------------------- */}
       <SectionLabel>Inventory</SectionLabel>
       {busy ? (
-        <SkeletonCards count={5} className="grid-cols-2 lg:grid-cols-5" />
+        // The band gets tile-shaped placeholders rather than plain blocks — the
+        // icon chip, label, figure and hint sit exactly where the real tile puts
+        // them, so the row does not resize when the data lands.
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6 lg:gap-5">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <TileSkeleton key={i} />
+          ))}
+        </div>
       ) : (
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5 lg:gap-5">
+        <div
+          className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6 lg:gap-5"
+          data-tour="dash-inventory"
+        >
           <StatCard
             variant="tile"
             label="Total tools"
@@ -300,24 +430,59 @@ function StaffDashboard({
             hint={`${stats.maintenance} under maintenance`}
             to="/tools?status=Damaged"
           />
+          {/* Lost stock is written off rather than serviced, so it stands apart
+              from the damaged tile beside it. */}
+          <StatCard
+            variant="tile"
+            label="Lost"
+            value={stats.lost}
+            icon={PackageX}
+            tone="danger"
+            hint={stats.lost ? 'Written off from stock' : 'Nothing unaccounted for'}
+            to="/tools?status=Lost"
+          />
         </div>
       )}
 
       {/* ------------------------------ operations ------------------------------ */}
       <SectionLabel>Operations today</SectionLabel>
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-5">
-        {/* The Users page is admin-only, so only an admin gets a link here: an
-            instructor may read the directory but cannot open that route, and
-            would land on "Restricted area". */}
-        <StatCard
-          variant="tile"
-          label="Total users"
-          value={stats?.totalUsers ?? 0}
-          icon={UsersIcon}
-          hint={`${stats?.activeUsers ?? 0} active`}
-          to={can(PERM.USER_MANAGE) ? '/users' : undefined}
-          loading={busy}
-        />
+      {/* Same treatment as the inventory band above: while the figures are
+          loading the whole tile is drawn in outline rather than only its value,
+          so both bands read the same way. */}
+      {busy ? (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-5">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <TileSkeleton key={i} />
+          ))}
+        </div>
+      ) : (
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-5" data-tour="dash-operations">
+        {/* An instructor's first operational figure is the bench, not the roll:
+            they manage servicing and cannot open the Users page at all, so a
+            headcount tile there is a dead end. Administrators keep the directory
+            tile exactly as it was. */}
+        {isInstructor ? (
+          <StatCard
+            variant="tile"
+            label="In maintenance"
+            value={stats?.maintenance ?? 0}
+            icon={HardHat}
+            tone="warning"
+            hint={stats?.maintenance ? 'Open the service log' : 'Nothing on the bench'}
+            to={can(PERM.MAINTENANCE_VIEW) ? '/maintenance' : undefined}
+            loading={busy}
+          />
+        ) : (
+          <StatCard
+            variant="tile"
+            label="Total users"
+            value={stats?.totalUsers ?? 0}
+            icon={UsersIcon}
+            hint={`${stats?.activeUsers ?? 0} active`}
+            to={can(PERM.USER_MANAGE) ? '/users' : undefined}
+            loading={busy}
+          />
+        )}
         <StatCard
           variant="tile"
           label="Today's transactions"
@@ -347,6 +512,7 @@ function StaffDashboard({
           loading={busy}
         />
       </div>
+      )}
 
       {/* ------------------------------- 12-column body -------------------------------
           Eight columns for the queues staff work through, four for the reference
@@ -355,6 +521,7 @@ function StaffDashboard({
         <div className="min-w-0 space-y-4 lg:col-span-8 lg:space-y-6">
           <SectionCard
             variant="panel"
+            data-tour="dash-recent"
             title="Recent transactions"
             description="Latest borrowing activity in the laboratory"
             bodyClassName="p-0"
@@ -368,7 +535,7 @@ function StaffDashboard({
               <SkeletonRows rows={4} />
             ) : (
               <TransactionTable
-                transactions={dashboard.recent}
+                transactions={cap(dashboard.recent)}
                 onSelect={onSelect}
                 compact
                 emptyTitle="No transactions recorded yet."
@@ -380,9 +547,15 @@ function StaffDashboard({
           {/* overdue */}
           <SectionCard
             variant="panel"
+            data-tour="dash-overdue"
             title="Overdue summary"
             description="Tools that have passed their return date"
             bodyClassName="p-0"
+            action={
+              <Link to="/transactions?status=Overdue" className="btn btn-ghost btn-sm">
+                View all
+              </Link>
+            }
           >
             {busy ? (
               <SkeletonRows rows={3} columns={3} />
@@ -395,7 +568,7 @@ function StaffDashboard({
               />
             ) : (
               <ul className="divide-y">
-                {dashboard.overdue.slice(0, 5).map(({ transaction, tool, daysOverdue }) => (
+                {cap(dashboard.overdue.slice(0, 5)).map(({ transaction, tool, daysOverdue }) => (
                   <li key={transaction.id} className="flex items-center gap-3 px-4 py-3">
                     <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-red-500/10">
                       <AlertTriangle className="h-4 w-4 text-red-500" />
@@ -428,9 +601,12 @@ function StaffDashboard({
             )}
           </SectionCard>
 
-          {/* most borrowed */}
+          {/* most borrowed — administrator only; an instructor's five panels
+              stay focused on the counter rather than on demand rankings. */}
+          {!isInstructor && (
           <SectionCard
             variant="panel"
+            data-tour="dash-demand"
             title="Most borrowed tools"
             description="Highest demand equipment in the workshop"
           >
@@ -477,6 +653,7 @@ function StaffDashboard({
               </ul>
             )}
           </SectionCard>
+          )}
         </div>
 
         {/* --------------------------- secondary column ---------------------------
@@ -488,7 +665,12 @@ function StaffDashboard({
               fires the directory read behind it. */}
           {can(PERM.USER_MANAGE) && can(PERM.USER_EDIT) && <ApprovalsCard />}
 
-          <SectionCard variant="quiet" title="Utilisation" description="Where the inventory is right now">
+          <SectionCard
+            variant="quiet"
+            data-tour="dash-utilisation"
+            title="Utilisation"
+            description="Where the inventory is right now"
+          >
             {busy ? (
               <SkeletonRows rows={3} columns={1} />
             ) : (
@@ -518,25 +700,31 @@ function StaffDashboard({
                     total={stats.totalTools}
                     barClass="bg-red-500"
                   />
-                  <UtilisationRow
-                    label="Maintenance"
-                    value={stats.maintenance}
-                    total={stats.totalTools}
-                    barClass="bg-orange-500"
-                  />
-                  <UtilisationRow
-                    label="Damaged / lost"
-                    value={stats.damaged + stats.lost}
-                    total={stats.totalTools}
-                    barClass="bg-rose-500"
-                  />
+                  {!isInstructor && (
+                    <>
+                      <UtilisationRow
+                        label="Maintenance"
+                        value={stats.maintenance}
+                        total={stats.totalTools}
+                        barClass="bg-orange-500"
+                      />
+                      <UtilisationRow
+                        label="Damaged / lost"
+                        value={stats.damaged + stats.lost}
+                        total={stats.totalTools}
+                        barClass="bg-rose-500"
+                      />
+                    </>
+                  )}
                 </div>
               </div>
             )}
           </SectionCard>
 
+          {!isInstructor && (
           <SectionCard
             variant="quiet"
+            data-tour="dash-upcoming"
             title="Upcoming maintenance"
             description="Scheduled service in the next 30 days"
             bodyClassName="p-0"
@@ -589,6 +777,7 @@ function StaffDashboard({
               </ul>
             )}
           </SectionCard>
+          )}
 
           {can(PERM.TXN_VIEW_ALL) && (
             <SectionCard
@@ -603,7 +792,7 @@ function StaffDashboard({
                 <EmptyState icon={UsersIcon} title="No borrowing activity yet." compact />
               ) : (
                 <ul className="divide-y">
-                  {dashboard.activeUsers.map((row) => (
+                  {cap(dashboard.activeUsers).map((row) => (
                     <li key={row.userId} className="flex items-center gap-3 px-4 py-2.5">
                       <span
                         className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-[10px] font-extrabold"
@@ -628,9 +817,15 @@ function StaffDashboard({
 
           <SectionCard
             variant="quiet"
+            data-tour="dash-activity"
             title="Recent activity"
             description="Live log from the tool room"
             bodyClassName="p-4"
+            action={
+              <Link to="/activity" className="btn btn-ghost btn-sm">
+                View all
+              </Link>
+            }
           >
             {busy ? (
               <SkeletonRows rows={5} columns={1} />
@@ -638,7 +833,7 @@ function StaffDashboard({
               <EmptyState icon={ClipboardList} title="No activity recorded yet." compact />
             ) : (
               <ol className="relative space-y-4 border-l pl-4">
-                {dashboard.activity.map((entry) => (
+                {cap(dashboard.activity).map((entry) => (
                   <li key={entry.id} className="relative">
                     <span
                       className={cx(
@@ -661,14 +856,69 @@ function StaffDashboard({
       </div>
 
       <TransactionDetail transaction={selected} open={!!selected} onClose={() => onSelect(null)} />
+
+      <Walkthrough steps={tourSteps} open={tour.open} onClose={tour.close} />
     </>
   )
 }
 
-/** Small caps rule between the staff dashboard's bands. */
-function SectionLabel({ children }) {
+/**
+ * The instructor's three counter actions, on the hero.
+ *
+ * Scan leads in the primary weight because it is how issuing and receiving
+ * usually start; Borrow and Return follow as outlines. Same routes, same guards
+ * as everywhere else — this only puts them where an instructor's hands are.
+ */
+function CribActions({ can }) {
   return (
-    <h2 className="subtle mb-2 mt-5 text-[10px] font-bold uppercase tracking-[0.14em] first:mt-0">
+    <>
+      <Link to="/scan" className="btn btn-primary btn-lg">
+        <QrCode className="h-4 w-4" />
+        Scan a tool
+      </Link>
+      {can(PERM.BORROW) && (
+        <Link to="/borrow" className="btn btn-outline btn-lg">
+          <Repeat className="h-4 w-4" />
+          Borrow
+        </Link>
+      )}
+      {can(PERM.RETURN) && (
+        <Link to="/return" className="btn btn-outline btn-lg">
+          <Undo2 className="h-4 w-4" />
+          Return
+        </Link>
+      )}
+    </>
+  )
+}
+
+/** One inventory tile, in outline: same box, same rhythm as `StatCard variant="tile"`. */
+function TileSkeleton() {
+  return (
+    <div className="tile p-3.5 lg:p-4">
+      <div className="flex items-center gap-2.5">
+        <Skeleton className="h-7 w-7 shrink-0 rounded-[10px]" />
+        <Skeleton className="h-2.5 min-w-0 flex-1 rounded" />
+      </div>
+      <Skeleton className="mt-3 h-7 w-14 rounded lg:h-8" />
+      <Skeleton className="mt-1.5 h-2.5 w-4/5 rounded" />
+    </div>
+  )
+}
+
+/**
+ * Small caps rule between a dashboard's bands. Both dashboards use it, so the
+ * statistics strip and the panels under it read as two ranks of the same page
+ * rather than as one long column of boxes.
+ */
+function SectionLabel({ children, className }) {
+  return (
+    <h2
+      className={cx(
+        'subtle mb-2 mt-5 text-[10px] font-bold uppercase tracking-[0.14em] first:mt-0',
+        className,
+      )}
+    >
       {children}
     </h2>
   )
@@ -723,7 +973,7 @@ function AttentionBand({ stats, busy, can, settings }) {
   return (
     <>
       <SectionLabel>Needs attention</SectionLabel>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-tour="dash-attention">
         {items.map(({ key, icon: Icon, label, hint, to, tone }) => (
           <Link
             key={key}
@@ -765,6 +1015,7 @@ function ApprovalsCard() {
   return (
     <SectionCard
       variant="quiet"
+      data-tour="dash-approvals"
       title="Waiting on you"
       description="Accounts and profile edits to review"
       bodyClassName="p-0"
@@ -837,27 +1088,30 @@ function ApprovalRow({ icon: Icon, count, label, names }) {
 
 /**
  * First-run walkthrough for a student's own dashboard. It describes the three
- * things actually on this screen — the tools they are holding, their figures and
- * their recent activity — and nothing from the staff view.
+ * things actually on this screen — the tool record they are holding, the tools
+ * themselves and their borrowing history — and nothing from the staff view.
+ *
+ * Each step carries a `mascot` state rather than an icon, so the assistant
+ * explains the step it is standing next to and its face matches what the step is
+ * about: the inventory tiles, a tool going out, a tool coming back. The lines
+ * name the real controls on this screen — the tool ID, the due date, the Return
+ * button on the row — rather than describing a dashboard in general.
  */
 const STUDENT_DASHBOARD_TOUR = [
   {
     target: 'dash-stats',
-    title: 'Your loans at a glance',
-    text: 'What you are holding, what is due soon and anything overdue. Every figure here is yours alone.',
-    icon: Package,
+    title: 'Your tool record',
+    text: 'Your own four totals: tools in your hands, due back soon, already overdue, and still free on the shelf. Tap a tile to open the records behind it.',
   },
   {
     target: 'dash-loans',
-    title: 'Tools you have out',
-    text: 'Everything currently in your hands, with its due date. Hand one back straight from this card.',
-    icon: Wrench,
+    title: 'Tools in your hands',
+    text: 'Every tool issued to you, soonest due first, with its tool ID and due date. Return is on the row, so handing one back never means looking it up again.',
   },
   {
     target: 'dash-history',
-    title: 'What you borrowed before',
-    text: 'Your most recent loans and returns. Open View all for the complete history.',
-    icon: ClipboardList,
+    title: 'Borrowed and returned',
+    text: 'The records already logged against your account. Open one for its dates and condition notes, or View all for the full history.',
   },
 ]
 
@@ -892,6 +1146,7 @@ function StudentDashboard({
           the screen a student lands on, and reaching the thumb bar to start a
           borrow is a step this saves. */}
       <DashboardHero
+        compact
         eyebrow={`${settings.labName} · your tools and loans`}
         title={`Good ${greeting()}, ${firstName}`}
         subtitle={
@@ -911,7 +1166,6 @@ function StudentDashboard({
           activeLoans: data?.activeLoans ?? 0,
           unread,
         }}
-        name={firstName}
         actions={
           <>
             <Link to="/scan" className="btn btn-primary btn-sm">
@@ -931,7 +1185,7 @@ function StudentDashboard({
           rather than `card`: no shadow and a lighter hairline, so the row reads
           as a summary strip and the panels below it clearly outrank it.
           2 × 2 on a phone, 1 × 4 from `lg`. */}
-      <div data-tour="dash-stats" className="mb-4 lg:mb-6">
+      <div data-tour="dash-stats" className="mb-5 lg:mb-7">
         {busy ? (
           <SkeletonCards count={4} className="grid-cols-2 lg:grid-cols-4" />
         ) : (
@@ -1001,18 +1255,18 @@ function StudentDashboard({
               {busy ? (
                 <SkeletonRows rows={3} columns={3} />
               ) : data.loans.length === 0 ? (
-                <EmptyState
-                  icon={Wrench}
-                  title="You have no tools out."
-                  description="Scan a tool or open the borrow desk to check one out."
-                  compact
-                  action={
-                    <Link to="/scan" className="btn btn-primary btn-sm">
-                      <QrCode className="h-4 w-4" />
-                      Scan a tool
-                    </Link>
-                  }
-                />
+                /* The same character as the greeting above, standing in for the
+                   action button: an empty shelf is not a problem to fix, so the
+                   card shows the assistant rather than pushing a task. The
+                   markup mirrors `EmptyState compact` so the spacing matches
+                   every other empty panel. */
+                <div className="flex flex-col items-center justify-center px-4 py-8 text-center">
+                  <Mascot state="curious" size={96} className="mb-1" />
+                  <p className="text-sm font-bold">You have no tools out.</p>
+                  <p className="muted mt-1 max-w-sm text-sm">
+                    Scan a tool or open the borrow desk to check one out.
+                  </p>
+                </div>
               ) : (
                 <ul className="divide-y">
                   {data.loans.map((txn) => {
@@ -1074,8 +1328,8 @@ function StudentDashboard({
           <div data-tour="dash-history">
             <SectionCard
               variant="panel"
-              title="Your recent transactions"
-              description="Your last few loans and returns"
+              title="Recent transactions"
+              description="The last two loans and returns"
               bodyClassName="p-0"
               action={
                 <Link to="/transactions" className="btn btn-ghost btn-sm">
@@ -1084,10 +1338,13 @@ function StudentDashboard({
               }
             >
               {busy ? (
-                <SkeletonRows rows={4} />
+                <SkeletonRows rows={2} />
               ) : (
                 <TransactionTable
-                  transactions={data.recent}
+                  // The two most recent only — the full history is one tap away
+                  // under "View all", so the dashboard shows the latest rather
+                  // than a list to scroll.
+                  transactions={data.recent.slice(0, 2)}
                   onSelect={onSelect}
                   compact
                   emptyTitle="You have no transactions yet."
@@ -1199,32 +1456,9 @@ function StudentDashboard({
         )}
       </div>
 
-      {/* The phone's replacement for the column above: one link, not a stacked
-          copy of the column. Browsing the shelf is not repeated here any more —
-          the Available tools tile in the statistics row already goes there — so
-          all that is left is the notification centre, which the bottom bar
-          carries as an icon but not as a count. */}
-      {isPwa && !busy && (
-        <Link
-          to="/notifications"
-          className="tile mt-4 flex items-center gap-3 p-3.5 transition-transform active:scale-[0.98]"
-        >
-          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[10px] bg-amberline-400/15">
-            <Bell className="h-[17px] w-[17px] text-amberline-700 dark:text-amberline-400" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-bold leading-tight">
-              {unread > 0 ? `${unread} unread notification${unread === 1 ? '' : 's'}` : 'Notifications'}
-            </p>
-            <p className="subtle truncate text-[11px]">Alerts addressed to you</p>
-          </div>
-          <ArrowRight className="h-4 w-4 shrink-0 opacity-40" />
-        </Link>
-      )}
-
       <TransactionDetail transaction={selected} open={!!selected} onClose={() => onSelect(null)} />
 
-      <Walkthrough steps={STUDENT_DASHBOARD_TOUR} open={tour.open} onClose={tour.close} />
+      <Walkthrough steps={STUDENT_DASHBOARD_TOUR} open={tour.open} onClose={tour.close} compact />
     </>
   )
 }

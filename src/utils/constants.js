@@ -290,6 +290,7 @@ export const DEFAULT_SETTINGS = {
   labName: 'Automotive Laboratory',
   labLocation: 'Technical Education Building — Ground Floor',
   institution: 'College of Engineering Technology',
+  departmentUrl: '',
   defaultBorrowDays: 3,
   maxBorrowDays: 30,
   dueSoonThresholdDays: 1,

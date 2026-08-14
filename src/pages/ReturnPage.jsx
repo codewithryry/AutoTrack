@@ -18,6 +18,7 @@ import {
   PageHeader,
   SearchInput,
   SectionCard,
+  SkeletonRows,
   Spinner,
   TextAreaField,
   TxnStatusBadge,
@@ -185,11 +186,7 @@ export default function ReturnPage() {
               onRetry={reload}
             />
           ) : loading && !transactions.length ? (
-            <div className="space-y-2 p-4">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <div key={i} className="skeleton h-16 rounded-lg" />
-              ))}
-            </div>
+            <SkeletonRows rows={4} columns={2} />
           ) : visibleLoans.length === 0 ? (
             <EmptyState
               icon={CheckCircle2}

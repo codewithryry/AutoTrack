@@ -8,7 +8,7 @@ import * as maintenanceService from '../services/maintenance'
 import * as activityService from '../services/activity'
 import * as reportService from '../services/reports'
 import { useApp } from '../context/AppContext'
-import { PERM, can, isStaff, visibleTransactions } from '../utils/permissions'
+import { PERM, can, isAdmin, isStaff, visibleTransactions } from '../utils/permissions'
 
 export { useAsyncData }
 
@@ -31,6 +31,7 @@ export { useAsyncData }
 export function useTools() {
   const { data, loading, error, reload } = useAsyncData(() => toolService.listAll(), [], {
     initial: [],
+    cacheKey: 'tools',
   })
   return { tools: data ?? [], loading, error, reload }
 }
@@ -39,6 +40,7 @@ export function useTool(id) {
   const { data, loading, error, reload } = useAsyncData(
     () => (id ? toolService.getById(id) : Promise.resolve(null)),
     [id],
+    { cacheKey: id ? `tool:${id}` : null },
   )
   return { tool: data, loading, error, reload }
 }
@@ -50,7 +52,7 @@ export function useUsers() {
   const { data, loading, error, reload } = useAsyncData(
     () => (allowed ? userService.listAll() : Promise.resolve([])),
     [allowed],
-    { initial: [] },
+    { initial: [], cacheKey: 'users' },
   )
   return { users: data ?? [], loading, error, reload, allowed }
 }
@@ -60,6 +62,7 @@ export function useTransactions() {
   const { user } = useApp()
   const { data, loading, error, reload } = useAsyncData(() => txnService.listAll(), [], {
     initial: [],
+    cacheKey: 'transactions',
   })
   const transactions = useMemo(
     () => visibleTransactions(user, data ?? []),
@@ -72,7 +75,7 @@ export function useToolTransactions(toolId) {
   const { data, loading, error, reload } = useAsyncData(
     () => (toolId ? txnService.listForTool(toolId) : Promise.resolve([])),
     [toolId],
-    { initial: [] },
+    { initial: [], cacheKey: toolId ? `tool-transactions:${toolId}` : null },
   )
   return { transactions: data ?? [], loading, error, reload }
 }
@@ -84,7 +87,7 @@ export function useToolActivity(toolId) {
   const { data, loading, error, reload } = useAsyncData(
     () => (toolId && allowed ? activityService.listForTool(toolId) : Promise.resolve([])),
     [toolId, allowed],
-    { initial: [] },
+    { initial: [], cacheKey: toolId ? `tool-activity:${toolId}` : null },
   )
   return { entries: data ?? [], loading, error, reload, allowed }
 }
@@ -95,18 +98,22 @@ export function useActivity(limit = 12) {
   const { data, loading, error, reload } = useAsyncData(
     () => (allowed ? activityService.listRecent(limit) : Promise.resolve([])),
     [limit, allowed],
-    { initial: [] },
+    { initial: [], cacheKey: `activity:${limit}` },
   )
   return { entries: data ?? [], loading, error, reload, allowed }
 }
 
 export function useNotifications() {
   const { user } = useApp()
-  const seeAll = isStaff(user)
+  // The whole-inbox view is an administrator's: an instructor's stream is the
+  // laboratory-wide operational alerts plus anything addressed to them, which is
+  // what `listFor` returns without the flag. Badge, counts and read state are
+  // computed over that list exactly as before.
+  const seeAll = isAdmin(user)
   const { data, loading, error, reload } = useAsyncData(
     () => notificationService.listFor(user, { seeAll }),
     [user?.id, seeAll],
-    { initial: [] },
+    { initial: [], cacheKey: 'notifications' },
   )
   const notifications = data ?? []
   const unread = notifications.filter((n) => !n.read).length
@@ -119,7 +126,7 @@ export function useMaintenance() {
   const { data, loading, error, reload } = useAsyncData(
     () => (allowed ? maintenanceService.listAll() : Promise.resolve([])),
     [allowed],
-    { initial: [] },
+    { initial: [], cacheKey: 'maintenance' },
   )
   return { records: data ?? [], loading, error, reload, allowed }
 }
@@ -130,7 +137,7 @@ export function useToolMaintenance(toolId) {
   const { data, loading, error, reload } = useAsyncData(
     () => (toolId && allowed ? maintenanceService.listForTool(toolId) : Promise.resolve([])),
     [toolId, allowed],
-    { initial: [] },
+    { initial: [], cacheKey: toolId ? `tool-maintenance:${toolId}` : null },
   )
   return { records: data ?? [], loading, error, reload, allowed }
 }
@@ -139,7 +146,7 @@ export function useUpcomingMaintenance(withinDays = 30) {
   const { data, loading, reload } = useAsyncData(
     () => maintenanceService.upcoming(withinDays),
     [withinDays],
-    { initial: [] },
+    { initial: [], cacheKey: `upcoming-maintenance:${withinDays}` },
   )
   return { upcoming: data ?? [], loading, reload }
 }
@@ -191,6 +198,7 @@ export function useDashboard() {
       }
     },
     [settings.dueSoonThresholdDays, staff, uid],
+    { cacheKey: uid ? `dashboard:${uid}` : null },
   )
   return { dashboard: data, loading, error, reload }
 }
@@ -199,6 +207,7 @@ export function useReport(range) {
   const { data, loading, error, reload } = useAsyncData(
     () => reportService.fullReport(range),
     [range?.from, range?.to],
+    { cacheKey: `report:${range?.from ?? ''}:${range?.to ?? ''}` },
   )
   return { report: data, loading, error, reload }
 }

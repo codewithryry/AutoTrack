@@ -2,14 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
-  Download,
-  Filter,
   Grid3x3,
   List,
   MapPin,
   MoreVertical,
   Plus,
-  Printer,
   QrCode,
   Search,
   Trash2,
@@ -27,12 +24,12 @@ import {
   EmptyState,
   ErrorState,
   FilterSelect,
+  MobileFilterBar,
   PageHeader,
   SearchInput,
   SectionCard,
   SkeletonRows,
   StatusBadge,
-  Spinner,
   TableWrap,
 } from '../components/ui'
 import ToolForm from '../components/ToolForm'
@@ -43,9 +40,8 @@ import { useDebounced, useLocalStorage, useMediaQuery, useTools } from '../hooks
 import * as toolService from '../services/tools'
 import { isStaff, isStudent, PERM } from '../utils/permissions'
 import { CATEGORIES, CONDITIONS, LOCATIONS, TOOL_STATUS, TOOL_STATUSES } from '../utils/constants'
-import { cx, downloadCSV } from '../utils/helpers'
+import { cx } from '../utils/helpers'
 import { formatDate } from '../utils/dates'
-import { printQRLabels } from '../utils/qr'
 
 const SORT_OPTIONS = [
   { value: 'name-asc', label: 'Name (A–Z)' },
@@ -57,7 +53,7 @@ const SORT_OPTIONS = [
   { value: 'oldest', label: 'Oldest first' },
 ]
 
-const CSV_COLUMNS = [
+export const TOOLS_CSV_COLUMNS = [
   { key: 'id', label: 'Tool ID' },
   { key: 'name', label: 'Tool Name' },
   { key: 'category', label: 'Category' },
@@ -83,39 +79,35 @@ const CSV_COLUMNS = [
  */
 const toolsTour = (isCrib) => [
   {
-    title: 'Your lab inventory',
-    text: 'Every registered tool lives here with its current status, condition and location, ready to scan or borrow.',
-    icon: Wrench,
+    target: 'tools-list',
+    title: 'The tool inventory',
+    text: 'One record per registered tool: its name, its ID, what condition it is in, where it is kept, and whether it is on the shelf or out on loan.',
   },
   {
     target: 'tools-search',
-    title: 'Search the inventory',
-    text: 'Type a name, tool ID, brand or serial number to find a tool in a flash.',
-    icon: Search,
+    title: 'Find one tool',
+    text: 'Type a tool name, the ID from its QR label, a brand or a serial number — the records narrow as you type.',
   },
   {
     target: 'tools-filters',
-    title: 'Narrow the list',
-    text: 'Filter by status, category, condition or location, and sort the results to find what matters.',
-    icon: Filter,
+    title: 'Narrow the records',
+    text: 'Show only what you need — available tools, one category, one storage location, one condition — and sort what is left.',
   },
   {
     target: 'tools-add',
     title: 'Register a new tool',
     text: 'Add a tool here to generate its QR label, ready for the shelf.',
-    icon: Plus,
   },
   {
     title: 'Open a tool',
     text: isCrib
       ? 'Tap any tool for its full record and history. The ⋮ menu edits it, shows its QR code, or updates its status.'
       : 'Tap any tool for its full record — status, condition, where it is kept, and whether you can borrow it.',
-    icon: isCrib ? MoreVertical : Wrench,
   },
 ]
 
 export default function ToolsPage() {
-  const { user, can, settings } = useApp()
+  const { user, can } = useApp()
   const toast = useToast()
   const { tools, loading, error, reload } = useTools()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -137,7 +129,6 @@ export default function ToolsPage() {
   const [qrTool, setQrTool] = useState(null)
   const [confirm, setConfirm] = useState(null)
   const [busy, setBusy] = useState(false)
-  const [printing, setPrinting] = useState(false)
 
   // A stable array: `Walkthrough` re-resolves its targets whenever `steps`
   // changes identity, which would restart the tour on every render.
@@ -177,6 +168,39 @@ export default function ToolsPage() {
     condition !== 'all' ||
     location !== 'all'
 
+  // The same filters the desktop row holds, described once for the phone's chips.
+  const MOBILE_FILTERS = [
+    {
+      key: 'status',
+      label: 'Status',
+      value: status,
+      onChange: setStatus,
+      options: [{ value: 'all', label: 'All statuses' }, ...TOOL_STATUSES],
+    },
+    {
+      key: 'category',
+      label: 'Category',
+      value: category,
+      onChange: setCategory,
+      options: [{ value: 'all', label: 'All categories' }, ...CATEGORIES],
+    },
+    {
+      key: 'condition',
+      label: 'Condition',
+      value: condition,
+      onChange: setCondition,
+      options: [{ value: 'all', label: 'All conditions' }, ...CONDITIONS],
+    },
+    {
+      key: 'location',
+      label: 'Location',
+      value: location,
+      onChange: setLocation,
+      options: [{ value: 'all', label: 'All locations' }, ...LOCATIONS],
+    },
+    { key: 'sort', label: 'Sort', value: sort, onChange: setSort, options: SORT_OPTIONS },
+  ]
+
   const resetFilters = () => {
     setSearch('')
     setStatus('all')
@@ -192,6 +216,20 @@ export default function ToolsPage() {
     setFormOpen(true)
   }
 
+  /**
+   * `?new=1` opens the same create form — how the phone's bottom bar reaches it
+   * while this page is open. The parameter is dropped again the moment it is
+   * honoured, so a back navigation does not reopen the form.
+   */
+  useEffect(() => {
+    if (!searchParams.get('new')) return
+    if (can(PERM.TOOL_CREATE)) openCreate()
+    const next = new URLSearchParams(searchParams)
+    next.delete('new')
+    setSearchParams(next, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams])
+
   const openEdit = (tool) => {
     setEditing(tool)
     setFormOpen(true)
@@ -201,7 +239,8 @@ export default function ToolsPage() {
     setBusy(true)
     try {
       await action()
-      toast.success(`${tool.name} — ${label}.`)
+      // Next to the control that created or edited the record.
+      toast.success(`${tool.name} — ${label}.`, { anchor: '[data-tour="tools-add"]' })
     } catch (err) {
       toast.error(err.message ?? 'Unable to update the tool.')
     } finally {
@@ -221,7 +260,7 @@ export default function ToolsPage() {
         setBusy(true)
         try {
           await toolService.remove(tool.id, user)
-          toast.success(`${tool.name} was deleted.`)
+          toast.success(`${tool.name} was deleted.`, { anchor: '[data-tour="tools-list"]' })
           setConfirm(null)
         } catch (err) {
           if (err.name === 'ActiveTransactionError') {
@@ -247,98 +286,54 @@ export default function ToolsPage() {
     })
   }
 
-  const exportCSV = () => {
-    downloadCSV(filtered, CSV_COLUMNS, `tools-${new Date().toISOString().slice(0, 10)}.csv`)
-    toast.success(`${filtered.length} tools exported to CSV.`)
-  }
-
-  // Export and label printing are crib-desk jobs. A student carrying the PWA has
-  // no use for them, so they leave the phone layout entirely — taking the empty
-  // header row with them — and stay exactly as they were on the desktop shell.
-  const showCribActions = !(isStudent(user) && isPwa)
-
-  const printAllLabels = async () => {
-    if (!filtered.length) return
-    setPrinting(true)
-    try {
-      await printQRLabels(filtered, { labName: settings.labName })
-    } catch (err) {
-      toast.error(err.message ?? 'Unable to open the print window.')
-    } finally {
-      setPrinting(false)
-    }
-  }
-
   return (
     <>
-      <PageHeader hideTitle>
-        {showCribActions && (
-          <button
-            type="button"
-            onClick={exportCSV}
-            className="btn btn-outline"
-            disabled={!filtered.length}
-          >
-            <Download className="h-4 w-4" />
-            <span className="hidden sm:inline">Export CSV</span>
-          </button>
-        )}
-        {showCribActions && (
-          <button
-            type="button"
-            onClick={printAllLabels}
-            className="btn btn-outline"
-            disabled={!filtered.length || printing}
-          >
-            {printing ? <Spinner /> : <Printer className="h-4 w-4" />}
-            <span className="hidden sm:inline">Print labels</span>
-          </button>
-        )}
-        {can(PERM.TOOL_CREATE) && (
-          <button type="button" onClick={openCreate} className="btn btn-primary" data-tour="tools-add">
-            <Plus className="h-4 w-4" />
-            Add tool
-          </button>
-        )}
-      </PageHeader>
+      {/* On a phone the bottom bar's "+" carries this action, so the header row
+          is the desktop's only — and with nothing left in it since the download
+          and print buttons went, it stands down there entirely and the filters
+          come up to the top, the way Transactions now opens. */}
+      {can(PERM.TOOL_CREATE) && (
+        <div className="hidden lg:block">
+          <PageHeader hideTitle>
+            <button
+              type="button"
+              onClick={openCreate}
+              className="btn btn-primary"
+              data-tour="tools-add"
+            >
+              <Plus className="h-4 w-4" />
+              Add tool
+            </button>
+          </PageHeader>
+        </div>
+      )}
 
       {/* ------------------------------ filters ------------------------------ */}
       <div className="card mb-4 p-3">
         <div className="flex flex-col gap-3">
-          <div className="flex gap-2">
-            <div data-tour="tools-search" className="min-w-0 flex-1">
-              <SearchInput
-                value={search}
-                onChange={setSearch}
-                placeholder="Search by name, ID, brand, serial or location…"
-              />
-            </div>
-            <div className="hidden shrink-0 items-center gap-1 rounded-lg border p-0.5 sm:flex">
-              <button
-                type="button"
-                onClick={() => setView('grid')}
-                className={cx('btn btn-sm btn-icon', view === 'grid' ? 'btn-dark' : 'btn-ghost')}
-                aria-label="Grid view"
-                aria-pressed={view === 'grid'}
-              >
-                <Grid3x3 className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setView('table')}
-                className={cx('btn btn-sm btn-icon', view === 'table' ? 'btn-dark' : 'btn-ghost')}
-                aria-label="Table view"
-                aria-pressed={view === 'table'}
-              >
-                <List className="h-4 w-4" />
-              </button>
-            </div>
+          {/* The search box takes the full first row, the way the Transactions
+              and Maintenance filter cards open — the view switch moves down to
+              the end of the filter row below it. */}
+          <div data-tour="tools-search">
+            <SearchInput
+              value={search}
+              onChange={setSearch}
+              placeholder="Search by name, ID, brand, serial or location…"
+            />
           </div>
 
-          <div
-            data-tour="tools-filters"
-            className="no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 pb-0.5"
-          >
+          {/* Phones get a scrollable row of filter chips, each opening its own
+              options; the desktop keeps its inline dropdowns exactly as they
+              were. */}
+          <div data-tour="tools-filters" className="sm:hidden">
+            <MobileFilterBar
+              filters={MOBILE_FILTERS}
+              hasFilters={hasFilters}
+              onClear={resetFilters}
+            />
+          </div>
+
+          <div className="no-scrollbar -mx-1 hidden gap-2 overflow-x-auto px-1 pb-0.5 sm:flex">
             <FilterSelect
               label="Status"
               value={status}
@@ -369,6 +364,26 @@ export default function ToolsPage() {
                 Clear
               </button>
             )}
+            <div className="ml-auto flex shrink-0 items-center gap-1 rounded-lg border p-0.5">
+              <button
+                type="button"
+                onClick={() => setView('grid')}
+                className={cx('btn btn-sm btn-icon', view === 'grid' ? 'btn-dark' : 'btn-ghost')}
+                aria-label="Grid view"
+                aria-pressed={view === 'grid'}
+              >
+                <Grid3x3 className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setView('table')}
+                className={cx('btn btn-sm btn-icon', view === 'table' ? 'btn-dark' : 'btn-ghost')}
+                aria-label="Table view"
+                aria-pressed={view === 'table'}
+              >
+                <List className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -379,69 +394,75 @@ export default function ToolsPage() {
         </p>
       </div>
 
-      {/* ------------------------------ results ------------------------------ */}
-      {error ? (
-        <div className="card">
-          <ErrorState
-            title="The inventory could not be loaded"
-            description={error.message}
-            onRetry={reload}
-          />
-        </div>
-      ) : loading && !tools.length ? (
-        <div className="card">
-          <SkeletonRows rows={6} columns={5} />
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="card">
-          <EmptyState
-            icon={PackageSearch}
-            title="No tools found."
-            description={
-              hasFilters
-                ? 'No tools match the current search and filters.'
-                : 'The inventory is empty. Add the first tool to generate its QR code.'
-            }
-            action={
-              hasFilters ? (
-                <button type="button" onClick={resetFilters} className="btn btn-outline">
-                  Clear filters
-                </button>
-              ) : can(PERM.TOOL_CREATE) ? (
-                <button type="button" onClick={openCreate} className="btn btn-primary">
-                  <Plus className="h-4 w-4" />
-                  Add the first tool
-                </button>
-              ) : null
-            }
-          />
-        </div>
-      ) : view === 'table' ? (
-        <ToolTable
-          tools={filtered}
-          can={can}
-          onEdit={openEdit}
-          onQR={setQrTool}
-          onDelete={requestDelete}
-          onStatus={runStatusAction}
-          user={user}
-        />
-      ) : (
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-          {filtered.map((tool) => (
-            <ToolCard
-              key={tool.id}
-              tool={tool}
-              can={can}
-              onEdit={openEdit}
-              onQR={setQrTool}
-              onDelete={requestDelete}
-              onStatus={runStatusAction}
-              user={user}
+      {/* ------------------------------ results ------------------------------
+          `data-tour` is on the wrapper rather than on the grid or the table, so
+          the walkthrough highlights the records whichever view is showing — and
+          still has something to point at while they are loading or while a filter
+          leaves the list empty. */}
+      <div data-tour="tools-list">
+        {error ? (
+          <div className="card">
+            <ErrorState
+              title="The inventory could not be loaded"
+              description={error.message}
+              onRetry={reload}
             />
-          ))}
-        </div>
-      )}
+          </div>
+        ) : loading && !tools.length ? (
+          <div className="card">
+            <SkeletonRows rows={6} columns={5} />
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="card">
+            <EmptyState
+              icon={PackageSearch}
+              title="No tools found."
+              description={
+                hasFilters
+                  ? 'No tools match the current search and filters.'
+                  : 'The inventory is empty. Add the first tool to generate its QR code.'
+              }
+              action={
+                hasFilters ? (
+                  <button type="button" onClick={resetFilters} className="btn btn-outline">
+                    Clear filters
+                  </button>
+                ) : can(PERM.TOOL_CREATE) ? (
+                  <button type="button" onClick={openCreate} className="btn btn-primary">
+                    <Plus className="h-4 w-4" />
+                    Add the first tool
+                  </button>
+                ) : null
+              }
+            />
+          </div>
+        ) : view === 'table' ? (
+          <ToolTable
+            tools={filtered}
+            can={can}
+            onEdit={openEdit}
+            onQR={setQrTool}
+            onDelete={requestDelete}
+            onStatus={runStatusAction}
+            user={user}
+          />
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+            {filtered.map((tool) => (
+              <ToolCard
+                key={tool.id}
+                tool={tool}
+                can={can}
+                onEdit={openEdit}
+                onQR={setQrTool}
+                onDelete={requestDelete}
+                onStatus={runStatusAction}
+                user={user}
+              />
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* ------------------------------ dialogs ------------------------------ */}
       <ToolForm
@@ -462,7 +483,7 @@ export default function ToolsPage() {
         loading={busy}
       />
 
-      <Walkthrough steps={tourSteps} open={tour.open} onClose={tour.close} />
+      <Walkthrough steps={tourSteps} open={tour.open} onClose={tour.close} compact={isStudent(user)} />
     </>
   )
 }

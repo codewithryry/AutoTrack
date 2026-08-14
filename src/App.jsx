@@ -1,9 +1,9 @@
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AlertTriangle, ShieldOff } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import AppLayout from './layouts/AppLayout'
+import AppLayout, { useStandalonePage } from './layouts/AppLayout'
 import InstallPrompt from './components/InstallPrompt'
-import { ErrorState, Skeleton, SkeletonCards, SkeletonRows } from './components/ui'
+import { ErrorState } from './components/ui'
 import { useApp } from './context/AppContext'
 import { PERM } from './utils/permissions'
 
@@ -18,6 +18,7 @@ import BorrowPage from './pages/BorrowPage'
 import ReturnPage from './pages/ReturnPage'
 import TransactionsPage from './pages/TransactionsPage'
 import UsersPage from './pages/UsersPage'
+import ActivityPage from './pages/ActivityPage'
 import NotificationsPage from './pages/NotificationsPage'
 import MaintenancePage from './pages/MaintenancePage'
 import ReportsPage from './pages/ReportsPage'
@@ -55,8 +56,10 @@ function RequirePermission({ permission, children }) {
 
 function NoAccess() {
   const { user } = useApp()
+  // A dead end: the shell drops its rail, top bar and bottom bar for it.
+  useStandalonePage()
   return (
-    <div className="flex min-h-[60vh] flex-col items-center justify-center px-6 text-center">
+    <div className="flex min-h-[100dvh] w-full flex-col items-center justify-center px-6 text-center">
       <span className="mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-red-500/10">
         <ShieldOff className="h-7 w-7 text-red-500" />
       </span>
@@ -74,8 +77,9 @@ function NoAccess() {
 }
 
 function NotFound() {
+  useStandalonePage()
   return (
-    <div className="flex min-h-[60vh] flex-col items-center justify-center px-6 text-center">
+    <div className="flex min-h-[100dvh] w-full flex-col items-center justify-center px-6 text-center">
       <span className="mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-amberline-400/15">
         <AlertTriangle className="h-7 w-7 text-amberline-600 dark:text-amberline-400" />
       </span>
@@ -96,25 +100,21 @@ function NotFound() {
 /**
  * What a refresh shows while the stored session is read.
  *
- * There is no splash screen: the page structure appears immediately, drawn with
- * the same skeleton primitives the pages themselves use while their data loads,
- * so the transition into the real dashboard is a swap of content rather than a
- * change of screen. No timer, no minimum duration — it lasts exactly as long as
- * reading the session takes.
+ * The page's own shape, not a splash: the same padding the shell's `main` uses,
+ * with placeholder blocks where the header and the first cards will be. It
+ * lasts exactly as long as reading the session takes, and what replaces it lands
+ * in the same place, so nothing jumps.
  */
 function BootSkeleton() {
   return (
-    // The same padding as the shell's `main`, so nothing shifts once the real
-    // layout takes over.
-    <div className="min-w-0 px-3 pb-28 pt-4 sm:px-5 lg:pb-8">
-      <div className="mb-5 space-y-2">
-        <Skeleton className="h-7 w-56 max-w-[70%] rounded-lg" />
-        <Skeleton className="h-4 w-72 max-w-[60%] rounded" />
+    <div className="min-w-0 px-3 pb-28 pt-4 sm:px-5 lg:px-8 lg:pb-12 lg:pt-6" aria-busy="true">
+      <div className="skeleton mb-5 h-8 w-48" />
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="skeleton h-24" />
+        ))}
       </div>
-      <SkeletonCards count={4} className="grid-cols-2 lg:grid-cols-4" />
-      <div className="card mt-4 overflow-hidden">
-        <SkeletonRows rows={4} />
-      </div>
+      <div className="skeleton mt-4 h-64" />
     </div>
   )
 }
@@ -238,6 +238,16 @@ export default function App() {
             }
           />
           <Route path="/notifications" element={<NotificationsPage />} />
+          {/* The activity log is staff-only, the same audience the service and
+              the security rules already scope it to. */}
+          <Route
+            path="/activity"
+            element={
+              <RequirePermission permission={PERM.TXN_VIEW_ALL}>
+                <ActivityPage />
+              </RequirePermission>
+            }
+          />
           <Route
             path="/maintenance"
             element={
@@ -256,11 +266,9 @@ export default function App() {
           />
           <Route
             path="/settings"
-            element={
-              <RequirePermission permission={PERM.SETTINGS_VIEW}>
-                <SettingsPage />
-              </RequirePermission>
-            }
+            // No permission gate: everyone has preferences of their own. The
+            // laboratory configuration inside the page is still gated.
+            element={<SettingsPage />}
           />
           {/* Any other path falls inside the protected tree: signed in it is a
               404 in the shell, signed out `RequireAuth` sends it to /login. */}

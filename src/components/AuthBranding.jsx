@@ -17,33 +17,68 @@ import { cx } from '../utils/helpers'
 /** Re-exported so the auth screens have one name to import. */
 export const BRAND_NAME = APP_NAME
 
-/** The two institutional logos, side by side. */
-export function InstitutionLogos({ className, onDark = false, size = 'md' }) {
-  const height = size === 'sm' ? 'h-9 sm:h-10' : 'h-11 sm:h-12'
+/**
+ * The three marks of the row, in the order they are read: the university, the
+ * application between them, and the programme.
+ *
+ * The two institutional seals share one height; `scale` is only used to lift the
+ * application's own mark a little above them, so the middle of the row reads as
+ * the subject and the seals as its credentials.
+ */
+const LOGOS = [
+  { src: '/MINSU.png', alt: 'Mindoro State University', scale: 1 },
+  // The application's own mark, in the middle and a little larger than the two
+  // institutional seals beside it.
+  { src: '/Logoapp.png', alt: '', scale: 1.3 },
+  { src: '/BTVTEDLOGO.png', alt: 'Bachelor of Technical-Vocational Teacher Education', scale: 1 },
+]
+
+/**
+ * The three marks in a centred row.
+ *
+ * No chip behind them: they sit straight on the page, so the screen opens on the
+ * marks themselves rather than on white boxes.
+ */
+export function InstitutionLogos({ className, size = 'md' }) {
+  // One height for the row, in pixels so each mark can be nudged against it.
+  const base = size === 'sm' ? 44 : 56
   return (
-    <div className={cx('flex min-w-0 flex-wrap items-center gap-2.5 sm:gap-3', className)}>
-      {[
-        { src: '/MINSU.png', alt: 'Mindoro State University' },
-        { src: '/BTVTEDLOGO.png', alt: 'Bachelor of Technical-Vocational Teacher Education' },
-      ].map(({ src, alt }) => (
-        <span
+    <div
+      className={cx('flex min-w-0 flex-wrap items-center justify-center gap-4 sm:gap-5', className)}
+    >
+      {LOGOS.map(({ src, alt, scale }) => (
+        <img
           key={src}
-          className={cx(
-            'grid min-w-0 shrink place-items-center rounded-xl p-1.5',
-            // A light chip keeps a dark-inked logo legible on the dark panel.
-            onDark ? 'bg-white/90 ring-1 ring-white/25' : 'bg-white ring-1 ring-black/5',
-          )}
-        >
-          <img
-            src={src}
-            alt={alt}
-            loading="eager"
-            decoding="async"
-            className={cx(height, 'w-auto max-w-full object-contain')}
-          />
-        </span>
+          src={src}
+          alt={alt}
+          aria-hidden={alt ? undefined : 'true'}
+          loading="eager"
+          decoding="async"
+          style={{ height: base * scale }}
+          className="w-auto max-w-full shrink object-contain"
+        />
       ))}
     </div>
+  )
+}
+
+/**
+ * Who the marks belong to, set above them.
+ *
+ * The seals are small at this size and not everyone reads them at a glance, so
+ * the university and the programme are named in words as well.
+ */
+export function InstitutionNames({ className, onDark = false }) {
+  return (
+    <p
+      className={cx(
+        'text-balance text-center text-[10.5px] font-bold uppercase leading-relaxed tracking-[0.14em]',
+        onDark ? 'text-navy-400' : 'subtle',
+        className,
+      )}
+    >
+      Mindoro State University · BTVTEd
+    </p>
   )
 }
 
@@ -62,17 +97,29 @@ export function AuthBrandLockup({ onDark = false, className, align = 'center' })
         className,
       )}
     >
-      <InstitutionLogos onDark={onDark} />
-      <div className="min-w-0">
-        <p
-          className={cx(
-            'text-balance break-words text-lg font-extrabold tracking-[0.06em] sm:text-xl',
-            onDark ? 'text-white' : '',
-          )}
-        >
-          {BRAND_NAME}
-        </p>
-      </div>
+      <InstitutionLogos />
+      <AuthWordmark onDark={onDark} />
     </div>
+  )
+}
+
+/**
+ * The wordmark on its own.
+ *
+ * The phone layout carries the institutional marks in a band across the top of
+ * the screen instead of inside the form block, so the block itself needs the
+ * name and nothing else.
+ */
+export function AuthWordmark({ onDark = false, className }) {
+  return (
+    <p
+      className={cx(
+        'min-w-0 text-balance break-words text-lg font-extrabold tracking-tight sm:text-xl',
+        onDark && 'text-white',
+        className,
+      )}
+    >
+      {BRAND_NAME}
+    </p>
   )
 }

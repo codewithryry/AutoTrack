@@ -3,6 +3,8 @@ import * as db from '../services/db'
 import { COLLECTIONS } from '../services/db'
 import * as authService from '../services/auth'
 import * as settingsService from '../services/settings'
+import * as offlineCache from '../services/offlineCache'
+import { clearAsyncCache } from '../hooks/asyncCache'
 import * as transactionService from '../services/transactions'
 import * as maintenanceService from '../services/maintenance'
 import { DEFAULT_SETTINGS } from '../utils/constants'
@@ -36,6 +38,9 @@ const AppContext = createContext(null)
  */
 const PROFILE_TIMEOUT_MS = 15_000
 
+/** Where the manual offline-mode override is remembered, per device. */
+const OFFLINE_MODE_KEY = 'stms.offline-mode'
+
 function withTimeout(promise, ms) {
   let timer
   const timeout = new Promise((_, reject) => {
@@ -62,7 +67,25 @@ export function AppProvider({ children }) {
     theme: settingsService.loadTheme(),
   }))
   const [revision, setRevision] = useState(0)
-  const [online, setOnline] = useState(navigator.onLine)
+  const [connected, setConnected] = useState(navigator.onLine)
+  // Offline mode is a manual override kept on the device. It is handed to the
+  // data layer, which then reads from the copy stored on this device instead of
+  // the network — the device's real connectivity is still tracked separately in
+  // `connected`.
+  const [offlineMode, setOfflineModeState] = useState(
+    () => localStorage.getItem(OFFLINE_MODE_KEY) === '1',
+  )
+  const online = connected && !offlineMode
+
+  const setOfflineMode = useCallback((value) => {
+    setOfflineModeState(value)
+    db.setOfflineMode(value)
+    try {
+      localStorage.setItem(OFFLINE_MODE_KEY, value ? '1' : '0')
+    } catch {
+      /* the preference simply does not survive a reload */
+    }
+  }, [])
   const [attempt, setAttempt] = useState(0)
 
   const bumpRevision = useCallback(() => setRevision((r) => r + 1), [])
@@ -80,6 +103,8 @@ export function AppProvider({ children }) {
     const unsubscribe = authService.onAuthChange(async (sessionUser) => {
       if (!sessionUser) {
         db.clearScope()
+        // The cached page data belongs to the account that could read it.
+        clearAsyncCache()
         if (!active) return
         setUser(null)
         setAuthReady(true)
@@ -170,16 +195,27 @@ export function AppProvider({ children }) {
   useEffect(() => db.subscribe(() => bumpRevision()), [bumpRevision])
 
   /* ------------------------ connectivity ------------------------ */
+  // The stored preference has to reach the data layer before the first read,
+  // and again whenever it changes.
   useEffect(() => {
-    const goOnline = () => setOnline(true)
-    const goOffline = () => setOnline(false)
+    db.setOfflineMode(offlineMode)
+  }, [offlineMode])
+
+  useEffect(() => {
+    const goOnline = () => {
+      setConnected(true)
+      // Back on the network: every open screen re-reads from the server, and
+      // the fresh rows replace the cached copy as they arrive.
+      bumpRevision()
+    }
+    const goOffline = () => setConnected(false)
     window.addEventListener('online', goOnline)
     window.addEventListener('offline', goOffline)
     return () => {
       window.removeEventListener('online', goOnline)
       window.removeEventListener('offline', goOffline)
     }
-  }, [])
+  }, [bumpRevision])
 
   /* --------------------------- theme --------------------------- */
   useEffect(() => {
@@ -242,16 +278,22 @@ export function AppProvider({ children }) {
   const login = useCallback(async (email, password) => {
     setSessionError(null)
     const profile = await authService.login(email, password)
+    clearAsyncCache()
     db.setScope({ uid: profile.id, role: profile.role })
     setUser(profile)
     return profile
   }, [])
 
   const logout = useCallback(async () => {
+    const uid = user?.id
     await authService.logout()
+    clearAsyncCache()
     setUser(null)
     setSessionError(null)
-  }, [])
+    // The records cached for reading offline belong to the account that read
+    // them, so they leave with it.
+    if (uid) void offlineCache.clearAccount(uid)
+  }, [user])
 
   /**
    * Delete the signed-in account. The service removes the credential and the
@@ -260,6 +302,7 @@ export function AppProvider({ children }) {
    */
   const deleteOwnAccount = useCallback(async () => {
     await authService.deleteAccount(user)
+    clearAsyncCache()
     setUser(null)
     setSessionError(null)
   }, [user])
@@ -323,6 +366,8 @@ export function AppProvider({ children }) {
       settings,
       revision,
       online,
+      offlineMode,
+      setOfflineMode,
       login,
       logout,
       deleteOwnAccount,
@@ -344,6 +389,8 @@ export function AppProvider({ children }) {
       settings,
       revision,
       online,
+      offlineMode,
+      setOfflineMode,
       login,
       logout,
       deleteOwnAccount,

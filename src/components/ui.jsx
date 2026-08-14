@@ -1,6 +1,6 @@
-import { Children, useEffect, useId, useRef } from 'react'
+import { Children, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AlertTriangle, Loader2, Search, X } from 'lucide-react'
+import { AlertTriangle, Check, ChevronDown, Loader2, Search, X } from 'lucide-react'
 import { cx } from '../utils/helpers'
 import {
   CONDITION_STYLES,
@@ -61,6 +61,16 @@ export const MaintenanceStatusBadge = ({ status }) => (
  * Page furniture
  * ------------------------------------------------------------------ */
 
+/**
+ * The band at the top of a page: the assistant, the page's own title, and its
+ * actions.
+ *
+ * The assistant is always in it, so it is present and in the same place on every
+ * page that has a header, at every width. The title beside it is optional: the
+ * sidebar and the sticky bar both name the page already, so a page may drop its
+ * H1 (`hideTitle`) or drop it on a phone only (`hideTitleMobile`) and keep the
+ * rest of the row.
+ */
 export function PageHeader({
   title,
   description,
@@ -74,37 +84,41 @@ export function PageHeader({
   // it must not reserve any space.
   const actions = Children.toArray(children)
   const hasActions = actions.length > 0
-  // The sticky header already names the page on a phone, so a page may drop its
-  // own H1 there and keep only the action buttons. With no actions nothing is
-  // left to show, so the whole block is hidden until `sm`, where it returns.
-  //
-  // `hideTitle` goes further: the sidebar and the sticky header both name the
-  // page on every width, so the page drops its H1 outright and keeps only its
-  // actions — and nothing at all when it has none, leaving no empty gap.
+  // A header with its title dropped and no actions left has nothing in it — a
+  // student's Tools, Transactions and Notifications pages, where the export and
+  // mark-all buttons are staff-only. Rendering the row anyway would push the
+  // page down by its own margin for nothing, so it stands down entirely.
   if (hideTitle && !hasActions) return null
+  // The sticky header already names the page on a phone, so a page may drop its
+  // own H1 there and keep only the action buttons.
   return (
     <div
       className={cx(
         'mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between',
-        hideTitleMobile && !hasActions && 'hidden sm:block',
-        // Nothing sits on the left any more, so the actions keep their place.
+        hideTitleMobile && !hasActions && 'hidden sm:flex',
+        // Nothing sits on the left but the assistant, so the actions keep their
+        // place at the right.
         hideTitle && 'sm:justify-end',
       )}
     >
       {!hideTitle && (
-        <div className={cx('min-w-0', hideTitleMobile && 'hidden sm:block')}>
-          <div className="flex items-center gap-2.5">
-            {Icon && (
-              <span
-                className="grid h-9 w-9 shrink-0 place-items-center rounded-lg
-                           bg-amberline-400/15 text-amberline-600 dark:text-amberline-400"
-              >
-                <Icon className="h-5 w-5" />
-              </span>
-            )}
-            <h1 className="truncate text-xl font-extrabold tracking-tight sm:text-2xl">{title}</h1>
+        <div className={cx('flex min-w-0 items-center gap-3', hideTitleMobile && 'hidden sm:flex')}>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2.5">
+              {Icon && (
+                <span
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-lg
+                             bg-amberline-400/15 text-amberline-600 dark:text-amberline-400"
+                >
+                  <Icon className="h-5 w-5" />
+                </span>
+              )}
+              <h1 className="truncate text-xl font-extrabold tracking-tight sm:text-2xl">
+                {title}
+              </h1>
+            </div>
+            {description && <p className="muted mt-1.5 text-sm">{description}</p>}
           </div>
-          {description && <p className="muted mt-1.5 text-sm">{description}</p>}
         </div>
       )}
       {hasActions && <div className="flex flex-wrap items-center gap-2">{children}</div>}
@@ -369,6 +383,121 @@ export function TextAreaField({ label, error, hint, required, className, rows = 
   )
 }
 
+/* ------------------------------------------------------------------ *
+ * Mobile filter toolbar
+ * ------------------------------------------------------------------ */
+
+const optionValue = (o) => (typeof o === 'string' ? o : o.value)
+const optionLabel = (o) => (typeof o === 'string' ? o : o.label)
+
+/**
+ * One chip in the mobile filter toolbar. It shows the filter's name while it is
+ * unset and the chosen option once it is, so the row reads as the current state
+ * of the list rather than as a set of empty controls.
+ */
+function FilterChip({ label, active, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cx(
+        'flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-full border px-3.5',
+        'text-[13px] font-semibold',
+        active
+          ? 'border-amberline-400/50 bg-amberline-400/15 text-amberline-700 dark:text-amberline-300'
+          : 'muted',
+      )}
+    >
+      <span className="max-w-[10rem] truncate">{label}</span>
+      <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" />
+    </button>
+  )
+}
+
+/**
+ * The phone's filter toolbar: one scrollable row of chips, one per filter, each
+ * opening its options in a bottom sheet at a comfortable tap size. It replaces
+ * the desktop's inline row of dropdowns on small screens only — the filters,
+ * their options and their handlers are the page's own, unchanged.
+ *
+ * `filters` is `[{ key, label, value, onChange, options }]`. `extra` adds one
+ * more chip holding arbitrary controls (date ranges and the like).
+ */
+export function MobileFilterBar({ filters, extra, hasFilters, onClear, className }) {
+  const [openKey, setOpenKey] = useState(null)
+  const open = filters.find((f) => f.key === openKey)
+  const extraOpen = openKey === '__extra'
+
+  return (
+    <div className={cx('no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 pb-0.5', className)}>
+      {filters.map((filter) => {
+        const active = filter.value !== 'all'
+        const current = filter.options.find((o) => optionValue(o) === filter.value)
+        return (
+          <FilterChip
+            key={filter.key}
+            label={active && current ? optionLabel(current) : filter.label}
+            active={active}
+            onClick={() => setOpenKey(filter.key)}
+          />
+        )
+      })}
+
+      {extra && (
+        <FilterChip
+          label={extra.label}
+          active={!!extra.active}
+          onClick={() => setOpenKey('__extra')}
+        />
+      )}
+
+      {hasFilters && (
+        <button
+          type="button"
+          onClick={onClear}
+          className="min-h-[40px] shrink-0 rounded-full px-3 text-[13px] font-semibold muted"
+        >
+          Clear
+        </button>
+      )}
+
+      <Modal
+        open={!!open || extraOpen}
+        onClose={() => setOpenKey(null)}
+        title={open?.label ?? extra?.label ?? ''}
+      >
+        {open ? (
+          <div className="-my-1">
+            {open.options.map((option) => {
+              const value = optionValue(option)
+              const selected = value === open.value
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => {
+                    open.onChange(value)
+                    setOpenKey(null)
+                  }}
+                  className={cx(
+                    'flex min-h-[48px] w-full items-center justify-between gap-3 border-b px-1 text-left text-sm last:border-b-0',
+                    selected && 'font-bold',
+                  )}
+                >
+                  <span className="min-w-0 flex-1">{optionLabel(option)}</span>
+                  {selected && <Check className="h-4 w-4 shrink-0 text-amberline-500" />}
+                </button>
+              )
+            })}
+          </div>
+        ) : (
+          extra?.children
+        )}
+      </Modal>
+    </div>
+  )
+}
+
 /** Compact labelled dropdown used in filter bars. */
 export function FilterSelect({ label, value, onChange, options, className }) {
   const id = useId()
@@ -484,7 +613,7 @@ export function Modal({ open, onClose, title, description, children, footer, siz
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4">
       <div
-        className="absolute inset-0 bg-navy-950/60 backdrop-blur-sm animate-fade-in"
+        className="absolute inset-0 bg-navy-950/60 animate-fade-in"
         onClick={onClose}
         aria-hidden="true"
       />

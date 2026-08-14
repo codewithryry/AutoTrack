@@ -17,6 +17,7 @@ import {
   ConditionBadge,
   DetailItem,
   EmptyState,
+  ErrorState,
   PageHeader,
   SearchInput,
   SectionCard,
@@ -26,13 +27,15 @@ import {
   TextAreaField,
   TextField,
 } from '../components/ui'
+import Walkthrough, { usePageTour } from '../components/Walkthrough'
+import { LocationCaptureField } from '../components/LocationCapture'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import { useDebounced, useTools, useUsers } from '../hooks'
 import * as toolService from '../services/tools'
 import * as txnService from '../services/transactions'
 import { ValidationError } from '../services/tools'
-import { PERM } from '../utils/permissions'
+import { isStudent, PERM } from '../utils/permissions'
 import { TOOL_STATUS, USER_STATUS } from '../utils/constants'
 import { cx, matchesQuery } from '../utils/helpers'
 import { addDaysISO, fromDateInput, toDateInput, todayInput } from '../utils/dates'
@@ -43,13 +46,65 @@ import { addDaysISO, fromDateInput, toDateInput, todayInput } from '../utils/dat
  * Step 1 picks the tool (pre-filled when arriving from a scan), step 2 confirms
  * borrower and dates. Students can only ever select themselves.
  */
+
+/**
+ * First-run walkthrough for the borrow desk. A student is taking a tool out for
+ * themselves, so their wording says so; staff are issuing one on someone else's
+ * behalf and get their own. `Walkthrough` drops any step whose target is absent
+ * — the form appears only once a tool is chosen — so the tour stays honest.
+ */
+const borrowTour = (student) =>
+  student
+    ? [
+        {
+          target: 'borrow-list',
+          title: 'Pick your tool',
+          text: 'Only tools that are free right now are listed. Search by name, ID or shelf, then tap one to select it.',
+          icon: Wrench,
+        },
+        {
+          target: 'borrow-form',
+          title: 'Check the dates',
+          text: 'Your own name is filled in — you borrow under your account. Set the return date, or tap a quick-set button.',
+          icon: CalendarDays,
+        },
+        {
+          target: 'borrow-submit',
+          title: 'Confirm and collect',
+          text: 'Confirming records the loan against your account and marks the tool as borrowed. It then shows on your dashboard until you return it.',
+          icon: ArrowRight,
+        },
+      ]
+    : [
+        {
+          target: 'borrow-list',
+          title: 'Select the tool',
+          text: 'Everything available for issue, searchable by name, ID, brand or location.',
+          icon: Wrench,
+        },
+        {
+          target: 'borrow-form',
+          title: 'Borrower and dates',
+          text: 'Issue to any active user, then set the due date. Your name is recorded as the issuing staff member.',
+          icon: UserCheck,
+        },
+        {
+          target: 'borrow-submit',
+          title: 'Confirm the issue',
+          text: 'Confirming creates the transaction, marks the tool as borrowed and writes the activity log.',
+          icon: ArrowRight,
+        },
+      ]
+
 export default function BorrowPage() {
   const { user, can, settings } = useApp()
   const toast = useToast()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
 
-  const { tools, loading: loadingTools } = useTools()
+  const { tools, loading: loadingTools, error: toolsError, reload: reloadTools } = useTools()
+  // Empty for a student — they may only borrow for themselves, and the security
+  // rules do not let them read the directory.
   const { users } = useUsers()
 
   const preselectedId = searchParams.get('tool')
@@ -58,6 +113,10 @@ export default function BorrowPage() {
   const debouncedSearch = useDebounced(search, 200)
 
   const canBorrowForOthers = can(PERM.BORROW_FOR_OTHERS)
+
+  // Once per account on this device, remembered separately from every other page.
+  const tour = usePageTour('borrow', user?.id)
+  const tourSteps = useMemo(() => borrowTour(isStudent(user)), [user])
 
   const [form, setForm] = useState(() => ({
     userId: '',
@@ -68,6 +127,10 @@ export default function BorrowPage() {
   }))
   const [errors, setErrors] = useState({})
   const [submitting, setSubmitting] = useState(false)
+  // Where the tool is being collected. Null until the borrower asks for a
+  // reading, and null again if they refuse or the fix fails — the loan is
+  // created either way.
+  const [borrowLocation, setBorrowLocation] = useState(null)
 
   // Default the borrower and the due date once settings and the session are known.
   useEffect(() => {
@@ -133,13 +196,19 @@ export default function BorrowPage() {
           dueDate: fromDateInput(form.dueDate),
           purpose: form.purpose,
           notes: form.notes,
+          borrowLocation,
         },
         user,
         { maxDays: settings.maxBorrowDays },
       )
-      toast.success(`${selectedTool.name} successfully borrowed.`, {
-        title: 'Transaction created',
-      })
+      // Said plainly either way, so nobody has to guess afterwards whether the
+      // pin was stored.
+      toast.success(
+        borrowLocation
+          ? `${selectedTool.name} borrowed. The collection location was recorded.`
+          : `${selectedTool.name} borrowed. No collection location was recorded.`,
+        { title: 'Transaction created' },
+      )
       navigate(`/tools/${txn.toolId}`)
     } catch (err) {
       if (err instanceof ValidationError) {
@@ -160,10 +229,14 @@ export default function BorrowPage() {
 
   return (
     <>
+      {/* The sticky header already names this page on a phone, so the H1 and its
+          subtitle are dropped there and kept from `sm` up, exactly as the Scan
+          page does it. The desktop layout is untouched. */}
       <PageHeader
         title="Borrow a tool"
         description="Issue laboratory equipment and create a transaction record."
         icon={Repeat}
+        hideTitleMobile
       >
         <Link to="/scan" className="btn btn-outline">
           <QrCode className="h-4 w-4" />
@@ -183,6 +256,7 @@ export default function BorrowPage() {
           title="1 · Select a tool"
           description={`${availableTools.length} tools are available for borrowing`}
           bodyClassName="p-0"
+          data-tour="borrow-list"
         >
           <div className="border-b p-3">
             <SearchInput
@@ -192,7 +266,13 @@ export default function BorrowPage() {
             />
           </div>
 
-          {loadingTools && !tools.length ? (
+          {toolsError ? (
+            <ErrorState
+              title="The tool list could not be loaded"
+              description={toolsError.message}
+              onRetry={reloadTools}
+            />
+          ) : loadingTools && !tools.length ? (
             <div className="space-y-2 p-4">
               {Array.from({ length: 5 }).map((_, i) => (
                 <div key={i} className="skeleton h-14 rounded-lg" />
@@ -300,7 +380,7 @@ export default function BorrowPage() {
               </SectionCard>
 
               <SectionCard title="2 · Borrowing details">
-                <form onSubmit={submit} className="space-y-4" noValidate>
+                <form onSubmit={submit} className="space-y-4" noValidate data-tour="borrow-form">
                   <SelectField
                     label="Borrower"
                     required
@@ -371,10 +451,19 @@ export default function BorrowPage() {
                     rows={2}
                   />
 
+                  <LocationCaptureField
+                    value={borrowLocation}
+                    onChange={setBorrowLocation}
+                    title="Where is this tool being collected?"
+                    description="One reading, taken now, stored as the loan's collection point. It records where the tool changed hands — not where it goes afterwards."
+                    disabled={submitting}
+                  />
+
                   <button
                     type="submit"
                     className="btn btn-primary btn-lg w-full"
                     disabled={submitting || !eligibility?.ok}
+                    data-tour="borrow-submit"
                   >
                     {submitting ? <Spinner /> : <ArrowRight className="h-4 w-4" />}
                     {submitting ? 'Creating transaction…' : 'Confirm borrowing'}
@@ -421,6 +510,8 @@ export default function BorrowPage() {
           )}
         </div>
       </div>
+
+      <Walkthrough steps={tourSteps} open={tour.open} onClose={tour.close} />
     </>
   )
 }

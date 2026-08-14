@@ -55,22 +55,32 @@ export async function logMany(entries) {
 
 const byNewest = (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
 
+/**
+ * The streamed tail of the log — the newest entries, not the whole history.
+ * Copied before sorting: the array from `db.list()` is the live cache.
+ */
 export async function listAll() {
-  return (await db.list(COLLECTIONS.activityLogs)).sort(byNewest)
+  return [...(await db.list(COLLECTIONS.activityLogs))].sort(byNewest)
 }
 
 export async function listRecent(limit = 10) {
   return (await listAll()).slice(0, limit)
 }
 
-/** Full timeline for one tool, newest first. */
+/**
+ * Full timeline for one tool, newest first.
+ *
+ * A targeted server-side query rather than a filter over the streamed tail,
+ * which would silently stop at the newest few hundred entries and quietly lose
+ * an older tool's history.
+ */
 export async function listForTool(toolId) {
-  const rows = await db.query(COLLECTIONS.activityLogs, (r) => r.toolId === toolId)
+  const rows = await db.findWhere(COLLECTIONS.activityLogs, [['toolId', '==', toolId]])
   return rows.sort(byNewest)
 }
 
 export async function listForUser(userId) {
-  const rows = await db.query(COLLECTIONS.activityLogs, (r) => r.userId === userId)
+  const rows = await db.findWhere(COLLECTIONS.activityLogs, [['userId', '==', userId]])
   return rows.sort(byNewest)
 }
 

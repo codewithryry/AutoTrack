@@ -1,13 +1,51 @@
-import { useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
-import { Eye, EyeOff, Lock, LogIn, ShieldCheck, User, Wrench, QrCode, ClipboardCheck } from 'lucide-react'
-import { BrandMark } from '../components/Brand'
+import { useEffect, useState } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import {
+  ClipboardCheck,
+  Eye,
+  EyeOff,
+  Lock,
+  LogIn,
+  Mail,
+  QrCode,
+  ShieldCheck,
+  Wrench,
+} from 'lucide-react'
+import { AuthBrandLockup, BRAND_NAME } from '../components/AuthBranding'
 import { Spinner } from '../components/ui'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
-import { DEMO_ACCOUNTS } from '../services/auth'
-import { APP_NAME, APP_TAGLINE } from '../utils/constants'
+import { requestPasswordReset } from '../services/users'
 import { cx } from '../utils/helpers'
+
+/**
+ * Where to land after signing in.
+ *
+ * `from` is whatever path the guard interrupted, which may be a stale or mistyped
+ * link — sending somebody straight to "Page not found" is a poor first screen, so
+ * anything not recognisably an application route falls back to the dashboard.
+ */
+const APP_ROUTES = [
+  '/dashboard',
+  '/tools',
+  '/scan',
+  '/borrow',
+  '/return',
+  '/transactions',
+  '/users',
+  '/maintenance',
+  '/notifications',
+  '/reports',
+  '/settings',
+]
+
+function safeReturnTo(from) {
+  if (typeof from !== 'string' || !from.startsWith('/')) return '/dashboard'
+  const path = from.split('?')[0]
+  return APP_ROUTES.some((route) => path === route || path.startsWith(`${route}/`))
+    ? from
+    : '/dashboard'
+}
 
 const HIGHLIGHTS = [
   { icon: QrCode, title: 'QR-tagged equipment', text: 'Every wrench, gauge and scan tool carries its own code.' },
@@ -15,33 +53,54 @@ const HIGHLIGHTS = [
   { icon: Wrench, title: 'Service tracking', text: 'Calibration and maintenance history stays with the tool.' },
 ]
 
+/**
+ * Sign-in screen.
+ *
+ * Credentials go straight to the local auth layer; the password is held in
+ * component state only until the request completes. The role that decides where
+ * the user lands comes from their stored profile, never from this form.
+ */
 export default function LoginPage() {
-  const { login, settings } = useApp()
+  const { login, sessionError, clearSessionError } = useApp()
   const toast = useToast()
   const navigate = useNavigate()
   const location = useLocation()
 
-  const [form, setForm] = useState({ username: '', password: '' })
+  // Arriving from sign-up carries a confirmation and the new email address.
+  const [notice, setNotice] = useState(location.state?.notice ?? null)
+  const [form, setForm] = useState({ email: location.state?.email ?? '', password: '' })
   const [errors, setErrors] = useState({})
   const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [resetting, setResetting] = useState(false)
+
+  // A session that was rejected after being restored (no profile, pending
+  // approval, or inactive) explains itself here rather than silently bouncing.
+  useEffect(() => {
+    if (sessionError) {
+      setErrors({ form: sessionError })
+      setNotice(null)
+    }
+  }, [sessionError])
 
   const setField = (field) => (event) => {
     setForm((f) => ({ ...f, [field]: event.target.value }))
     setErrors((e) => ({ ...e, [field]: undefined, form: undefined }))
+    if (sessionError) clearSessionError()
   }
 
-  const submit = async (event, credentials) => {
+  const submit = async (event) => {
     event?.preventDefault()
-    const payload = credentials ?? form
     setSubmitting(true)
     setErrors({})
     try {
-      const user = await login(payload.username, payload.password)
+      const user = await login(form.email, form.password)
+      // The password is not kept around after a successful sign-in.
+      setForm((f) => ({ ...f, password: '' }))
       toast.success(`Welcome back, ${user.fullName.split(' ')[0]}.`, {
         title: `Signed in as ${user.role}`,
       })
-      navigate(location.state?.from ?? '/dashboard', { replace: true })
+      navigate(safeReturnTo(location.state?.from), { replace: true })
     } catch (err) {
       if (err?.field) setErrors({ [err.field]: err.message })
       else setErrors({ form: err.message ?? 'Unable to sign in.' })
@@ -50,10 +109,23 @@ export default function LoginPage() {
     }
   }
 
-  const useDemo = (account) => {
-    setForm({ username: account.username, password: account.password })
-    setErrors({})
-    submit(null, account)
+  /** Password reset needs a backend; the local build explains that instead. */
+  const resetPassword = async () => {
+    if (!form.email.trim()) {
+      setErrors({ email: 'Enter your email address first.' })
+      return
+    }
+    setResetting(true)
+    try {
+      await requestPasswordReset(form.email.trim())
+      toast.success(`A password reset link was sent to ${form.email.trim()}.`, {
+        title: 'Check your inbox',
+      })
+    } catch (err) {
+      setErrors({ form: err.message ?? 'The reset email could not be sent.' })
+    } finally {
+      setResetting(false)
+    }
   }
 
   return (
@@ -67,13 +139,13 @@ export default function LoginPage() {
         <div className="hazard-stripe absolute inset-x-0 top-0 h-1.5" />
 
         <div className="relative">
-          <BrandMark size={52} />
+          <AuthBrandLockup onDark align="start" />
           <h1 className="mt-8 max-w-md text-4xl font-extrabold leading-[1.1] tracking-tight text-white">
             The automotive laboratory,
             <span className="block text-amberline-400">under control.</span>
           </h1>
           <p className="mt-4 max-w-md text-sm leading-relaxed text-navy-300">
-            {APP_NAME} keeps every tool in the workshop accounted for — from the torque wrenches on
+            {BRAND_NAME} keeps every tool in the workshop accounted for — from the torque wrenches on
             Shelf A to the diagnostic scanner in the bay. Scan, issue, return.
           </p>
         </div>
@@ -91,23 +163,15 @@ export default function LoginPage() {
             </li>
           ))}
         </ul>
-
-        <div className="relative border-t border-white/10 pt-5">
-          <p className="text-xs font-bold uppercase tracking-[0.2em] text-amberline-400">
-            {APP_TAGLINE}
-          </p>
-          <p className="mt-1.5 text-xs text-navy-400">
-            {settings.labName} · {settings.labLocation}
-          </p>
-        </div>
       </section>
 
       {/* --------------------------- form --------------------------- */}
-      <section className="flex flex-col justify-center px-5 py-10 sm:px-10">
+      <section className="flex min-w-0 flex-col justify-center px-5 py-10 sm:px-10">
         <div className="mx-auto w-full max-w-sm">
+
           <div className="mb-7 flex flex-col items-center text-center lg:items-start lg:text-left">
-            <div className="lg:hidden">
-              <BrandMark size={54} />
+            <div className="w-full lg:hidden">
+              <AuthBrandLockup />
             </div>
             <h2 className="mt-5 text-2xl font-extrabold tracking-tight lg:mt-0">Sign in</h2>
             <p className="muted mt-1.5 text-sm">
@@ -116,6 +180,17 @@ export default function LoginPage() {
           </div>
 
           <form onSubmit={submit} className="space-y-4" noValidate>
+            {notice && !errors.form && (
+              <div
+                role="status"
+                className="rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-sm
+                           font-medium text-emerald-800 dark:border-emerald-500/30
+                           dark:bg-emerald-500/10 dark:text-emerald-200"
+              >
+                {notice}
+              </div>
+            )}
+
             {errors.form && (
               <div
                 role="alert"
@@ -128,31 +203,31 @@ export default function LoginPage() {
             )}
 
             <div>
-              <label className="label" htmlFor="username">
-                Username
+              <label className="label" htmlFor="email">
+                Email address
               </label>
               <div className="relative">
-                <User
+                <Mail
                   className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2"
                   style={{ color: 'rgb(var(--text-subtle))' }}
                 />
                 <input
-                  id="username"
-                  name="username"
-                  type="text"
+                  id="email"
+                  name="email"
+                  type="email"
                   autoComplete="username"
                   autoCapitalize="none"
                   spellCheck="false"
-                  value={form.username}
-                  onChange={setField('username')}
-                  placeholder="e.g. instructor"
-                  className={cx('input pl-9', errors.username && 'input-error')}
-                  aria-invalid={!!errors.username}
+                  value={form.email}
+                  onChange={setField('email')}
+                  placeholder="name@autolab.edu.ph"
+                  className={cx('input pl-9', errors.email && 'input-error')}
+                  aria-invalid={!!errors.email}
                 />
               </div>
-              {errors.username && (
+              {errors.email && (
                 <p className="mt-1 text-xs font-medium text-red-600 dark:text-red-400">
-                  {errors.username}
+                  {errors.email}
                 </p>
               )}
             </div>
@@ -200,46 +275,49 @@ export default function LoginPage() {
             </button>
           </form>
 
-          {/* ------------------------ demo accounts ------------------------ */}
+          {/* ------------------------ account help ------------------------ */}
           <div className="mt-8">
             <div className="mb-3 flex items-center gap-2">
               <ShieldCheck className="h-4 w-4" style={{ color: 'rgb(var(--text-subtle))' }} />
               <span className="subtle text-[11px] font-bold uppercase tracking-wider">
-                Demo accounts
+                Account help
               </span>
               <span className="h-px flex-1" style={{ background: 'rgb(var(--border))' }} />
             </div>
 
             <div className="space-y-2">
-              {DEMO_ACCOUNTS.map((account) => (
-                <button
-                  key={account.username}
-                  type="button"
-                  onClick={() => useDemo(account)}
-                  disabled={submitting}
-                  className="card flex w-full items-center gap-3 p-3 text-left transition-all
-                             hover:shadow-lift disabled:opacity-60"
+              <button
+                type="button"
+                onClick={resetPassword}
+                disabled={resetting || submitting}
+                className="card flex w-full items-center gap-3 p-3 text-left transition-all
+                           hover:shadow-lift disabled:opacity-60"
+              >
+                <span
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-lg"
+                  style={{ background: 'rgb(var(--rail))', color: 'rgb(var(--accent))' }}
                 >
-                  <span
-                    className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[11px] font-extrabold"
-                    style={{ background: 'rgb(var(--rail))', color: 'rgb(var(--accent))' }}
-                  >
-                    {account.role.slice(0, 2).toUpperCase()}
+                  {resetting ? <Spinner className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-bold">Forgot your password?</span>
+                  <span className="subtle block truncate text-xs">
+                    Email a reset link to the address above.
                   </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-bold">{account.label}</span>
-                    <span className="subtle mono block truncate text-xs">
-                      {account.username} / {account.password}
-                    </span>
-                  </span>
-                  <span className="subtle shrink-0 text-[11px] font-bold uppercase">Use</span>
-                </button>
-              ))}
+                </span>
+                <span className="subtle shrink-0 text-[11px] font-bold uppercase">Send</span>
+              </button>
             </div>
 
             <p className="subtle mt-4 text-center text-xs leading-relaxed lg:text-left">
-              All records are stored locally on this device. No internet connection is required
-              after the first load.
+              No account yet?{' '}
+              <Link
+                to="/signup"
+                className="font-bold text-amberline-700 hover:underline dark:text-amberline-400"
+              >
+                Create one
+              </Link>
+              . Students and instructors can sign in as soon as they register.
             </p>
           </div>
         </div>

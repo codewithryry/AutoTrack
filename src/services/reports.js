@@ -11,6 +11,7 @@ import { countBy, percent } from '../utils/helpers'
 import {
   daysBetween,
   isDueSoon,
+  isOverdue,
   isToday,
   lastMonths,
   monthKey,
@@ -21,8 +22,14 @@ import {
  * Derived statistics.
  *
  * Nothing here is stored — every number is computed from the tools,
- * transactions and users collections, so the dashboard can never drift out of
- * sync with the underlying records.
+ * transactions and users collections, so the dashboard can never
+ * drift out of sync with the underlying records. There are no hardcoded counts.
+ *
+ * The functions below assume the caller may see laboratory-wide data, which is
+ * true for staff. A student's dashboard uses `studentDashboard()` instead: their
+ * queries only return their own loans, so a system-wide total would silently be
+ * computed from a subset. Asking a different question is more honest than
+ * showing a wrong answer.
  */
 
 async function loadAll() {
@@ -85,6 +92,49 @@ export async function dashboardStats({ dueSoonThresholdDays = 1 } = {}) {
   }
 }
 
+/**
+ * The signed-in student's own figures.
+ *
+ * Every number here comes from documents the student is allowed to read: their
+ * transactions (queried by `userId`) and the shared tool inventory. No user
+ * totals, no other students' loans, no laboratory-wide transaction counts.
+ */
+export async function studentDashboard(userId, { dueSoonThresholdDays = 1 } = {}) {
+  const { tools, transactions } = await db.listMany([
+    COLLECTIONS.tools,
+    COLLECTIONS.transactions,
+  ])
+
+  const mine = transactions.filter((t) => t.userId === userId)
+  const active = mine.filter((t) => ACTIVE_TXN_STATUSES.includes(t.status))
+  // A student cannot run the overdue sweep, so lateness is derived from the due
+  // date rather than trusting the stored status.
+  const overdue = active.filter((t) => t.status === TXN_STATUS.OVERDUE || isOverdue(t.dueDate))
+  const dueSoon = active.filter(
+    (t) => !overdue.includes(t) && isDueSoon(t.dueDate, dueSoonThresholdDays),
+  )
+
+  const byStatus = countBy(tools, 'status')
+  const available = byStatus[TOOL_STATUS.AVAILABLE] ?? 0
+
+  return {
+    activeLoans: active.length,
+    dueSoon: dueSoon.length,
+    overdue: overdue.length,
+    totalTransactions: mine.length,
+    returned: mine.filter((t) => t.returnDate).length,
+    damaged: mine.filter((t) => t.status === TXN_STATUS.DAMAGED).length,
+    availableTools: available,
+    totalTools: tools.length,
+
+    loans: [...active].sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate)),
+    overdueLoans: overdue,
+    recent: [...mine]
+      .sort((a, b) => new Date(b.createdAt ?? b.borrowDate) - new Date(a.createdAt ?? a.borrowDate))
+      .slice(0, 6),
+  }
+}
+
 /** Newest transactions, enriched for the dashboard table. */
 export async function recentTransactions(limit = 5) {
   const transactions = await db.list(COLLECTIONS.transactions)
@@ -96,7 +146,12 @@ export async function recentTransactions(limit = 5) {
 /** Tools ranked by how often they leave the room. */
 export async function mostBorrowedTools(limit = 5, { from, to } = {}) {
   const { tools, transactions } = await loadAll()
-  const scoped = transactions.filter((t) => !from && !to ? true : withinRange(t.borrowDate, from, to))
+  // A deleted tool's loans are detached, not destroyed (their `toolId` is
+  // nulled by the 0009 migration so the history survives). They are no longer
+  // inventory, so they must not rank as "most borrowed" under a null key.
+  const scoped = transactions.filter(
+    (t) => t.toolId && (!from && !to ? true : withinRange(t.borrowDate, from, to)),
+  )
   const counts = countBy(scoped, 'toolId')
 
   return Object.entries(counts)

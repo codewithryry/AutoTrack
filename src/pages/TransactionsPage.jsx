@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { CalendarClock, ClipboardList, Download, Undo2, XCircle } from 'lucide-react'
+import { CalendarClock, ClipboardList, Download, Filter, Search, Undo2, XCircle } from 'lucide-react'
+import Walkthrough, { usePageTour } from '../components/Walkthrough'
 import {
   ConfirmDialog,
+  ErrorState,
   FilterSelect,
   PageHeader,
   SearchInput,
@@ -14,9 +16,9 @@ import TransactionTable from '../components/TransactionTable'
 import TransactionDetail from '../components/TransactionDetail'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
-import { useDebounced, useTools, useTransactions, useUsers } from '../hooks'
+import { useDebounced, useMediaQuery, useTools, useTransactions, useUsers } from '../hooks'
 import * as txnService from '../services/transactions'
-import { canReturnTransaction, PERM } from '../utils/permissions'
+import { canReturnTransaction, isStudent, PERM } from '../utils/permissions'
 import { ACTIVE_TXN_STATUSES, TXN_STATUS, TXN_STATUSES } from '../utils/constants'
 import { downloadCSV } from '../utils/helpers'
 import { formatDate, fromDateInput, toDateInput } from '../utils/dates'
@@ -43,10 +45,78 @@ const CSV_COLUMNS = [
   { key: 'purpose', label: 'Purpose' },
 ]
 
+/**
+ * First-run walkthrough for the borrowing history. Steps point at controls
+ * that really live on this page; `Walkthrough` drops any step whose target is
+ * absent, so the tour stays honest on every account.
+ */
+const transactionsTour = (student) =>
+  student
+    ? [
+        {
+          title: 'Your borrowing history',
+          text: 'Every tool you have taken out and handed back, newest first. Only your own loans appear here.',
+          icon: ClipboardList,
+        },
+        {
+          target: 'txn-summary',
+          title: 'At a glance',
+          text: 'Your total records, what you are holding now, anything overdue, and what you have already returned.',
+          icon: ClipboardList,
+        },
+        {
+          target: 'txn-search',
+          title: 'Find a loan',
+          text: 'Search by tool name or transaction ID to pull up a single record.',
+          icon: Search,
+        },
+        {
+          target: 'txn-filters',
+          title: 'Narrow the list',
+          text: 'Filter by status or date range — handy for checking what is still out.',
+          icon: Filter,
+        },
+        {
+          title: 'Open a record',
+          text: 'Tap a row for the full record: the dates, the condition it went out in, and its due date.',
+          icon: ClipboardList,
+        },
+      ]
+    : [
+        {
+          title: 'Borrowing history',
+          text: 'Every issue and return in the laboratory, newest first, so you can trace any tool.',
+          icon: ClipboardList,
+        },
+        {
+          target: 'txn-summary',
+          title: 'At a glance',
+          text: 'The tiles show total records, tools currently out, overdue loans and returns.',
+          icon: ClipboardList,
+        },
+        {
+          target: 'txn-search',
+          title: 'Find a record',
+          text: 'Search by transaction ID, tool, borrower or purpose.',
+          icon: Search,
+        },
+        {
+          target: 'txn-filters',
+          title: 'Filter the history',
+          text: 'Narrow by status, borrower, tool or date range to focus on what matters.',
+          icon: Filter,
+        },
+        {
+          title: 'Open a transaction',
+          text: 'Select a row to see the full record, extend a loan, or report a tool lost.',
+          icon: ClipboardList,
+        },
+      ]
+
 export default function TransactionsPage() {
   const { user, can } = useApp()
   const toast = useToast()
-  const { transactions, loading } = useTransactions()
+  const { transactions, loading, error, reload } = useTransactions()
   const { tools } = useTools()
   const { users } = useUsers()
   const [searchParams] = useSearchParams()
@@ -64,6 +134,14 @@ export default function TransactionsPage() {
   const [confirm, setConfirm] = useState(null)
   const [busy, setBusy] = useState(false)
   const [extendDate, setExtendDate] = useState('')
+
+  // Once per account on this device, remembered separately from every other page.
+  const tour = usePageTour('transactions', user?.id)
+  const tourSteps = useMemo(() => transactionsTour(isStudent(user)), [user])
+
+  // The phone shell — the same breakpoint the layout switches its rail on.
+  const isPwa = useMediaQuery('(max-width: 1023px)')
+  const showExport = !(isStudent(user) && isPwa)
 
   const canManage = can(PERM.TXN_EDIT)
   const canSeeAll = can(PERM.TXN_VIEW_ALL)
@@ -180,28 +258,24 @@ export default function TransactionsPage() {
 
   return (
     <>
-      <PageHeader
-        title="Transactions"
-        description={
-          canSeeAll
-            ? 'Every borrowing and return recorded in the laboratory.'
-            : 'Your borrowing history.'
-        }
-        icon={ClipboardList}
-      >
-        <button
-          type="button"
-          onClick={exportCSV}
-          className="btn btn-outline"
-          disabled={!filtered.length}
-        >
-          <Download className="h-4 w-4" />
-          <span className="hidden sm:inline">Export CSV</span>
-        </button>
+      <PageHeader hideTitle>
+        {/* A student on the phone has no use for a CSV export; staff and the
+            desktop shell keep it exactly as it was. */}
+        {showExport && (
+          <button
+            type="button"
+            onClick={exportCSV}
+            className="btn btn-outline"
+            disabled={!filtered.length}
+          >
+            <Download className="h-4 w-4" />
+            <span className="hidden sm:inline">Export CSV</span>
+          </button>
+        )}
       </PageHeader>
 
       {/* -------------------------------- summary -------------------------------- */}
-      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div data-tour="txn-summary" className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <SummaryTile label="Records" value={summary.total} />
         <SummaryTile label="Currently out" value={summary.active} tone="text-blue-600 dark:text-blue-400" />
         <SummaryTile label="Overdue" value={summary.overdue} tone="text-red-600 dark:text-red-400" />
@@ -215,13 +289,18 @@ export default function TransactionsPage() {
       {/* -------------------------------- filters -------------------------------- */}
       <div className="card mb-4 p-3">
         <div className="space-y-3">
-          <SearchInput
-            value={search}
-            onChange={setSearch}
-            placeholder="Search by transaction ID, tool, borrower or purpose…"
-          />
+          <div data-tour="txn-search">
+            <SearchInput
+              value={search}
+              onChange={setSearch}
+              placeholder="Search by transaction ID, tool, borrower or purpose…"
+            />
+          </div>
 
-          <div className="no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 pb-0.5">
+          <div
+            data-tour="txn-filters"
+            className="no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 pb-0.5"
+          >
             <FilterSelect
               label="Status"
               value={status}
@@ -280,7 +359,13 @@ export default function TransactionsPage() {
         title={`${filtered.length} transaction${filtered.length === 1 ? '' : 's'}`}
         bodyClassName="p-0"
       >
-        {loading && !transactions.length ? (
+        {error ? (
+          <ErrorState
+            title="Transactions could not be loaded"
+            description={error.message}
+            onRetry={reload}
+          />
+        ) : loading && !transactions.length ? (
           <SkeletonRows rows={6} columns={5} />
         ) : (
           <TransactionTable
@@ -329,6 +414,8 @@ export default function TransactionsPage() {
         confirmLabel={confirm?.confirmLabel}
         loading={busy}
       />
+
+      <Walkthrough steps={tourSteps} open={tour.open} onClose={tour.close} />
     </>
   )
 }

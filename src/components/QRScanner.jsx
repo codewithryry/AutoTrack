@@ -29,6 +29,9 @@ export default function QRScanner({ onDetected, disabled = false }) {
   const scannerRef = useRef(null)
   const startedRef = useRef(false)
   const detectedRef = useRef(false)
+  // Set by the unmount cleanup. A `start()` still in flight at that point checks
+  // this the moment it resolves and shuts the camera down again — see below.
+  const goneRef = useRef(false)
 
   const [state, setState] = useState('idle') // idle | starting | scanning | error
   const [error, setError] = useState(null)
@@ -39,9 +42,21 @@ export default function QRScanner({ onDetected, disabled = false }) {
   const [manualError, setManualError] = useState(null)
 
   /* ------------------------------ teardown ------------------------------ */
-  const stop = useCallback(async () => {
+  /**
+   * Release the camera.
+   *
+   * `force` exists for the unmount path. The normal guard is `startedRef`, but
+   * between `start()` being called and its promise resolving that flag is still
+   * false while the camera is already live — so a plain `stop()` during those
+   * few hundred milliseconds returned immediately and left the device streaming
+   * to a component that no longer existed. The next page that wanted the camera
+   * then got `NotReadableError: already in use`. Forcing the teardown asks
+   * html5-qrcode to stop whatever state it is in, and throwing because it was
+   * not running yet is caught below like any other stop-when-stopped.
+   */
+  const stop = useCallback(async (force = false) => {
     const scanner = scannerRef.current
-    if (!scanner || !startedRef.current) return
+    if (!scanner || (!startedRef.current && !force)) return
     startedRef.current = false
     try {
       await scanner.stop()
@@ -57,7 +72,13 @@ export default function QRScanner({ onDetected, disabled = false }) {
     setState('idle')
   }, [stop])
 
-  useEffect(() => () => void stop(), [stop])
+  useEffect(
+    () => () => {
+      goneRef.current = true
+      void stop(true)
+    },
+    [stop],
+  )
 
   /* ------------------------------- start ------------------------------- */
   const start = useCallback(
@@ -104,11 +125,21 @@ export default function QRScanner({ onDetected, disabled = false }) {
         )
 
         startedRef.current = true
+
+        // The component may have been unmounted while the camera was opening —
+        // navigating away from the scan page is the common case. Hand the device
+        // straight back rather than leaving it streaming into a detached DOM node.
+        if (goneRef.current) {
+          await stop(true)
+          return
+        }
+
         setState('scanning')
 
         // Populate the camera list only once the permission has been granted.
         try {
           const devices = await Html5Qrcode.getCameras()
+          if (goneRef.current) return
           setCameras(devices ?? [])
         } catch {
           setCameras([])
@@ -116,6 +147,7 @@ export default function QRScanner({ onDetected, disabled = false }) {
       } catch (err) {
         console.error('[scanner] start failed', err)
         startedRef.current = false
+        if (goneRef.current) return
         const name = err?.name ?? ''
         setError(
           ERRORS[name] ??
@@ -144,13 +176,16 @@ export default function QRScanner({ onDetected, disabled = false }) {
       return
     }
     setManualError(null)
-    onDetected(manualId.trim())
+    // The canonical id the parser resolved, not the raw keystrokes: typing `14`
+    // should look up — and report itself as — `TOOL-00014`.
+    onDetected(result.toolId)
   }
 
   return (
     <div className="space-y-4">
       {/* ------------------------------ viewport ------------------------------ */}
       <div
+        data-tour="scan-camera"
         className="relative aspect-square w-full overflow-hidden rounded-xl"
         style={{ background: 'rgb(var(--rail))' }}
       >
@@ -237,6 +272,7 @@ export default function QRScanner({ onDetected, disabled = false }) {
         )}
         <button
           type="button"
+          data-tour="scan-manual"
           onClick={() => setManual((v) => !v)}
           className={cx('btn btn-outline', state !== 'scanning' && 'flex-1')}
         >

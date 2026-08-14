@@ -1,17 +1,63 @@
 /**
- * Real-browser verification against the running dev server.
+ * Real-browser smoke test against a running dev server.
  *
- * The boot hang this suite guards against only reproduced in `npm run dev`,
- * because React.StrictMode double-invokes effects in development and not in a
- * production build. jsdom coverage alone would have missed it, so this drives
- * an actual Chromium against an actual Vite dev server with a real IndexedDB.
- *
+ *   npm run dev
  *   node scripts/verify-browser.mjs [baseURL]
+ *
+ * Without credentials it checks the parts that need no account: the shell leaves
+ * its loading state, an unauthenticated visit to a protected route lands on
+ * /login, and nothing throws in the console.
+ *
+ * With credentials for a real account it also signs in and verifies the
+ * role's sidebar and its route guards:
+ *
+ *   STMS_EMAIL=student@autolab.edu.ph STMS_PASSWORD=… STMS_ROLE=Student \
+ *     node scripts/verify-browser.mjs
+ *
+ * A reachable backend is required — this drives the real client, so the account
+ * must exist in whichever project `.env` points at. Prefer a scratch project
+ * over production if a run might create or change records.
  */
 import assert from 'node:assert/strict'
 import { chromium } from 'playwright'
 
 const BASE = process.argv[2] ?? 'http://localhost:5173'
+const EMAIL = process.env.STMS_EMAIL
+const PASSWORD = process.env.STMS_PASSWORD
+const ROLE = process.env.STMS_ROLE ?? 'Admin'
+
+/** The sidebar each role must get — the same matrix as verify-guards. */
+const SIDEBARS = {
+  Admin: [
+    'Dashboard',
+    'Tools',
+    'Scan',
+    'Borrow / Return',
+    'Transactions',
+    'Users',
+    'Maintenance',
+    'Notifications',
+    'Reports',
+    'Settings',
+  ],
+  Instructor: [
+    'Dashboard',
+    'Tools',
+    'Scan',
+    'Borrow / Return',
+    'Transactions',
+    'Maintenance',
+    'Notifications',
+  ],
+  Student: ['Dashboard', 'Tools', 'Scan', 'Borrow / Return', 'Transactions', 'Notifications'],
+}
+
+/** Routes each role must be refused, even when typed into the address bar. */
+const FORBIDDEN = {
+  Admin: [],
+  Instructor: ['/users', '/reports', '/settings'],
+  Student: ['/users', '/reports', '/settings', '/maintenance'],
+}
 
 let passed = 0
 const failures = []
@@ -31,9 +77,8 @@ const section = (title) => console.log(`\n— ${title} —`)
 
 const browser = await chromium.launch()
 
-/** A fresh context each time = a fresh, empty IndexedDB and localStorage. */
-async function newPage({ context } = {}) {
-  const ctx = context ?? (await browser.newContext())
+async function newPage() {
+  const ctx = await browser.newContext()
   const page = await ctx.newPage()
   const errors = []
   page.on('console', (msg) => {
@@ -44,281 +89,197 @@ async function newPage({ context } = {}) {
   return { page, ctx }
 }
 
-const BOOT_TEXT = 'Opening the laboratory database'
-
-/** Wait for the boot screen to clear, failing loudly if it never does. */
-async function waitForBoot(page, timeout = 20_000) {
+/** The shell holds a boot screen until the session has resolved. */
+async function waitForApp(page, timeout = 30_000) {
   await page.waitForFunction(
-    (marker) => !document.body.innerText.includes(marker),
-    BOOT_TEXT,
+    () => !document.body.innerText.includes('Checking your laboratory session'),
+    undefined,
     { timeout },
   )
 }
 
-section('cold start with an empty IndexedDB')
+section('public homepage')
 
-let sharedCtx
-
-await test('/login leaves the boot screen and renders the login page', async () => {
+{
   const { page, ctx } = await newPage()
-  sharedCtx = ctx
-  await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' })
 
-  // The boot screen is expected first, then it must go away.
-  await waitForBoot(page)
-  await page.waitForSelector('#username', { timeout: 10_000 })
-
-  const body = await page.innerText('body')
-  assert.ok(!body.includes(BOOT_TEXT), 'still stuck on the boot screen')
-  assert.match(body, /Sign in/i)
-  assert.match(body, /Demo accounts/i)
-  await page.close()
-})
-
-await test('the boot completes cleanly, with stage logging in development', async () => {
-  const ctx = await browser.newContext()
-  const { page } = await newPage({ context: ctx })
-  const logs = []
-  page.on('console', (msg) => logs.push(msg.text()))
-
-  await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' })
-  await waitForBoot(page)
-  await page.waitForSelector('#username')
-
-  // Stage logs are gated behind import.meta.env.DEV, so a production bundle
-  // legitimately has none. Assert on them only when they are present.
-  const boot = logs.filter((l) => l.includes('[BOOT]'))
-  if (boot.length) {
-    assert.ok(boot.some((l) => /starting application/i.test(l)), 'logged the start')
-    assert.ok(boot.some((l) => /database initialised/i.test(l)), 'logged database init')
-    assert.ok(boot.some((l) => /application boot complete/i.test(l)), 'logged completion')
-  } else {
-    console.log('        (production bundle — boot stage logs are stripped, as intended)')
-  }
-  assert.deepEqual(page.errors, [], 'console errors during boot')
-  await ctx.close()
-})
-
-section('seeded data and sign-in')
-
-await test('signing in as admin reaches the dashboard with real data', async () => {
-  const { page, ctx } = await newPage()
-  await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' })
-  await waitForBoot(page)
-
-  await page.fill('#username', 'admin')
-  await page.fill('#password', 'admin123')
-  await page.click('button[type="submit"]')
-
-  await page.waitForURL('**/dashboard', { timeout: 15_000 })
-  await page.waitForSelector('text=Total tools', { timeout: 15_000 })
-
-  const body = await page.innerText('body')
-  assert.match(body, /Total tools/i)
-  assert.match(body, /Recent transactions/i)
-  assert.match(body, /Combination Wrench|Torque Wrench|Socket Set/i, 'seeded tools are shown')
-  assert.deepEqual(page.errors, [], 'console errors after sign-in')
-
-  // Keep this context: the next test reloads it to prove persistence.
-  sharedCtx = ctx
-  await page.close()
-})
-
-await test('a refresh keeps the session and the data (persistence)', async () => {
-  const { page } = await newPage({ context: sharedCtx })
-  await page.goto(`${BASE}/dashboard`, { waitUntil: 'domcontentloaded' })
-  await waitForBoot(page)
-  await page.waitForSelector('text=Total tools', { timeout: 15_000 })
-
-  const body = await page.innerText('body')
-  assert.ok(!body.includes(BOOT_TEXT), 'the boot screen returned on reload')
-  assert.match(body, /Total tools/i, 'the dashboard survived the refresh')
-  assert.deepEqual(page.errors, [], 'console errors after refresh')
-  await page.close()
-})
-
-await test('a warm second boot over existing data still completes', async () => {
-  const { page } = await newPage({ context: sharedCtx })
-  await page.goto(`${BASE}/tools`, { waitUntil: 'domcontentloaded' })
-  await waitForBoot(page)
-  await page.waitForSelector('text=Tool inventory', { timeout: 15_000 })
-  assert.deepEqual(page.errors, [], 'console errors on a warm boot')
-  await page.close()
-})
-
-section('routes')
-
-const ROUTES = [
-  ['/dashboard', /Total tools/i],
-  ['/tools', /Tool inventory/i],
-  ['/tools/TOOL-00001', /Tool record/i],
-  ['/tools/TOOL-00001/history', /Activity timeline/i],
-  ['/scan', /Scan a tool/i],
-  ['/borrow', /Borrow a tool/i],
-  ['/return', /Return a tool/i],
-  ['/transactions', /Transactions/i],
-  ['/users', /accounts/i],
-  ['/notifications', /Notifications/i],
-  ['/maintenance', /Service schedule/i],
-  ['/reports', /Return rate/i],
-  ['/settings', /Laboratory/i],
-]
-
-for (const [route, expected] of ROUTES) {
-  await test(`renders ${route} without an endless boot`, async () => {
-    const { page } = await newPage({ context: sharedCtx })
-    await page.goto(`${BASE}${route}`, { waitUntil: 'domcontentloaded' })
-    await waitForBoot(page)
-    await page.waitForFunction(
-      (pattern) => new RegExp(pattern, 'i').test(document.body.innerText),
-      expected.source,
-      { timeout: 15_000 },
-    )
-    assert.deepEqual(page.errors, [], `console errors on ${route}`)
-    await page.close()
+  await test('the homepage is reachable without an account', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' })
+    await waitForApp(page)
+    // `innerText` reflects CSS, so uppercased headings come back uppercased.
+    const text = await page.locator('body').innerText()
+    assert.match(text, /Smart Tool Management for/i, 'the hero headline is missing')
+    assert.match(text, /Automotive Laboratory Tool Management System/i, 'the subtitle is missing')
+    assert.match(page.url(), /\/$/, `expected to stay on /, got ${page.url()}`)
   })
+
+  await test('every homepage section is present', async () => {
+    const text = await page.locator('body').innerText()
+    for (const marker of [
+      'Tool Management',
+      'Borrow & Return',
+      'Real-Time Monitoring',
+      'Transaction Tracking',
+      'Role-Based Access',
+      'Maintenance Monitoring',
+      'Sign in to your account',
+      'Administrator',
+      'Instructor',
+      'Student',
+      'Ready to manage your laboratory tools smarter?',
+      'SMART TOOL MONITORING SYSTEM',
+    ]) {
+      assert.ok(text.includes(marker) || text.includes(marker.toUpperCase()), `missing: ${marker}`)
+    }
+  })
+
+  await test('the page does not scroll horizontally on a phone', async () => {
+    await page.setViewportSize({ width: 360, height: 740 })
+    await page.waitForTimeout(150)
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    )
+    assert.ok(overflow <= 1, `horizontal overflow of ${overflow}px at 360px wide`)
+    await page.setViewportSize({ width: 1280, height: 800 })
+  })
+
+  await test('Get Started goes to /signup', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' })
+    await waitForApp(page)
+    await page.getByRole('link', { name: 'Get Started' }).first().click()
+    await page.waitForURL(/\/signup$/, { timeout: 15_000 })
+    await page.waitForSelector('#email')
+    const text = await page.locator('body').innerText()
+    assert.match(text, /Create account/)
+  })
+
+  await test('Sign In goes to /login', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' })
+    await waitForApp(page)
+    await page.getByRole('link', { name: 'Sign In' }).first().click()
+    await page.waitForURL(/\/login$/, { timeout: 15_000 })
+    await page.waitForSelector('#password')
+  })
+
+  await test('the sign-up form refuses an incomplete submission', async () => {
+    await page.goto(`${BASE}/signup`, { waitUntil: 'domcontentloaded' })
+    await waitForApp(page)
+    await page.click('button[type=submit]')
+    const text = await page.locator('body').innerText()
+    assert.match(text, /Please enter your first name/)
+    assert.match(text, /Please enter your email address|Please enter a valid email address/)
+    assert.match(page.url(), /\/signup$/, 'an invalid form must not navigate')
+  })
+
+  await test('the sign-up form never offers an administrator role', async () => {
+    // Only the role titles matter: the instructor card legitimately mentions
+    // administrator approval in its supporting text.
+    const choices = await page.locator('button[aria-pressed]').allInnerTexts()
+    assert.ok(choices.length >= 2, 'the role choice is missing')
+    const titles = choices.map((c) => c.split('\n').find(Boolean)?.trim())
+    assert.deepEqual(titles, ['Student', 'Instructor'], `unexpected role choices: ${titles}`)
+    // And no free-text or select control that could smuggle one in.
+    assert.equal(await page.locator('select[name=role], #role').count(), 0)
+  })
+
+  await test('password rules are enforced before the backend is called', async () => {
+    await page.fill('#email', 'someone@autolab.edu.ph')
+    await page.fill('#password', 'short')
+    await page.click('button[type=submit]')
+    const text = await page.locator('body').innerText()
+    assert.match(text, /at least 8 characters/)
+  })
+
+  await test('no console errors across the public pages', async () => {
+    assert.deepEqual(page.errors, [])
+  })
+
+  await ctx.close()
 }
 
-section('borrow and return through the real UI')
+section('unauthenticated access')
 
-await test('an admin can issue a tool and the inventory updates', async () => {
-  const { page } = await newPage({ context: sharedCtx })
-  await page.goto(`${BASE}/tools`, { waitUntil: 'domcontentloaded' })
-  await waitForBoot(page)
-  await page.waitForSelector('text=Tool inventory')
+{
+  const { page, ctx } = await newPage()
 
-  // Find an available tool through the app's own filter, then borrow it.
-  await page.goto(`${BASE}/borrow`, { waitUntil: 'domcontentloaded' })
-  await waitForBoot(page)
-  await page.waitForSelector('text=Select a tool', { timeout: 15_000 })
-
-  const firstTool = page.locator('ul li button').first()
-  await firstTool.waitFor({ timeout: 10_000 })
-  const toolLabel = (await firstTool.innerText()).split('\n')[0].trim()
-  await firstTool.click()
-
-  await page.waitForSelector('text=Borrowing details', { timeout: 10_000 })
-  await page.selectOption('select:below(:text("Borrower"))', { index: 1 }).catch(() => {})
-
-  const confirm = page.locator('button:has-text("Confirm borrowing")')
-  await confirm.waitFor({ timeout: 10_000 })
-  await confirm.click()
-
-  await page.waitForURL('**/tools/**', { timeout: 15_000 })
-  const body = await page.innerText('body')
-  assert.match(body, /Currently held by|Borrowed/i, `${toolLabel} was not issued`)
-  assert.deepEqual(page.errors, [], 'console errors during borrowing')
-  await page.close()
-})
-
-section('role permissions in the browser')
-
-await test('a student is refused the restricted areas', async () => {
-  const ctx = await browser.newContext()
-  const { page } = await newPage({ context: ctx })
-  await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' })
-  await waitForBoot(page)
-
-  await page.fill('#username', 'student')
-  await page.fill('#password', 'student123')
-  await page.click('button[type="submit"]')
-  await page.waitForURL('**/dashboard', { timeout: 15_000 })
-
-  for (const route of ['/users', '/reports']) {
-    await page.goto(`${BASE}${route}`, { waitUntil: 'domcontentloaded' })
-    await waitForBoot(page)
-    await page.waitForSelector('text=Restricted area', { timeout: 10_000 })
-  }
-  assert.deepEqual(page.errors, [], 'console errors as a student')
-  await ctx.close()
-})
-
-section('PWA / offline')
-
-/**
- * The service worker is disabled in the dev server (`devOptions.enabled:
- * false`), so these run only when a production build is being served.
- */
-await test('the service worker registers and serves the app offline', async () => {
-  const ctx = await browser.newContext()
-  const { page } = await newPage({ context: ctx })
-  await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' })
-  await waitForBoot(page)
-  await page.waitForSelector('#username', { timeout: 15_000 })
-
-  const swState = await page.evaluate(async () => {
-    if (!('serviceWorker' in navigator)) return 'unsupported'
-    const reg = await Promise.race([
-      navigator.serviceWorker.ready,
-      new Promise((r) => setTimeout(() => r(null), 8000)),
-    ])
-    return reg?.active ? 'active' : 'none'
+  await test('the login route shows the sign-in form', async () => {
+    await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' })
+    await waitForApp(page)
+    await page.waitForSelector('#email', { timeout: 15_000 })
+    assert.ok(await page.locator('#password').count(), 'password field missing')
   })
 
-  if (swState !== 'active') {
-    console.log('        (dev server — the service worker is intentionally disabled, skipped)')
-    await ctx.close()
-    return
-  }
-
-  // Sign in so there is real data in IndexedDB, then cut the network.
-  await page.fill('#username', 'admin')
-  await page.fill('#password', 'admin123')
-  await page.click('button[type="submit"]')
-  await page.waitForSelector('text=Total tools', { timeout: 15_000 })
-
-  await ctx.setOffline(true)
-
-  await page.reload({ waitUntil: 'domcontentloaded' })
-  await page.waitForSelector('text=Total tools', { timeout: 20_000 })
-  const offlineBody = await page.innerText('body')
-  assert.match(offlineBody, /Total tools/i, 'the dashboard did not load offline')
-  assert.match(offlineBody, /Wrench|Socket|Multimeter/i, 'seeded records were not readable offline')
-
-  // A deep route offline exercises the navigation fallback.
-  await page.goto(`${BASE}/tools`, { waitUntil: 'domcontentloaded' })
-  await page.waitForSelector('text=Tool inventory', { timeout: 20_000 })
-
-  const caches = await page.evaluate(() => window.caches.keys())
-  assert.ok(
-    caches.some((c) => /workbox-precache/.test(c)),
-    'the precache was not populated',
-  )
-
-  await ctx.setOffline(false)
-  await ctx.close()
-})
-
-section('failure handling')
-
-await test('a browser with IndexedDB blocked shows an error, not an endless boot', async () => {
-  const ctx = await browser.newContext()
-  const { page } = await newPage({ context: ctx })
-
-  // Break IndexedDB before any application code runs.
-  await page.addInitScript(() => {
-    Object.defineProperty(window, 'indexedDB', {
-      configurable: true,
-      get() {
-        throw new Error('IndexedDB is disabled in this browsing context.')
-      },
-    })
+  await test('a protected route redirects to /login', async () => {
+    await page.goto(`${BASE}/users`, { waitUntil: 'domcontentloaded' })
+    await waitForApp(page)
+    await page.waitForSelector('#email', { timeout: 15_000 })
+    assert.match(page.url(), /\/login$/, `expected /login, got ${page.url()}`)
   })
 
-  await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' })
-  await page.waitForSelector('text=Unable to start', { timeout: 25_000 })
+  await test('the login screen offers no demo credentials', async () => {
+    const text = await page.locator('body').innerText()
+    assert.doesNotMatch(text, /admin123|instructor123|student123/, 'a demo password is on screen')
+  })
 
-  const body = await page.innerText('body')
-  assert.ok(!body.includes(BOOT_TEXT), 'left booting after a database failure')
-  assert.match(body, /Try again/i, 'a retry control is offered')
+  await test('no console errors on the login screen', async () => {
+    assert.deepEqual(page.errors, [])
+  })
+
   await ctx.close()
-})
+}
 
-/* ------------------------------ summary ------------------------------ */
+if (!EMAIL || !PASSWORD) {
+  section('signed-in checks skipped')
+  console.log('  Set STMS_EMAIL, STMS_PASSWORD and STMS_ROLE to run them.')
+} else {
+  section(`signed in as ${ROLE}`)
+  const { page, ctx } = await newPage()
+
+  await test('sign-in reaches the dashboard', async () => {
+    // `/` is the public homepage now; the form lives on /login.
+    await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' })
+    await waitForApp(page)
+    await page.waitForSelector('#email', { timeout: 20_000 })
+    await page.fill('#email', EMAIL)
+    await page.fill('#password', PASSWORD)
+    await page.click('button[type=submit]')
+    await page.waitForURL(/\/dashboard/, { timeout: 30_000 })
+  })
+
+  await test('the sidebar matches the role', async () => {
+    const links = await page.locator('aside nav a').allInnerTexts()
+    const labels = links.map((l) => l.split('\n')[0].trim()).filter(Boolean)
+    assert.deepEqual(labels, SIDEBARS[ROLE], `unexpected navigation for ${ROLE}`)
+  })
+
+  await test('forbidden routes show the restricted page', async () => {
+    for (const route of FORBIDDEN[ROLE]) {
+      await page.goto(`${BASE}${route}`, { waitUntil: 'domcontentloaded' })
+      await waitForApp(page)
+      const text = await page.locator('body').innerText()
+      assert.match(text, /Restricted area/, `${route} was not refused for ${ROLE}`)
+    }
+  })
+
+  await test('the session survives a reload', async () => {
+    await page.goto(`${BASE}/dashboard`, { waitUntil: 'domcontentloaded' })
+    await waitForApp(page)
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await waitForApp(page)
+    assert.match(page.url(), /\/dashboard/, 'the reload lost the session')
+    const text = await page.locator('body').innerText()
+    assert.doesNotMatch(text, /Sign in/, 'the reload bounced to the login screen')
+  })
+
+  await test('no console errors while signed in', async () => {
+    const ignorable = /favicon|Download the React DevTools/i
+    assert.deepEqual(page.errors.filter((e) => !ignorable.test(e)), [])
+  })
+
+  await ctx.close()
+}
 
 await browser.close()
-console.log(`\n${passed} checks passed${failures.length ? `, ${failures.length} FAILED` : ''}\n`)
-if (failures.length) {
-  for (const { name, err } of failures) console.error(`FAILED: ${name}\n${err.stack ?? err}\n`)
-  process.exit(1)
-}
+
+console.log(`\n${passed} checks passed, ${failures.length} failed\n`)
+if (failures.length) process.exit(1)

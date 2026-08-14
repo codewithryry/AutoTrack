@@ -4,6 +4,13 @@
  * The suites import application source directly, so they are bundled with
  * esbuild first (Node cannot resolve the extensionless imports Vite allows).
  * Output goes to node_modules/.cache so nothing lands in the repository.
+ *
+ * Two suites run without any network connection:
+ *
+ *   domain logic    the pure modules — dates, permissions, QR, helpers.
+ *   access control  role → navigation, route guards, and the source-hygiene
+ *                   invariants (no credentials in the bundle, no database call
+ *                   outside the data layer).
  */
 import { execFileSync } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
@@ -17,9 +24,7 @@ mkdirSync(cache, { recursive: true })
 
 const SUITES = [
   { name: 'domain logic', entry: 'scripts/verify-logic.mjs', out: 'verify-logic.mjs' },
-  { name: 'workflow', entry: 'scripts/verify-workflow.mjs', out: 'verify-workflow.mjs' },
-  { name: 'boot sequence', entry: 'scripts/verify-boot.mjs', out: 'verify-boot.mjs' },
-  { name: 'user interface', entry: 'scripts/verify-ui.mjs', out: 'verify-ui.mjs', jsx: true },
+  { name: 'access control', entry: 'scripts/verify-guards.mjs', out: 'verify-guards.mjs' },
 ]
 
 let failed = false

@@ -1,9 +1,9 @@
 import * as db from '../services/db'
 import { COLLECTIONS } from '../services/db'
-import { buildCredentials } from '../services/users'
 import { buildQRPayload } from '../utils/qr'
 import { generateTxnId, padId, uid } from '../utils/helpers'
 import { addDaysISO, nowISO } from '../utils/dates'
+import { PERM, assertCan } from '../utils/permissions'
 import {
   ACTIVITY,
   CONDITION,
@@ -17,15 +17,26 @@ import {
 } from '../utils/constants'
 
 /**
- * First-run demo data for an automotive laboratory.
+ * Demo data for an automotive laboratory, written by an
+ * administrator from Settings → Data management.
  *
- * Dates are generated relative to today so the dashboard always looks live:
- * there are loans due tomorrow, loans already overdue, returns from last week
- * and maintenance scheduled for next month, no matter when the app is opened.
+ * Two deliberate differences from the previous local build:
+ *
+ *  * **No accounts are seeded.** A profile document is only meaningful next to a
+ *    sign-in account, and creating accounts needs a password —
+ *    which is exactly what a seed file must never contain. Demo transactions are
+ *    therefore built against the accounts that already exist, and are skipped
+ *    entirely when the directory only holds the administrator.
+ *  * **It never runs by itself.** There is no "seed if empty" on boot: an
+ *    unattended write to a shared database is not something a page load should
+ *    do. An empty laboratory is a legitimate state.
+ *
+ * Dates are generated relative to today, so the dashboard always has loans due
+ * tomorrow, overdue loans and recent returns however long after setup it is run.
  */
 
 /* ------------------------------------------------------------------ *
- * Tools — 32 records across the automotive categories
+ * Tools — 43 records across the automotive categories
  * ------------------------------------------------------------------ */
 
 const TOOL_CATALOG = [
@@ -84,25 +95,6 @@ const TOOL_CATALOG = [
   { name: 'Wheel Chock Set', category: 'Safety Equipment', brand: 'Generic', model: 'WC-4R', location: 'Safety Equipment Locker', condition: CONDITION.GOOD, description: 'Rubber wheel chocks for lifting operations.' },
 ]
 
-/* ------------------------------------------------------------------ *
- * Users
- * ------------------------------------------------------------------ */
-
-const USER_CATALOG = [
-  { fullName: 'Ramon L. Villanueva', username: 'admin', password: 'admin123', role: ROLE.ADMIN, email: 'r.villanueva@autolab.edu.ph', contact: '0917 442 1180', course: '', yearLevel: 'N/A', studentId: '' },
-  { fullName: 'Engr. Carlos M. Bautista', username: 'instructor', password: 'instructor123', role: ROLE.INSTRUCTOR, email: 'c.bautista@autolab.edu.ph', contact: '0918 330 7745', course: '', yearLevel: 'N/A', studentId: '' },
-  { fullName: 'Juan Dela Cruz', username: 'student', password: 'student123', role: ROLE.STUDENT, email: 'j.delacruz@autolab.edu.ph', contact: '0920 118 3364', course: 'BS Automotive Engineering Technology', yearLevel: '3rd Year', studentId: '2022-04517' },
-  { fullName: 'Engr. Lourdes A. Fernandez', username: 'lfernandez', password: 'instructor123', role: ROLE.INSTRUCTOR, email: 'l.fernandez@autolab.edu.ph', contact: '0917 220 4419', course: '', yearLevel: 'N/A', studentId: '' },
-  { fullName: 'Maria Santos', username: 'msantos', password: 'student123', role: ROLE.STUDENT, email: 'm.santos@autolab.edu.ph', contact: '0921 776 2280', course: 'BS Automotive Engineering Technology', yearLevel: '3rd Year', studentId: '2022-04522' },
-  { fullName: 'Pedro Reyes', username: 'preyes', password: 'student123', role: ROLE.STUDENT, email: 'p.reyes@autolab.edu.ph', contact: '0915 883 1027', course: 'Diploma in Automotive Technology', yearLevel: '2nd Year', studentId: '2023-01188' },
-  { fullName: 'Angelo Mercado', username: 'amercado', password: 'student123', role: ROLE.STUDENT, email: 'a.mercado@autolab.edu.ph', contact: '0906 442 9931', course: 'Automotive Servicing NC II', yearLevel: '1st Year', studentId: '2024-00743' },
-  { fullName: 'Kristine Joy Ocampo', username: 'kocampo', password: 'student123', role: ROLE.STUDENT, email: 'k.ocampo@autolab.edu.ph', contact: '0977 512 6640', course: 'BS Automotive Engineering Technology', yearLevel: '4th Year', studentId: '2021-03310' },
-  { fullName: 'Miguel Torres', username: 'mtorres', password: 'student123', role: ROLE.STUDENT, email: 'm.torres@autolab.edu.ph', contact: '0929 604 7712', course: 'Diploma in Automotive Technology', yearLevel: '2nd Year', studentId: '2023-01204' },
-  { fullName: 'Danilo Aguilar', username: 'daguilar', password: 'student123', role: ROLE.STUDENT, email: 'd.aguilar@autolab.edu.ph', contact: '0933 118 5529', course: 'Automotive Servicing NC III', yearLevel: '3rd Year', studentId: '2022-04698' },
-  { fullName: 'Sofia Ramirez', username: 'sramirez', password: 'student123', role: ROLE.STUDENT, email: 's.ramirez@autolab.edu.ph', contact: '0908 337 2214', course: 'BS Mechanical Engineering', yearLevel: '2nd Year', studentId: '2023-02087' },
-  { fullName: 'Noel Bautista', username: 'nbautista', password: 'student123', role: ROLE.STUDENT, email: 'n.bautista@autolab.edu.ph', contact: '0946 771 3308', course: 'Automotive Servicing NC II', yearLevel: '1st Year', studentId: '2024-00811', status: USER_STATUS.INACTIVE },
-]
-
 const PURPOSES = [
   'Engine disassembly laboratory activity',
   'Brake system service practical',
@@ -120,31 +112,6 @@ const PURPOSES = [
  * Builders
  * ------------------------------------------------------------------ */
 
-async function buildUsers() {
-  const users = []
-  for (let i = 0; i < USER_CATALOG.length; i++) {
-    const entry = USER_CATALOG[i]
-    const { salt, passwordHash } = await buildCredentials(entry.password)
-    users.push({
-      id: padId('USR', i + 1, 4),
-      fullName: entry.fullName,
-      username: entry.username,
-      role: entry.role,
-      studentId: entry.studentId ?? '',
-      course: entry.course ?? '',
-      yearLevel: entry.yearLevel ?? 'N/A',
-      contact: entry.contact ?? '',
-      email: entry.email ?? '',
-      status: entry.status ?? USER_STATUS.ACTIVE,
-      salt,
-      passwordHash,
-      createdAt: addDaysISO(new Date(), -(180 - i * 7)),
-      updatedAt: nowISO(),
-    })
-  }
-  return users
-}
-
 function buildTools() {
   return TOOL_CATALOG.map((entry, i) => {
     const id = padId('TOOL', i + 1)
@@ -153,6 +120,7 @@ function buildTools() {
     return {
       id,
       name: entry.name,
+      toolCode: id,
       category: entry.category,
       description: entry.description ?? '',
       brand: entry.brand ?? '',
@@ -162,6 +130,10 @@ function buildTools() {
       location: entry.location,
       condition: entry.condition,
       status: TOOL_STATUS.AVAILABLE,
+      currentBorrowerId: null,
+      currentTransactionId: null,
+      quantity: 1,
+      imageUrl: null,
       purchaseDate: addDaysISO(new Date(), purchaseOffset),
       lastMaintenanceDate: addDaysISO(new Date(), lastMaintOffset),
       nextMaintenanceDate: addDaysISO(new Date(), lastMaintOffset + 90),
@@ -175,59 +147,60 @@ function buildTools() {
 /**
  * Transaction plan.
  *
- * `dayOffsets` are relative to today, so the seeded data always contains live
- * overdue loans, loans due tomorrow, and a history of completed returns.
+ * `borrower` indexes into whatever borrowers actually exist, so the same plan
+ * works with three demo accounts or thirty. `due` offsets are relative to today,
+ * which keeps live overdue loans in the data whenever it is seeded.
  */
 const TRANSACTION_PLAN = [
-  // --- Open loans, still within their due date ---
-  { toolIndex: 1, userIndex: 2, borrow: -1, due: 1, state: 'open' },
-  { toolIndex: 15, userIndex: 4, borrow: -1, due: 2, state: 'open' },
-  { toolIndex: 22, userIndex: 7, borrow: -2, due: 1, state: 'open' },
-  { toolIndex: 26, userIndex: 5, borrow: 0, due: 3, state: 'open' },
-  { toolIndex: 33, userIndex: 8, borrow: -1, due: 4, state: 'open' },
-  { toolIndex: 12, userIndex: 3, borrow: -2, due: 2, state: 'open' },
+  // Open loans, still within their due date
+  { toolIndex: 1, borrower: 0, borrow: -1, due: 1, state: 'open' },
+  { toolIndex: 15, borrower: 1, borrow: -1, due: 2, state: 'open' },
+  { toolIndex: 22, borrower: 2, borrow: -2, due: 1, state: 'open' },
+  { toolIndex: 26, borrower: 3, borrow: 0, due: 3, state: 'open' },
+  { toolIndex: 33, borrower: 4, borrow: -1, due: 4, state: 'open' },
+  { toolIndex: 12, borrower: 0, borrow: -2, due: 2, state: 'open' },
 
-  // --- Overdue loans ---
-  { toolIndex: 5, userIndex: 6, borrow: -9, due: -4, state: 'open' },
-  { toolIndex: 18, userIndex: 9, borrow: -12, due: -6, state: 'open' },
-  { toolIndex: 30, userIndex: 10, borrow: -7, due: -2, state: 'open' },
+  // Overdue loans
+  { toolIndex: 5, borrower: 1, borrow: -9, due: -4, state: 'open' },
+  { toolIndex: 18, borrower: 2, borrow: -12, due: -6, state: 'open' },
+  { toolIndex: 30, borrower: 3, borrow: -7, due: -2, state: 'open' },
 
-  // --- Completed returns ---
-  { toolIndex: 0, userIndex: 2, borrow: -20, due: -17, returned: -18, state: 'returned', condition: CONDITION.GOOD },
-  { toolIndex: 2, userIndex: 4, borrow: -18, due: -15, returned: -16, state: 'returned', condition: CONDITION.EXCELLENT },
-  { toolIndex: 16, userIndex: 5, borrow: -16, due: -13, returned: -14, state: 'returned', condition: CONDITION.GOOD },
-  { toolIndex: 23, userIndex: 6, borrow: -15, due: -12, returned: -12, state: 'returned', condition: CONDITION.GOOD, late: true },
-  { toolIndex: 9, userIndex: 7, borrow: -14, due: -11, returned: -11, state: 'returned', condition: CONDITION.FAIR },
-  { toolIndex: 27, userIndex: 8, borrow: -30, due: -27, returned: -28, state: 'returned', condition: CONDITION.GOOD },
-  { toolIndex: 3, userIndex: 9, borrow: -28, due: -25, returned: -26, state: 'returned', condition: CONDITION.GOOD },
-  { toolIndex: 20, userIndex: 3, borrow: -25, due: -22, returned: -23, state: 'returned', condition: CONDITION.EXCELLENT },
-  { toolIndex: 36, userIndex: 10, borrow: -22, due: -19, returned: -20, state: 'returned', condition: CONDITION.GOOD },
-  { toolIndex: 6, userIndex: 4, borrow: -45, due: -42, returned: -43, state: 'returned', condition: CONDITION.GOOD },
-  { toolIndex: 1, userIndex: 5, borrow: -40, due: -37, returned: -38, state: 'returned', condition: CONDITION.GOOD },
-  { toolIndex: 15, userIndex: 2, borrow: -38, due: -35, returned: -36, state: 'returned', condition: CONDITION.EXCELLENT },
-  { toolIndex: 24, userIndex: 6, borrow: -60, due: -57, returned: -58, state: 'returned', condition: CONDITION.GOOD },
-  { toolIndex: 8, userIndex: 7, borrow: -55, due: -52, returned: -53, state: 'returned', condition: CONDITION.GOOD },
+  // Completed returns
+  { toolIndex: 0, borrower: 0, borrow: -20, due: -17, returned: -18, state: 'returned', condition: CONDITION.GOOD },
+  { toolIndex: 2, borrower: 1, borrow: -18, due: -15, returned: -16, state: 'returned', condition: CONDITION.EXCELLENT },
+  { toolIndex: 16, borrower: 2, borrow: -16, due: -13, returned: -14, state: 'returned', condition: CONDITION.GOOD },
+  { toolIndex: 23, borrower: 3, borrow: -15, due: -12, returned: -12, state: 'returned', condition: CONDITION.GOOD, late: true },
+  { toolIndex: 9, borrower: 4, borrow: -14, due: -11, returned: -11, state: 'returned', condition: CONDITION.FAIR },
+  { toolIndex: 27, borrower: 0, borrow: -30, due: -27, returned: -28, state: 'returned', condition: CONDITION.GOOD },
+  { toolIndex: 3, borrower: 1, borrow: -28, due: -25, returned: -26, state: 'returned', condition: CONDITION.GOOD },
+  { toolIndex: 20, borrower: 2, borrow: -25, due: -22, returned: -23, state: 'returned', condition: CONDITION.EXCELLENT },
+  { toolIndex: 36, borrower: 3, borrow: -22, due: -19, returned: -20, state: 'returned', condition: CONDITION.GOOD },
+  { toolIndex: 6, borrower: 4, borrow: -45, due: -42, returned: -43, state: 'returned', condition: CONDITION.GOOD },
+  { toolIndex: 1, borrower: 0, borrow: -40, due: -37, returned: -38, state: 'returned', condition: CONDITION.GOOD },
+  { toolIndex: 24, borrower: 1, borrow: -60, due: -57, returned: -58, state: 'returned', condition: CONDITION.GOOD },
+  { toolIndex: 8, borrower: 2, borrow: -55, due: -52, returned: -53, state: 'returned', condition: CONDITION.GOOD },
 
-  // --- Returned damaged ---
-  { toolIndex: 34, userIndex: 9, borrow: -11, due: -8, returned: -9, state: 'damaged', condition: CONDITION.DAMAGED },
+  // Returned damaged
+  { toolIndex: 34, borrower: 3, borrow: -11, due: -8, returned: -9, state: 'damaged', condition: CONDITION.DAMAGED },
 ]
 
-function buildTransactions(tools, users) {
+function buildTransactions(tools, borrowers, issuer) {
   const transactions = []
   const toolPatches = new Map()
   const logs = []
   const notifs = []
 
+  if (!borrowers.length) return { transactions, toolPatches, logs, notifs }
+
   TRANSACTION_PLAN.forEach((plan, index) => {
     const tool = tools[plan.toolIndex]
-    const user = users[plan.userIndex]
+    const user = borrowers[plan.borrower % borrowers.length]
     if (!tool || !user) return
 
     const borrowDate = addDaysISO(new Date(), plan.borrow)
     const dueDate = addDaysISO(new Date(), plan.due)
     const returnDate = plan.returned != null ? addDaysISO(new Date(), plan.returned) : null
     const purpose = PURPOSES[index % PURPOSES.length]
-    const issuer = users[index % 2 === 0 ? 1 : 3] // an instructor issued it
 
     let status = TXN_STATUS.BORROWED
     if (plan.state === 'returned') status = TXN_STATUS.RETURNED
@@ -251,10 +224,10 @@ function buildTransactions(tools, users) {
       wasOverdue: Boolean(plan.late) || (plan.state === 'open' && plan.due < 0),
       purpose,
       notes: '',
-      issuedById: issuer.id,
-      issuedByName: issuer.fullName,
-      receivedById: returnDate ? issuer.id : null,
-      receivedByName: returnDate ? issuer.fullName : null,
+      issuedById: issuer?.id ?? null,
+      issuedByName: issuer?.fullName ?? null,
+      receivedById: returnDate ? (issuer?.id ?? null) : null,
+      receivedByName: returnDate ? (issuer?.fullName ?? null) : null,
       createdAt: borrowDate,
       updatedAt: returnDate ?? borrowDate,
     }
@@ -272,9 +245,12 @@ function buildTransactions(tools, users) {
     })
 
     if (plan.state === 'open') {
-      // The tool is still out — the overdue sweep will finish the job on load.
+      // The borrower is recorded on the tool as well, so they can return it
+      // themselves — that is the link the security rules check.
       toolPatches.set(tool.id, {
         status: plan.due < 0 ? TOOL_STATUS.OVERDUE : TOOL_STATUS.BORROWED,
+        currentBorrowerId: user.id,
+        currentTransactionId: txn.id,
       })
       if (plan.due < 0) {
         logs.push({
@@ -299,7 +275,6 @@ function buildTransactions(tools, users) {
           createdAt: addDaysISO(new Date(), plan.due + 1),
         })
       }
-      // A loan already inside the warning window gets its due-soon reminder.
       if (plan.due >= 0 && plan.due <= 1) {
         notifs.push({
           type: NOTIF_TYPE.DUE_SOON,
@@ -318,7 +293,6 @@ function buildTransactions(tools, users) {
         })
       }
     } else {
-      // Recent returns stay in the feed; older ones would only add noise.
       if (plan.returned != null && plan.returned >= -14 && plan.state !== 'damaged') {
         notifs.push({
           type: NOTIF_TYPE.RETURNED,
@@ -385,7 +359,7 @@ function buildTransactions(tools, users) {
   return { transactions, toolPatches, logs, notifs }
 }
 
-function buildMaintenance(tools, users) {
+function buildMaintenance(tools, actor) {
   const technician = 'Rolando Estrada'
   const plan = [
     { toolIndex: 15, type: 'Calibration', date: -60, next: 30, status: MAINTENANCE_STATUS.COMPLETED, cost: 1800, notes: 'Torque wrench recalibrated and certified at 28–210 Nm.' },
@@ -401,7 +375,6 @@ function buildMaintenance(tools, users) {
     { toolIndex: 14, type: 'Parts Replacement', date: -12, next: 78, status: MAINTENANCE_STATUS.COMPLETED, cost: 780, notes: 'Grinder carbon brushes replaced.' },
   ]
 
-  const admin = users[0]
   const records = []
   const patches = new Map()
   const logs = []
@@ -417,6 +390,7 @@ function buildMaintenance(tools, users) {
       toolId: tool.id,
       toolName: tool.name,
       type: entry.type,
+      issue: entry.notes.split('—')[0].trim(),
       technician,
       date,
       nextDate,
@@ -424,8 +398,9 @@ function buildMaintenance(tools, users) {
       notes: entry.notes,
       status: entry.status,
       completedAt: entry.status === MAINTENANCE_STATUS.COMPLETED ? date : null,
-      createdById: admin.id,
-      createdByName: admin.fullName,
+      reportedBy: actor?.id ?? null,
+      createdById: actor?.id ?? null,
+      createdByName: actor?.fullName ?? null,
       createdAt: date,
       updatedAt: date,
     })
@@ -451,8 +426,8 @@ function buildMaintenance(tools, users) {
           : ACTIVITY.MAINTENANCE_SCHEDULED,
       toolId: tool.id,
       toolName: tool.name,
-      userId: admin.id,
-      userName: admin.fullName,
+      userId: actor?.id ?? null,
+      userName: actor?.fullName ?? 'System',
       message:
         entry.status === MAINTENANCE_STATUS.COMPLETED
           ? `${entry.type} maintenance completed by ${technician}.`
@@ -465,41 +440,62 @@ function buildMaintenance(tools, users) {
 }
 
 function buildNotifications(extra) {
-  const base = extra.map((n) => ({
-    id: uid('NOTIF'),
-    type: n.type,
-    title: n.title,
-    message: n.message,
-    toolId: n.toolId ?? null,
-    toolName: n.toolName ?? null,
-    userId: n.userId ?? null,
-    userName: n.userName ?? null,
-    transactionId: n.transactionId ?? null,
-    link: n.link ?? null,
-    dedupeKey: n.dedupeKey ?? null,
-    read: false,
-    createdAt: n.createdAt ?? nowISO(),
-  }))
-  return base.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+  return extra
+    .map((n) => ({
+      id: uid('NOTIF'),
+      type: n.type,
+      title: n.title,
+      message: n.message,
+      toolId: n.toolId ?? null,
+      toolName: n.toolName ?? null,
+      userId: n.userId ?? null,
+      userName: n.userName ?? null,
+      transactionId: n.transactionId ?? null,
+      link: n.link ?? null,
+      dedupeKey: n.dedupeKey ?? null,
+      read: false,
+      createdAt: n.createdAt ?? nowISO(),
+    }))
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
 }
 
 /* ------------------------------------------------------------------ *
  * Entry point
  * ------------------------------------------------------------------ */
 
-/** Replace everything in the database with a fresh demo laboratory. */
-export async function seedDatabase() {
-  const users = await buildUsers()
+/**
+ * Replace the demo laboratory data. Administrator only.
+ *
+ * Accounts are never touched: transactions are attributed to the students and
+ * instructors that already exist, and if there are none, only the inventory is
+ * written.
+ */
+export async function seedDatabase(actor) {
+  assertCan(actor, PERM.DATA_MANAGE, 'Only an administrator can load demo data.')
+
+  const directory = await db.list(COLLECTIONS.users)
+  const borrowers = directory.filter(
+    (u) =>
+      u.status === USER_STATUS.ACTIVE &&
+      (u.role === ROLE.STUDENT || u.role === ROLE.INSTRUCTOR),
+  )
+  // Must be an *approved* instructor: a pending account is not allowed to issue
+  // tools, so recording one as the issuer would be a fiction.
+  const issuer =
+    directory.find((u) => u.role === ROLE.INSTRUCTOR && u.status === USER_STATUS.ACTIVE) ?? actor
+
   const tools = buildTools()
 
   const { transactions, toolPatches, logs: txnLogs, notifs: txnNotifs } = buildTransactions(
     tools,
-    users,
+    borrowers,
+    issuer,
   )
-  const { records: maintenanceRecords, patches: maintPatches, logs: maintLogs } = buildMaintenance(
-    tools,
-    users,
-  )
+  const {
+    records: maintenanceRecords,
+    patches: maintPatches,
+    logs: maintLogs,
+  } = buildMaintenance(tools, actor)
 
   // Maintenance is applied first so an open job wins over an "available" tool,
   // then loan state is applied because a borrowed tool is physically out.
@@ -513,8 +509,8 @@ export async function seedDatabase() {
     action: ACTIVITY.TOOL_CREATED,
     toolId: tool.id,
     toolName: tool.name,
-    userId: users[0].id,
-    userName: users[0].fullName,
+    userId: actor?.id ?? null,
+    userName: actor?.fullName ?? 'System',
     message: `${tool.name} was added to the inventory (${tool.location}).`,
     createdAt: tool.createdAt,
   }))
@@ -551,24 +547,26 @@ export async function seedDatabase() {
     {
       type: NOTIF_TYPE.SYSTEM,
       title: 'Demo laboratory loaded',
-      message: `${finalTools.length} tools, ${users.length} users and ${transactions.length} transactions were seeded. Scan any tool QR code to begin.`,
+      message: borrowers.length
+        ? `${finalTools.length} tools and ${transactions.length} transactions were loaded across ${borrowers.length} borrowers. Scan any tool QR code to begin.`
+        : `${finalTools.length} tools were loaded. Add student and instructor accounts to generate borrowing history.`,
       createdAt: nowISO(),
     },
   ]
 
   const notifications = buildNotifications([...txnNotifs, ...maintenanceNotifs, ...welcome])
 
-  await db.replaceAll(COLLECTIONS.users, users)
   await db.replaceAll(COLLECTIONS.tools, finalTools)
   await db.replaceAll(COLLECTIONS.transactions, transactions)
   await db.replaceAll(COLLECTIONS.maintenance, maintenanceRecords)
   await db.replaceAll(COLLECTIONS.activityLogs, activityLogs)
   await db.replaceAll(COLLECTIONS.notifications, notifications)
-  await db.upsert(COLLECTIONS.settings, { ...DEFAULT_SETTINGS, updatedAt: nowISO() })
+  const { theme: _theme, ...settings } = { ...DEFAULT_SETTINGS, updatedAt: nowISO() }
+  await db.upsert(COLLECTIONS.settings, settings)
 
   return {
     tools: finalTools.length,
-    users: users.length,
+    borrowers: borrowers.length,
     transactions: transactions.length,
     notifications: notifications.length,
     maintenance: maintenanceRecords.length,
@@ -576,14 +574,5 @@ export async function seedDatabase() {
   }
 }
 
-/** Seed only when the database is empty — called once on first launch. */
-export async function seedIfEmpty() {
-  const tools = await db.list(COLLECTIONS.tools)
-  const users = await db.list(COLLECTIONS.users)
-  if (tools.length || users.length) return null
-  return seedDatabase()
-}
-
 export const SEED_TOOL_COUNT = TOOL_CATALOG.length
-export const SEED_USER_COUNT = USER_CATALOG.length
 export const SEED_TXN_COUNT = TRANSACTION_PLAN.length

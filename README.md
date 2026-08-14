@@ -4,8 +4,21 @@
 
 A Progressive Web App for an automotive laboratory / training workshop. Every tool carries a QR
 code; students and instructors scan it to borrow and return equipment, and the system keeps the
-inventory, transaction history, overdue alerts and maintenance schedule consistent — entirely
-offline, with no backend.
+inventory, transaction history, overdue alerts and maintenance schedule consistent across every
+device in the laboratory.
+
+Authentication is **Supabase Auth**, data is **Supabase Postgres**, and access is enforced by
+**Row Level Security** — not only by the interface.
+
+```
+  /  (public homepage) ──► /signup ──► Supabase Auth ──► profiles row
+                │                                             │
+                └──────────────► /login ◄─── active / pending ─┘
+                                    │
+                                    ▼
+                        Admin · Instructor · Student
+                          role-based /dashboard
+```
 
 ---
 
@@ -20,41 +33,317 @@ npm run dev        # http://localhost:5173
 npm run build      # production bundle + service worker
 npm run preview    # serve the build on http://localhost:4173
 
-npm run verify           # 123 checks (logic, workflow, boot, UI) — no browser needed
-npm run verify:browser   # 22 checks in real Chromium; needs a server running
-
-# against the dev server            against the production build
-npm run dev                          npm run build && npm run serve:dist
-npm run verify:browser               npm run verify:browser http://localhost:4180
+npm run verify           # logic + access-control checks; no network, no emulator
+npm run verify:browser   # real Chromium against a running server (see Verification)
 ```
 
-Install the PWA from the browser's install button, or from the in-app prompt. Once installed it
-runs with no internet connection — which is the point, because workshop Wi-Fi rarely reaches the
-back of the bay.
+Install the PWA from the browser's install button or the in-app prompt. Note that the app needs a
+connection: unlike the previous backend there is no offline read cache or write queue, so records
+are unavailable while the workshop Wi-Fi is down.
 
-### Demo accounts
+### Supabase project
 
-| Role | Username | Password | Can do |
+Copy `.env.example` to `.env` and fill in the two values from **Supabase dashboard → Project
+settings → API**:
+
+```
+VITE_SUPABASE_URL=https://<project>.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_…
+```
+
+Neither is a secret — the publishable (anon) key identifies the project and authorises nothing on
+its own. What protects the data is Row Level Security. **Never** put the service-role key in this
+repository or in any `VITE_` variable: it bypasses RLS, and everything under `src/` is shipped to
+the browser.
+
+### First-time setup
+
+1. **Enable Email sign-in** — Supabase dashboard → Authentication → Providers → Email.
+2. **Apply the migrations**, in order, in the SQL editor:
+
+   ```
+   supabase/migrations/0001_schema.sql   tables, keys, indexes, constraints
+   supabase/migrations/0002_rls.sql      row level security policies
+   ```
+
+   They create the seven tables and their policies and insert nothing at all.
+
+3. **Create the first administrator.** Every later account is created from the Users page, but the
+   first one is a chicken-and-egg problem: only an administrator may write another profile, and
+   self-registration deliberately cannot request the `Admin` role. So the first administrator signs
+   up at `/signup` like anyone else, and is then promoted once, by hand, in the SQL editor:
+
+   ```sql
+   update public.profiles set role = 'Admin', status = 'Active'
+    where lower(email) = lower('admin@autolab.edu.ph');
+   ```
+
+   The alternative — a policy letting anyone create their own administrator profile — is precisely
+   the privilege-escalation hole the policies exist to close, so one manual statement is the safer
+   trade.
+
+4. **Sign in** at `/login`, then optionally load demo tools from **Settings → Data management →
+   Seed demo data**. It never touches accounts, and it never runs by itself: an unattended write to
+   a shared database is not something a page load should do.
+
+Students and instructors do not need step 3 — they register themselves at `/signup`. Instructor
+registrations arrive as **Pending** and appear for approval on the admin Users page.
+
+### A second project for testing
+
+There is no local emulator here. To exercise destructive actions or policy changes safely, create a
+second Supabase project, apply the same two migrations to it, and point `.env` at that one.
+
+---
+
+## Public pages and sign-up
+
+| Route | Access | Notes |
+| --- | --- | --- |
+| `/` | public | Landing page. Reachable signed in too — it just offers the dashboard instead of Sign in / Sign up. |
+| `/signup` | public | Self-registration. Redirects to the dashboard if already signed in. |
+| `/login` | public | Redirects to the dashboard if already signed in. |
+| everything else | protected | `RequireAuth` sends a signed-out visitor to `/login`. |
+
+**Registration is student-or-instructor, never administrator.** The form offers two roles; the
+service forces the role and derives the status from it; and the security rules pin exactly what a
+self-created profile may contain. Editing the form, or calling the API directly, changes nothing —
+the `profiles_insert` policy refuses anything but:
+
+- the caller's own auth id as the row id,
+- `role` of `Student` (status `Active`) or `Instructor` (status `Pending`).
+
+There is no password, hash or salt column to smuggle anything into: Supabase Auth owns the
+credential, and the table owns only the role and the directory details.
+
+A **pending** instructor can sign in far enough to be told they are waiting — `is_active()` gates
+everything else, so a pending profile authorises no reads or writes at all. An administrator
+approves them from **Users**, where pending accounts appear in a panel above the directory; approval
+flips the status to `Active` and notifies the account.
+
+Sign-up signs the new account in just long enough to write its own profile row — which is exactly
+what the `profiles_insert` policy requires, since it insists the row id equals `auth.uid()`. After
+sign-up the visitor lands on `/login` with a confirmation, which is also what keeps a pending
+instructor out of the application.
+
+**A public form means anyone can create a Student account**, which is why Student is the least
+privileged role in the system: it reads the inventory, reads and writes only its own loans, notifies
+only itself, and cannot reach the directory, maintenance, reports or settings. Two levers tighten it
+further:
+
+- `VITE_SIGNUP_EMAIL_DOMAINS=autolab.edu.ph` restricts registration to institutional addresses. That
+  check runs in the browser, so mirror it in the policy if it has to be enforced — add to
+  `profiles_insert`:
+
+  ```sql
+  and lower(email) like '%@autolab.edu.ph'
+  ```
+
+- Requiring a verified address before the account is usable: register students as `Pending` too
+  (`signupStatusFor` in `src/services/users.js`), or leave Supabase's email confirmation on so the
+  account cannot sign in until the address is proven.
+
+## Roles
+
+The role lives in `profiles.role` and is read from the caller's own row on every request. Three
+layers enforce it, and all three are required:
+
+1. the sidebar hides what a role cannot reach (a courtesy),
+2. route guards and `assertCan()` in the services refuse the action when the URL is typed by hand,
+3. Row Level Security refuses the data even to a hand-rolled API call.
+
+| | Admin | Instructor | Student |
 | --- | --- | --- | --- |
-| Administrator | `admin` | `admin123` | Everything: tools, users, transactions, maintenance, reports, settings |
-| Instructor | `instructor` | `instructor123` | Issue/receive tools for any student, manage maintenance, view reports and users |
-| Student | `student` | `student123` | Scan, borrow under their own name, return what they borrowed |
+| Sidebar | Dashboard, Tools, Scan, Borrow/Return, Transactions, Users, Maintenance, Notifications, Reports, Settings | Dashboard, Tools, Scan, Borrow/Return, Transactions, Maintenance, Notifications | Dashboard, Tools, Scan, Borrow/Return, Transactions, Notifications |
+| Tools | full control | edit, change status | view only |
+| Transactions | all | all, plus corrections | own only |
+| Users | create, edit, deactivate, delete | read the directory to pick a borrower | own profile only |
+| Maintenance | full | full | none |
+| Reports / Settings | yes | no | no |
+| Dashboard | laboratory-wide statistics | laboratory-wide operations | own loans only |
 
-The first launch seeds a realistic laboratory: **42 tools, 12 users, 24 transactions, 11
-maintenance records, 12 notifications and 61 activity-log entries**. The seeded dates are relative
-to today, so there are always loans due tomorrow and loans already overdue.
+`src/components/navigation.js` is the single navigation definition; `src/utils/permissions.js` is
+the single permission matrix. `npm run verify` fails if the two disagree, if an admin-only route
+loses its guard, or if the three sidebars stop being distinct.
+
+**A student's dashboard asks different questions rather than showing restricted answers.** Their
+queries only return their own records, so a "total users" figure would be quietly wrong rather than
+merely hidden. They see: my active loans, due soon, my overdue, my transactions, available tools.
+
+---
+
+## Architecture
+
+```
+src/
+  supabase/
+    config.js     the one and only createClient — env-driven
+  services/       ← all business logic and every database call lives here
+    db.js         Postgres data layer: role-scoped reads, camel/snake mapping
+    localAuth.js  Supabase Auth: sign-in, session, error mapping, registration
+    auth.js       session → profile row → application role
+    tools.js      inventory, validation, status transitions
+    transactions.js  borrow / return / overdue engine
+    users.js      directory + account provisioning (no credentials stored)
+    notifications.js maintenance.js reports.js activity.js settings.js
+  hooks/          useAsyncData + the domain hooks bound to it
+  context/        AppContext (session, settings, revision), ToastContext
+  components/     reusable UI, plus navigation.js (the role → sidebar map)
+  layouts/        AppLayout — sidebar, top bar, mobile bottom bar
+  pages/          one file per route (HomePage and SignUpPage are the public two)
+  routes/         (route guards live in App.jsx: RequireAuth, RequirePermission)
+  utils/          permissions, dates, qr, constants, helpers
+  data/seed.js    admin-triggered demo data
+supabase/migrations/
+  0001_schema.sql tables, keys, indexes, constraints
+  0002_rls.sql    the actual access-control boundary
+```
+
+### The rules that make it hold together
+
+**No component touches the database.** Pages call hooks, hooks call services, services call
+`services/db.js`. Only three modules import the Supabase client at all, and `npm run verify`
+enforces that.
+
+**Reads are scoped on the server, not filtered in the browser.** Row Level Security decides what a
+request returns, from the caller's own `profiles` row. `db.setScope({ uid, role })` additionally
+narrows the query the client sends — a student's `list('transactions')` adds `user_id = uid` — but
+that is an optimisation, not the boundary: the same rows come back with or without it. Collections a
+role cannot read at all resolve to `[]` without a request.
+
+**Screens refresh on write, within one client.** Every write bumps a revision counter the hooks
+watch, so a borrow updates every screen in that browser immediately. Unlike the previous backend
+there are no live listeners: a change made on another device is picked up on the next read, not
+pushed. Supabase Realtime would restore that and is the natural next step.
+
+**A borrow cannot leave the records inconsistent.** `db.runAtomic()` journals each write and undoes
+them in reverse if any step fails, so a loan record and the tool's status never drift apart. It is
+not a transaction — the API does not expose one to the browser — so the protection against two tabs
+issuing the same wrench lives in the database instead: the `tools_update` policy and its trigger only
+permit `Available → Borrowed`, and the second writer is refused. The follow-up work (activity entry,
+notifications) is deliberately best-effort: the tool has physically changed hands, so a failed log
+line must not be reported as a failed borrow.
+
+**Passwords never reach the database.** There is no password, hash or salt column in any table —
+Supabase Auth owns the credential. Changing a password is a reset email; the app never sees it.
+
+**Overdue is detected, not declared.** `runOverdueCheck()` compares each open loan against the
+calendar when staff open the app and when the tab regains focus (a laboratory PC is often left open
+overnight, so "today" changes without a reload). It is staff-only, because it writes to transactions
+and tools — a student's own late loan is instead derived from its due date at render time.
+
+**Dashboard numbers are computed, never stored.** `services/reports.js` derives every figure from
+the database at render time. Nothing on the dashboard is hardcoded and there is no cached aggregate
+to drift.
+
+**The boot can never hang.** `AppContext` holds a boot screen only until the session listener fires,
+which happens exactly once after the stored session is read. A session whose profile is missing,
+roleless, inactive or suspended is signed straight back out with the reason shown on the login
+screen — the app is never left holding a session it cannot authorise.
+
+### Data model
+
+```
+users/{uid}              uid, email, firstName, lastName, fullName, displayName,
+                         role, status, studentId, course, yearLevel, employeeId,
+                         department, contact, createdAt, updatedAt, lastLoginAt
+tools/{toolId}           name, toolCode, category, status, condition, location,
+                         serialNumber, qrCode, quantity, imageUrl, currentBorrowerId,
+                         currentTransactionId, nextMaintenanceDate, createdAt, updatedAt
+transactions/{txnId}     toolId, toolName, userId, userName, userRole, borrowDate,
+                         dueDate, returnDate, status, conditionOut, conditionIn,
+                         purpose, issuedById, receivedById, createdAt, updatedAt
+maintenance/{id}         toolId, toolName, type, issue, technician, date, nextDate,
+                         cost, status, reportedBy, createdAt, updatedAt
+notifications/{id}       userId (null = laboratory-wide), title, message, type,
+                         read, toolId, transactionId, link, dedupeKey, createdAt
+activityLogs/{id}        action, toolId, userId, userName, transactionId, message,
+                         meta, createdAt          (append-only, staff-readable)
+settings/app-settings    labName, labLocation, defaultBorrowDays, maxBorrowDays,
+                         dueSoonThresholdDays, notify*, maintenanceIntervalDays
+```
+
+The **id of a profile row is the Supabase Auth uuid**, which is what lets a policy compare
+`auth.uid()` against the row without a lookup. Tool ids are sequential and permanent
+(`TOOL-00001`) and double as the QR payload; transaction ids are immutable and time-sortable
+(`TXN-20250520-4F2A9C`).
+
+Two field names are worth calling out, because they carry authorisation weight:
+
+- `transactions.userId` is the borrower (the schema sketch called it `borrowerId`). The existing
+  field name was kept so the whole application did not have to be renamed around it; it is the field
+  every student query filters on.
+- `tools.currentBorrowerId` is set while a tool is out. It is how the rules let the person actually
+  holding a tool hand it back without letting them touch anybody else's.
+
+Dates are `timestamptz` columns and travel as ISO 8601 strings, which `utils/dates` parses
+directly. `services/db.js` converts between the application's camelCase field names and the
+database's snake_case columns, so neither side has to bend to the other.
+
+---
+
+## Row Level Security
+
+`supabase/migrations/0002_rls.sql` is the access-control boundary. Highlights:
+
+- **Deny by default.** RLS is enabled on all seven tables, and a request with no matching policy is
+  refused. `anon` is revoked outright, so nothing is readable without a session.
+- **The role is read from the caller's own row.** The helpers (`is_admin()`, `is_staff()`, …) are
+  `SECURITY DEFINER` with a pinned `search_path`, because a policy on `profiles` that reads
+  `profiles` would otherwise recurse forever. Each answers one question about `auth.uid()` and takes
+  no argument a caller can influence.
+- **An inactive or suspended profile authorises nothing**, even though Supabase still considers the
+  account signed in.
+- **Students cannot change their own role or status.** `WITH CHECK` cannot see the previous row, so
+  that rule is a `BEFORE UPDATE` trigger — still the database refusing it, not the UI hiding it.
+- **Students cannot list the directory, maintenance records or the activity log** — those reads
+  fail, they are not filtered.
+- **Students cannot set an arbitrary tool status.** They may move a tool
+  `Available → Borrowed` while booking it out to themselves, and back to `Available`/`Damaged` while
+  it is booked out to them. `Maintenance`, `Lost` and `Retired` are staff-only, as is every other
+  field on the record.
+- **Credential fields are rejected outright** on any write to `users`.
+- **Self-registration cannot mint an administrator** — see `selfRegistration()` above. Creating
+  anyone *else's* profile requires `isAdmin()`.
+- **A pending account authorises nothing.** Only `Active` passes `is_active()`, which everything
+  else is gated on.
+- **The activity log is append-only.** There is no UPDATE policy at all, so every update is refused.
+
+Storage is not used yet. When it is, the bucket needs policies of its own built on the same helpers.
+
+### Verifying the policies
+
+`npm run verify` checks the source-side invariants — no credentials in the bundle, no database call
+outside the data layer. The policies themselves are behavioural, so they are checked against a real
+project, ideally a scratch one:
+
+```bash
+STMS_EMAIL=student@lab.test STMS_PASSWORD=… STMS_ROLE=Student node scripts/verify-browser.mjs
+```
+
+The checklist worth walking through with a signed-in session in the SQL editor or Studio:
+
+- a student reading another student's transaction → **denied**
+- a student querying `transactions` with no `where` clause → **denied**
+- a student writing `users/{ownUid}.role = 'Admin'` → **denied**
+- a student writing `tools/{id}.status = 'Maintenance'` → **denied**
+- an instructor creating a `users` document → **denied**
+- a signed-out client reading anything → **denied**
+- self-registering with `role: 'Admin'` → **denied**
+- self-registering as `Instructor` with `status: 'Active'` → **denied**
+- self-registering with somebody else's uid or email → **denied**
+- a pending instructor reading `tools` → **denied** (their own profile → allowed)
 
 ---
 
 ## Deploying to Vercel
 
-The repository is deploy-ready: `vercel.json` pins the Vite preset, rewrites every unmatched path
-to `index.html` so a hard refresh on `/tools/TOOL-00001` works, and sets the cache headers a PWA
-needs.
+The repository is deploy-ready: `vercel.json` pins the Vite preset, rewrites every unmatched path to
+`index.html` so a hard refresh on `/tools/TOOL-00001` works, and sets the cache headers a PWA needs.
 
-**From the dashboard** — import the GitHub repo at [vercel.com/new](https://vercel.com/new).
-Everything is read from `vercel.json`, so leave the build settings alone and deploy. No environment
-variables are required; the app has no backend.
+**From the dashboard** — import the GitHub repo at [vercel.com/new](https://vercel.com/new). The
+build settings come from `vercel.json`. Add `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`
+as environment variables — there are no defaults, and the build will fail without them.
 
 **From the CLI**
 
@@ -64,111 +353,19 @@ vercel          # preview deployment
 vercel --prod   # production
 ```
 
+Add the deployment domain under **Supabase dashboard → Authentication → URL configuration** so
+password-reset and confirmation links point back at it.
+
 ### Why `vercel.json` matters here
 
-- **SPA rewrites.** React Router uses real URLs. Without the rewrite, opening `/dashboard`
-  directly returns 404, because no such file exists in `dist/`. Vercel checks the filesystem
-  *before* applying rewrites, so `/assets/*`, `/sw.js` and `/icons/*` still resolve normally.
-- **`sw.js` must not be cached.** It is served `max-age=0, must-revalidate`; a cached service
-  worker would pin users to an old build forever. Hashed assets get `immutable` instead.
+- **SPA rewrites.** React Router uses real URLs. Without the rewrite, opening `/dashboard` directly
+  returns 404, because no such file exists in `dist/`. Vercel checks the filesystem *before*
+  applying rewrites, so `/assets/*`, `/sw.js` and `/icons/*` still resolve normally.
+- **`sw.js` must not be cached.** It is served `max-age=0, must-revalidate`; a cached service worker
+  would pin users to an old build forever. Hashed assets get `immutable` instead.
 - **`"framework": "vite"`** is pinned explicitly so Vercel cannot mis-detect the project.
 - **HTTPS comes free**, which the QR scanner needs — browsers refuse camera access on plain HTTP
   outside `localhost`. `Permissions-Policy: camera=(self)` is set for the same reason.
-
-Verify the deployable artifact locally before pushing — `scripts/serve-static.mjs` reproduces
-Vercel's filesystem-then-rewrite routing and applies the same headers:
-
-```bash
-npm run build && npm run serve:dist
-npm run verify:browser http://localhost:4180
-```
-
-### Data lives in the browser, not on Vercel
-
-There is no backend, so nothing is shared between devices or visitors. Each browser seeds its own
-demo laboratory on first visit and keeps its records in that browser's IndexedDB. Two people
-opening the deployed URL get two independent datasets. That is the intended behaviour for this
-build; wiring `services/db.js` to a real API is the step that would change it.
-
----
-
-## Architecture
-
-```
-src/
-  components/     reusable UI (ui.jsx, QRScanner, QRCodeDisplay, ToolForm, tables…)
-  pages/          one file per route
-  layouts/        AppLayout — sidebar, top bar, mobile bottom bar
-  hooks/          useAsyncData + the domain hooks bound to it
-  context/        AppContext (session, settings, boot), ToastContext
-  services/       ← all business logic and every database call lives here
-    db.js         Localbase wrapper: list/get/insert/update/remove/replaceAll
-    auth.js       local demo authentication, salted-hash credentials
-    tools.js      inventory, validation, status transitions
-    transactions.js  borrow / return / overdue engine
-    users.js      directory + password handling
-    notifications.js maintenance.js reports.js activity.js settings.js
-  utils/          dates, permissions, qr, constants, helpers
-  data/seed.js    first-run demo laboratory
-```
-
-### The rules that make it hold together
-
-**No component touches the database.** Pages call service functions; services own IndexedDB. To
-replace Localbase with a REST API, reimplement the six primitives in `services/db.js` — the UI
-does not change.
-
-**Permissions are enforced twice.** `utils/permissions.js` is the single source of truth. The UI
-uses `can()` to hide controls; every service mutation calls `assertCan()` before writing. Hiding a
-button is a courtesy — the guard in the service is the actual rule. A student who reaches
-`/users` by typing the URL gets a *Restricted area* page, and a student who somehow calls
-`tools.remove()` gets a `PermissionError`.
-
-**A borrow is never one write.** `transactions.borrow()` creates the transaction, flips the tool to
-`Borrowed`, appends an activity-log entry and raises a notification. `returnTool()` closes the
-transaction, updates the tool's status *and* condition, logs the change, notifies, and clears the
-loan's stale overdue alert. That is why the dashboard, the tool page and the notification centre
-can never disagree about where a tool is.
-
-**Overdue is detected, not declared.** `runOverdueCheck()` runs on every app load and whenever the
-tab regains focus (a laboratory PC is often left open overnight, so "today" changes without a
-reload). It compares each open loan's due date against the calendar, flips the transaction and the
-tool, and raises one notification per event — deduplicated by transaction id, so repeat sweeps
-stay quiet.
-
-**Dashboard numbers are computed, never stored.** `services/reports.js` derives every figure from
-the tools and transactions collections at render time. There is no cached aggregate to drift.
-
-**The boot can never hang.** `AppContext` splits startup into a memoised
-`prepareEnvironment()` — open the database, seed if empty, load settings, reconcile overdue loans —
-and a fresh session read on every provider mount. Only `db.ready()` and `settings.load()` are on
-the critical path; seeding and reconciliation are best-effort and downgrade to a warning, because a
-technician must still reach the login screen when demo data fails to load. A 10-second failsafe
-turns a stalled environment into an error screen with **Try again** rather than an endless spinner.
-
-The boot work deliberately lives at *module* scope rather than inside the effect. An effect that
-both starts the boot and owns a `cancelled` flag hits a trap under `React.StrictMode`, which mounts,
-runs effects, tears them down and runs them again in development: the teardown sets `cancelled`, so
-the in-flight boot can never apply its result, and a "boot only once" ref stops the second run from
-starting a fresh one. `booting` then stays `true` forever — in `npm run dev` only, while
-`npm run preview` works fine. `scripts/verify-boot.mjs` mounts the app inside `StrictMode`
-specifically to keep that from coming back.
-
-### Data model
-
-`users` · `tools` · `transactions` · `notifications` · `maintenance` · `activityLogs` · `settings`
-
-Tool ids are sequential and permanent (`TOOL-00001`) and double as the IndexedDB key and the QR
-payload. Transaction ids are immutable and time-sortable (`TXN-20250520-4F2A9C`).
-
-### A note on Localbase
-
-Localbase stores the pending collection/document selection on the database *instance*, so two
-overlapping chains can clobber each other's target. `services/db.js` therefore runs every
-operation through a one-at-a-time promise queue. That also serialises IndexedDB object-store
-creation, which avoids the version-upgrade races localforage hits when several new stores open at
-once. `collection().delete()` is avoided entirely — it drops the object store; documents are
-removed individually instead.
 
 ---
 
@@ -184,55 +381,82 @@ Parsing is deliberately permissive: a URL ending in a tool id, a bare `TOOL-0001
 typed into the manual fallback all resolve to the same tool. Labels print at 60 mm for a sticker
 that survives a workshop bench, and can be printed one at a time or for the whole filtered list.
 
-If the camera is denied, missing, already in use, or the page is not on HTTPS, the scanner
-explains which of those happened and offers manual Tool ID entry.
+If the camera is denied, missing, already in use, or the page is not on HTTPS, the scanner explains
+which of those happened and offers manual Tool ID entry.
 
 ---
 
 ## Verification
 
-`npm run verify` runs four suites against the real source — 123 checks, no mocking of the
-domain layer:
+`npm run verify` runs two suites against the real source, with no network and no emulator:
 
-- **Domain logic** (27) — overdue/due-soon boundaries, timezone-safe date round-trips, the
-  permission matrix for all three roles, QR parsing and rejection, CSV escaping, sorting.
-- **Workflow** (59) — the full lifecycle against an in-memory IndexedDB: seed → sign in → borrow →
-  go overdue → notify → return → damage → maintenance → export/import. It also asserts the
-  invariant that *tool status and open transactions never disagree*, and that no tool is issued to
-  two people at once.
-- **Boot sequence** (15) — the shell must always leave the loading state: under `StrictMode`, on a
-  cold empty database, on a warm one, with no session, with a corrupt session, with a session
-  pointing at a deleted user, when the database throws, when seeding throws, and when the database
-  hangs (the failsafe timeout). It also drives the **Try again** and **Continue anyway** controls.
-- **User interface** (22) — mounts the real app in jsdom, signs in as each role, walks every route
-  and fails on any console error or unhandled rejection. It checks that students are refused
-  `/users` and `/reports`, do not see the *Add tool* control, and cannot see another user's
-  transactions.
+- **Domain logic** — overdue/due-soon boundaries, timezone-safe date round-trips, the permission
+  matrix for all three roles, QR parsing and rejection, CSV escaping, sorting.
+- **Access control** — the role → sidebar map, that the three sidebars are genuinely different and
+  agree with the permission matrix, that every admin-only route is wrapped in a guard, that the
+  homepage and sign-up sit *outside* the protected tree while every dashboard route stays inside it,
+  that sign-up can only request Student or Instructor and that an instructor starts pending, that
+  and the source-hygiene invariants: no service-role key anywhere in the source or the environment
+  files, Supabase as the only backend dependency, and no database access outside the data layer.
 
-`npm run verify:browser` adds 21 checks in real Chromium against a running dev server: the cold
-boot with a genuinely empty IndexedDB, sign-in, a hard refresh proving persistence, every route,
-a borrow through the actual UI, student route restrictions, and a browser with IndexedDB disabled.
-This suite exists because the boot hang described above only reproduced in a real dev server —
-`StrictMode` double-invokes effects in development but not in a production build, so jsdom-only
-coverage missed it.
+`npm run verify:browser` drives real Chromium against a running server. Without credentials it
+checks the public flow — the homepage renders every section and does not scroll horizontally at
+360 px, **Get Started** reaches `/signup`, **Sign In** reaches `/login`, the sign-up form rejects an
+incomplete submission and a short password before the backend is called, it offers no administrator
+role, a protected route redirects to `/login`, and no demo passwords are on screen. With
+`STMS_EMAIL`, `STMS_PASSWORD` and `STMS_ROLE` for a real account it also verifies the role's sidebar,
+that its forbidden routes show *Restricted area*, and that a hard refresh keeps the session. Point
+the app at the emulators first so test accounts stay out of production.
+
+The end-to-end suites that used to run here (`verify-workflow`, `verify-boot`, `verify-ui`) drove a
+retired local backend and its password check, so they were removed rather than left to rot. Their
+equivalent needs a scratch project to write into; the checklist above is the interim.
 
 ---
 
 ## Responsive behaviour
 
 Desktop gets a fixed dark rail and a sticky top bar. Below `lg`, navigation moves to a slide-in
-drawer plus a bottom bar with a raised **Scan** button — the action someone standing at the tool
-crib actually needs. Tables become stacked cards on phones rather than horizontal scrollers, so
-nothing hides off-screen; where a table does scroll, only its own container moves, never the page.
-Modals rise as bottom sheets with their own scroll area, and form controls are 16 px so iOS does
-not zoom the viewport on focus.
+drawer plus a bottom bar with a raised **Scan** button — the action someone standing at the tool crib
+actually needs. Tables become stacked cards on phones rather than horizontal scrollers, so nothing
+hides off-screen; where a table does scroll, only its own container moves, never the page. Modals
+rise as bottom sheets with their own scroll area, and form controls are 16 px so iOS does not zoom
+the viewport on focus.
 
 ---
 
 ## Known scope
 
-Authentication is local demo authentication. Passwords are stored as salted SHA-256 digests rather
-than plaintext, which keeps the record shape honest for a future backend, but it is not a
-substitute for a real KDF on a server. All data lives in this browser's IndexedDB: it survives
-refreshes and restarts, and clearing site data deletes it. Export a JSON backup from **Settings →
-Data management** before doing that.
+- **Deleting an account is two steps.** Deleting the profile row revokes access immediately — no
+  profile means no role, and the session is rejected at sign-in — but removing the Auth user itself
+  needs the service-role key, which must not reach the browser. Prefer **Deactivate**, which keeps
+  the audit trail intact. The same applies if a profile write fails right after an account is
+  created: the app reports the orphaned sign-in and what to do about it.
+- **An administrator cannot create somebody else's account yet.** That needs the admin API, which
+  requires the service-role key, so it belongs in an Edge Function. Until one is deployed the person
+  signs up themselves and an administrator sets their role. The Users page says so rather than
+  failing silently.
+- **Roles are table rows, not JWT claims.** Claims would remove one lookup per request, at the cost
+  of a server to set them and a token refresh whenever a role changes.
+- **A student could mark an available tool as borrowed without creating a loan.** The policy and
+  its trigger bound them to that one transition; they cannot reach any other status or field.
+  Closing the gap entirely means moving borrowing into a database function.
+- **The theme is per-device**, stored in `localStorage` rather than the shared settings document, so
+  one person choosing dark mode does not follow everyone onto every laboratory PC.
+- **Sign-up is open by default.** Anyone with an email address can create a Student account unless
+  `VITE_SIGNUP_EMAIL_DOMAINS` is set (and mirrored in the policy). Instructor registrations are
+  pending until approved, and administrators cannot be self-registered at all.
+- **A duplicate student ID is possible.** A visitor cannot read the directory, so self-registration
+  cannot check uniqueness; an administrator sees the ID on the pending-approval panel and in the
+  directory. `validate()` only re-checks a student ID that is actually being changed, so a duplicate
+  cannot block unrelated edits to either profile.
+- **The sign-up form tells you when an email is already registered.** A registration form has to
+  surface that. The sign-in form deliberately does not: one wording covers a wrong password and an
+  unknown account, so it never confirms which addresses exist.
+- **Read state on laboratory-wide alerts is shared.** A broadcast notification (`userId: null`) has
+  one `read` flag, so marking an overdue alert read clears it for everyone — the behaviour the
+  previous build had. Per-user read state for broadcasts would need a `readBy` collection and a
+  different unread count; alerts addressed to one person are already private to them.
+- **The activity log is streamed as its newest 250 entries.** Bulk operations (clear, export, counts)
+  read the full collection, and a tool's timeline is fetched with a targeted query, so nothing is
+  silently truncated — but the dashboard feed is a window, not the whole history.

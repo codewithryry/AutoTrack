@@ -5,16 +5,14 @@ import {
   Database,
   Download,
   FlaskConical,
-  Monitor,
-  Moon,
   RotateCcw,
   Save,
   Settings as SettingsIcon,
-  Sun,
   Trash2,
   Upload,
   UserCog,
 } from 'lucide-react'
+import { AppearanceControl, DeleteAccountControl } from '../components/AccountSettings'
 import {
   ConfirmDialog,
   DetailItem,
@@ -34,14 +32,8 @@ import { PERM } from '../utils/permissions'
 import { cx, downloadBlob, readFileAsText } from '../utils/helpers'
 import { formatDateTime } from '../utils/dates'
 
-const THEMES = [
-  { value: 'light', label: 'Light', icon: Sun, hint: 'Best for bright workshop lighting' },
-  { value: 'dark', label: 'Dark', icon: Moon, hint: 'Easier on the eyes in the diagnostic bay' },
-  { value: 'system', label: 'System', icon: Monitor, hint: 'Follow the device setting' },
-]
-
 export default function SettingsPage() {
-  const { user, can, settings, saveSettings, logout } = useApp()
+  const { user, can, settings, saveSettings } = useApp()
   const toast = useToast()
   const fileRef = useRef(null)
 
@@ -85,17 +77,6 @@ export default function SettingsPage() {
     }
   }
 
-  /** Theme applies immediately — waiting for Save would feel broken. */
-  const changeTheme = async (theme) => {
-    setForm((f) => ({ ...f, theme }))
-    settingsService.applyTheme(theme)
-    try {
-      await saveSettings({ ...form, theme })
-    } catch {
-      toast.error('The theme could not be saved, but it is applied for this session.')
-    }
-  }
-
   /* --------------------------- data management --------------------------- */
 
   const exportDatabase = async () => {
@@ -121,8 +102,11 @@ export default function SettingsPage() {
     if (!file) return
 
     setConfirm({
-      title: 'Replace the local database?',
-      message: `Importing "${file.name}" will replace every tool, user and transaction currently stored on this device.`,
+      title: 'Replace the laboratory records?',
+      message:
+        `Importing "${file.name}" replaces every tool, transaction, maintenance record and ` +
+        `notification — for every user, not just this device. User profiles are ` +
+        `skipped: accounts are managed from the Users page.`,
       confirmLabel: 'Import and replace',
       onConfirm: async () => {
         setBusy(true)
@@ -145,16 +129,18 @@ export default function SettingsPage() {
 
   const reseed = () =>
     setConfirm({
-      title: 'Reload the demo laboratory?',
+      title: 'Load the demo laboratory?',
       message:
-        'Every existing tool, user, transaction and notification is replaced with a fresh set of demo records. This cannot be undone.',
-      confirmLabel: 'Reload demo data',
+        'The tool inventory, transactions, maintenance records and notifications are ' +
+        'replaced with a fresh demo set. User accounts are left completely untouched. This cannot ' +
+        'be undone.',
+      confirmLabel: 'Load demo data',
       onConfirm: async () => {
         setBusy(true)
         try {
-          const result = await seedDatabase()
+          const result = await seedDatabase(user)
           toast.success(
-            `${result.tools} tools, ${result.users} users and ${result.transactions} transactions loaded.`,
+            `${result.tools} tools, ${result.transactions} transactions and ${result.maintenance} maintenance records loaded.`,
             { title: 'Demo laboratory restored' },
           )
           setConfirm(null)
@@ -169,19 +155,21 @@ export default function SettingsPage() {
 
   const clearDatabase = () =>
     setConfirm({
-      title: 'Clear the entire database?',
+      title: 'Clear the laboratory records?',
       message:
-        'All tools, users, transactions, notifications and maintenance records will be permanently deleted from this device. You will be signed out.',
+        'Every tool, transaction, notification, maintenance and activity record is permanently ' +
+        'deleted — for every user. User profiles other than your own are removed ' +
+        'too, along with their sign-in credentials.',
       confirmLabel: 'Delete everything',
       onConfirm: async () => {
         setBusy(true)
         try {
           await db.clearAll()
-          toast.warning('The local database was cleared.')
+          toast.warning('The laboratory records were cleared.')
           setConfirm(null)
-          logout()
+          setCounts(await db.stats())
         } catch (err) {
-          toast.error(err.message ?? 'Unable to clear the database.')
+          toast.error(err.message ?? 'Unable to clear the records.')
         } finally {
           setBusy(false)
         }
@@ -192,15 +180,15 @@ export default function SettingsPage() {
     setConfirm({
       title: 'Reset the application?',
       message:
-        'The database is cleared, settings return to their defaults and the demo laboratory is reloaded. The page will reload afterwards.',
+        'Laboratory records are cleared, settings return to their defaults and the demo data is ' +
+        'reloaded. Accounts are not affected. The page will reload afterwards.',
       confirmLabel: 'Reset application',
       onConfirm: async () => {
         setBusy(true)
         try {
           await db.clearAll()
-          await settingsService.reset()
-          await seedDatabase()
-          localStorage.removeItem('stms.session')
+          await settingsService.reset(user)
+          await seedDatabase(user)
           toast.success('Application reset. Reloading…')
           setTimeout(() => window.location.reload(), 900)
         } catch (err) {
@@ -360,44 +348,33 @@ export default function SettingsPage() {
             )}
           </SectionCard>
 
-          {/* ------------------------------ theme ------------------------------ */}
+          {/* ------------------------------ appearance ------------------------------ */}
           <SectionCard title="Appearance" description="How the interface renders on this device">
-            <div className="grid gap-2 sm:grid-cols-3">
-              {THEMES.map(({ value, label, icon: Icon, hint }) => {
-                const active = (form.theme ?? 'light') === value
-                return (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => changeTheme(value)}
-                    className={cx(
-                      'flex flex-col items-start gap-1.5 rounded-lg border-2 p-3 text-left transition-all',
-                      active
-                        ? 'border-amberline-500 bg-amberline-400/10'
-                        : 'hover:bg-black/[0.03] dark:hover:bg-white/5',
-                    )}
-                    style={active ? undefined : { borderColor: 'rgb(var(--border))' }}
-                    aria-pressed={active}
-                  >
-                    <Icon
-                      className={cx(
-                        'h-5 w-5',
-                        active ? 'text-amberline-600 dark:text-amberline-400' : 'opacity-60',
-                      )}
-                    />
-                    <span className="text-sm font-bold">{label}</span>
-                    <span className="subtle text-xs leading-snug">{hint}</span>
-                  </button>
-                )
-              })}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+              <div className="min-w-0">
+                <p className="text-sm font-bold">Colour theme</p>
+                <p className="subtle mt-0.5 text-xs leading-snug">
+                  The choice is saved on this device and applies everywhere — including after a
+                  refresh or an app restart.
+                </p>
+              </div>
+              <AppearanceControl className="w-full shrink-0 sm:w-72" />
             </div>
+          </SectionCard>
+
+          {/* ------------------------------ account ------------------------------ */}
+          <SectionCard
+            title="Account"
+            description="Actions that affect your own sign-in"
+          >
+            <DeleteAccountControl />
           </SectionCard>
 
           {/* --------------------------- data management --------------------------- */}
           {canManageData && (
             <SectionCard
               title="Data management"
-              description="Everything is stored locally in this browser"
+              description="These actions affect all stored records"
             >
               <div className="grid gap-2 sm:grid-cols-2">
                 <DataAction
@@ -462,7 +439,7 @@ export default function SettingsPage() {
               </span>
               <div className="min-w-0">
                 <p className="truncate text-sm font-bold">{user?.fullName}</p>
-                <p className="subtle truncate text-xs">@{user?.username}</p>
+                <p className="subtle truncate text-xs">{user?.email}</p>
               </div>
             </div>
             <dl className="space-y-3">
@@ -478,7 +455,7 @@ export default function SettingsPage() {
               <DetailItem label="Email">{user?.email || '—'}</DetailItem>
             </dl>
 
-            {can(PERM.USER_VIEW) && (
+            {can(PERM.USER_MANAGE) && (
               <Link to="/users" className="btn btn-outline mt-4 w-full">
                 <UserCog className="h-4 w-4" />
                 Manage accounts
@@ -486,7 +463,7 @@ export default function SettingsPage() {
             )}
           </SectionCard>
 
-          <SectionCard title="Local database" description="Records stored in this browser">
+          <SectionCard title="Stored collections" description="Records in this device's database">
             <dl className="space-y-2.5">
               {counts
                 ? Object.entries(counts).map(([name, count]) => (
@@ -508,9 +485,10 @@ export default function SettingsPage() {
             >
               <Database className="mt-0.5 h-4 w-4 shrink-0 opacity-60" />
               <p className="subtle text-xs leading-relaxed">
-                Records live in this browser's IndexedDB storage. They survive refreshes and
-                restarts, and remain available with no internet connection. Clearing site data
-                deletes them.
+                Records are stored on this device. A local
+                cache keeps them readable offline, and changes made without a connection sync as
+                soon as one returns. Access is scoped by the data layer, not by this
+                interface alone.
               </p>
             </div>
 

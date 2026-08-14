@@ -9,7 +9,7 @@ export function BrandMark({ className, size = 40 }) {
       height={size}
       className={cx('shrink-0', className)}
       role="img"
-      aria-label="Smart Tool Monitoring System"
+      aria-label="ToolTrack AutoLab"
     >
       <rect width="64" height="64" rx="14" fill="#0B1220" />
       <g fill="#F7C948">

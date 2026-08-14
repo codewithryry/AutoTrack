@@ -12,7 +12,6 @@ import {
   NON_BORROWABLE_REASON,
   TOOL_STATUS,
   TOOL_STATUSES,
-  TXN_STATUS,
 } from '../utils/constants'
 import { PERM, assertCan } from '../utils/permissions'
 import { matchesQuery, padId, sortBy } from '../utils/helpers'
@@ -201,6 +200,10 @@ export async function create(input, actor) {
     location: input.location.trim(),
     condition: input.condition,
     status: input.status ?? TOOL_STATUS.AVAILABLE,
+    // Set while the tool is out on loan; the security rules use it to let the
+    // borrower return it themselves.
+    currentBorrowerId: null,
+    currentTransactionId: null,
     purchaseDate: input.purchaseDate ?? null,
     lastMaintenanceDate: input.lastMaintenanceDate ?? null,
     nextMaintenanceDate: input.nextMaintenanceDate ?? null,
@@ -314,11 +317,17 @@ export async function hasActiveTransaction(toolId) {
 }
 
 /**
- * Delete a tool. Refuses while a loan is open unless the caller explicitly
- * confirms, in which case the open transaction is closed as `Lost` so the
- * history stays coherent.
+ * Delete a tool.
+ *
+ * A tool that is actively out on loan cannot be deleted: detaching an open
+ * transaction would corrupt its history, so the caller is told to process the
+ * return first. Historical records are never removed — the database detaches
+ * their `toolId` reference on delete (`ON DELETE SET NULL`, migration 0009),
+ * keeping the rows and their denormalised tool name, and the append-only
+ * activity log keeps the audit trail. The QR code stops resolving because the
+ * inventory row itself is gone.
  */
-export async function remove(id, actor, { force = false } = {}) {
+export async function remove(id, actor) {
   assertCan(actor, PERM.TOOL_DELETE, 'Only an administrator can delete tools.')
 
   const tool = await getById(id)
@@ -328,29 +337,19 @@ export async function remove(id, actor, { force = false } = {}) {
     COLLECTIONS.transactions,
     (t) => t.toolId === id && ACTIVE_TXN_STATUSES.includes(t.status),
   )
-  if (active.length && !force) {
+  if (active.length) {
     const err = new Error(
-      `${tool.name} still has ${active.length} open transaction${
+      `${tool.name} is still on loan (${active.length} open transaction${
         active.length > 1 ? 's' : ''
-      }. Confirm to delete it and close them.`,
+      }) and cannot be deleted. Process the return first — deleting an actively borrowed tool would corrupt its history.`,
     )
     err.name = 'ActiveTransactionError'
     err.activeCount = active.length
     throw err
   }
 
-  for (const txn of active) {
-    await db.update(COLLECTIONS.transactions, txn.id, {
-      status: TXN_STATUS.LOST,
-      notes: [txn.notes, 'Closed automatically because the tool record was deleted.']
-        .filter(Boolean)
-        .join(' — '),
-      updatedAt: nowISO(),
-    })
-  }
-
-  await db.remove(COLLECTIONS.tools, id)
   await notifications.removeForTool(id)
+  await db.remove(COLLECTIONS.tools, id)
   await activity.log({
     action: ACTIVITY.TOOL_DELETED,
     toolId: id,

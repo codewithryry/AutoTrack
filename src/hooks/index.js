@@ -8,10 +8,23 @@ import * as maintenanceService from '../services/maintenance'
 import * as activityService from '../services/activity'
 import * as reportService from '../services/reports'
 import { useApp } from '../context/AppContext'
-import { PERM, can } from '../utils/permissions'
-import { visibleTransactions } from '../utils/permissions'
+import { PERM, can, isStaff, visibleTransactions } from '../utils/permissions'
 
 export { useAsyncData }
+
+/**
+ * Data hooks.
+ *
+ * Each one wraps a service call in `useAsyncData`, which re-runs whenever the
+ * app's revision counter ticks. Change notifications from the data layer
+ * drive that counter, so these hooks are effectively live: a borrow anywhere —
+ * including in another tab or on another machine — refreshes them without any
+ * manual reload.
+ *
+ * Hooks whose data a role cannot read do not fire a request at all; they resolve
+ * empty, which keeps the console free of permission errors the user can do
+ * nothing about.
+ */
 
 /* --------------------------- domain data --------------------------- */
 
@@ -30,11 +43,16 @@ export function useTool(id) {
   return { tool: data, loading, error, reload }
 }
 
+/** The user directory. Empty for a student, who may only read their own profile. */
 export function useUsers() {
-  const { data, loading, error, reload } = useAsyncData(() => userService.listAll(), [], {
-    initial: [],
-  })
-  return { users: data ?? [], loading, error, reload }
+  const { user } = useApp()
+  const allowed = can(user, PERM.USER_VIEW)
+  const { data, loading, error, reload } = useAsyncData(
+    () => (allowed ? userService.listAll() : Promise.resolve([])),
+    [allowed],
+    { initial: [] },
+  )
+  return { users: data ?? [], loading, error, reload, allowed }
 }
 
 /** Transactions filtered to what the signed-in role is allowed to see. */
@@ -59,27 +77,32 @@ export function useToolTransactions(toolId) {
   return { transactions: data ?? [], loading, error, reload }
 }
 
+/** The tool timeline. Only staff may read the activity log. */
 export function useToolActivity(toolId) {
+  const { user } = useApp()
+  const allowed = isStaff(user)
   const { data, loading, error, reload } = useAsyncData(
-    () => (toolId ? activityService.listForTool(toolId) : Promise.resolve([])),
-    [toolId],
+    () => (toolId && allowed ? activityService.listForTool(toolId) : Promise.resolve([])),
+    [toolId, allowed],
     { initial: [] },
   )
-  return { entries: data ?? [], loading, error, reload }
+  return { entries: data ?? [], loading, error, reload, allowed }
 }
 
 export function useActivity(limit = 12) {
+  const { user } = useApp()
+  const allowed = isStaff(user)
   const { data, loading, error, reload } = useAsyncData(
-    () => activityService.listRecent(limit),
-    [limit],
+    () => (allowed ? activityService.listRecent(limit) : Promise.resolve([])),
+    [limit, allowed],
     { initial: [] },
   )
-  return { entries: data ?? [], loading, error, reload }
+  return { entries: data ?? [], loading, error, reload, allowed }
 }
 
 export function useNotifications() {
   const { user } = useApp()
-  const seeAll = can(user, PERM.TXN_VIEW_ALL)
+  const seeAll = isStaff(user)
   const { data, loading, error, reload } = useAsyncData(
     () => notificationService.listFor(user, { seeAll }),
     [user?.id, seeAll],
@@ -91,19 +114,25 @@ export function useNotifications() {
 }
 
 export function useMaintenance() {
-  const { data, loading, error, reload } = useAsyncData(() => maintenanceService.listAll(), [], {
-    initial: [],
-  })
-  return { records: data ?? [], loading, error, reload }
+  const { user } = useApp()
+  const allowed = can(user, PERM.MAINTENANCE_VIEW)
+  const { data, loading, error, reload } = useAsyncData(
+    () => (allowed ? maintenanceService.listAll() : Promise.resolve([])),
+    [allowed],
+    { initial: [] },
+  )
+  return { records: data ?? [], loading, error, reload, allowed }
 }
 
 export function useToolMaintenance(toolId) {
+  const { user } = useApp()
+  const allowed = can(user, PERM.MAINTENANCE_VIEW)
   const { data, loading, error, reload } = useAsyncData(
-    () => (toolId ? maintenanceService.listForTool(toolId) : Promise.resolve([])),
-    [toolId],
+    () => (toolId && allowed ? maintenanceService.listForTool(toolId) : Promise.resolve([])),
+    [toolId, allowed],
     { initial: [] },
   )
-  return { records: data ?? [], loading, error, reload }
+  return { records: data ?? [], loading, error, reload, allowed }
 }
 
 export function useUpcomingMaintenance(withinDays = 30) {
@@ -115,10 +144,29 @@ export function useUpcomingMaintenance(withinDays = 30) {
   return { upcoming: data ?? [], loading, reload }
 }
 
+/**
+ * Dashboard data for the signed-in role.
+ *
+ * Staff get the laboratory-wide picture; a student gets their own loans and the
+ * available-tool count. Both are computed from the stored records — nothing on the
+ * dashboard is hardcoded.
+ */
 export function useDashboard() {
-  const { settings } = useApp()
+  const { settings, user } = useApp()
+  const staff = isStaff(user)
+  const uid = user?.id ?? null
+
   const { data, loading, error, reload } = useAsyncData(
     async () => {
+      if (!uid) return null
+
+      if (!staff) {
+        const student = await reportService.studentDashboard(uid, {
+          dueSoonThresholdDays: settings.dueSoonThresholdDays,
+        })
+        return { scope: 'student', student }
+      }
+
       const [stats, recent, mostBorrowed, activeUsers, overdue, activity, upcoming] =
         await Promise.all([
           reportService.dashboardStats({
@@ -131,9 +179,18 @@ export function useDashboard() {
           activityService.listRecent(8),
           maintenanceService.upcoming(30),
         ])
-      return { stats, recent, mostBorrowed, activeUsers, overdue, activity, upcoming }
+      return {
+        scope: 'staff',
+        stats,
+        recent,
+        mostBorrowed,
+        activeUsers,
+        overdue,
+        activity,
+        upcoming,
+      }
     },
-    [settings.dueSoonThresholdDays],
+    [settings.dueSoonThresholdDays, staff, uid],
   )
   return { dashboard: data, loading, error, reload }
 }

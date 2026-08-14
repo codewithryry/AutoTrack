@@ -11,6 +11,7 @@ import {
 import {
   ConfirmDialog,
   EmptyState,
+  ErrorState,
   FilterSelect,
   MaintenanceStatusBadge,
   Modal,
@@ -44,7 +45,7 @@ import { formatDate } from '../utils/dates'
 export default function MaintenancePage() {
   const { user, can, settings } = useApp()
   const toast = useToast()
-  const { records, loading } = useMaintenance()
+  const { records, loading, error, reload } = useMaintenance()
   const { tools } = useTools()
   const { upcoming } = useUpcomingMaintenance(45)
 
@@ -158,7 +159,13 @@ export default function MaintenancePage() {
             title={`${filtered.length} maintenance record${filtered.length === 1 ? '' : 's'}`}
             bodyClassName="p-0"
           >
-            {loading && !records.length ? (
+            {error ? (
+              <ErrorState
+                title="Maintenance records could not be loaded"
+                description={error.message}
+                onRetry={reload}
+              />
+            ) : loading && !records.length ? (
               <SkeletonRows rows={5} columns={4} />
             ) : filtered.length === 0 ? (
               <EmptyState

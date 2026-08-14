@@ -14,6 +14,7 @@ import {
   ConditionBadge,
   DetailItem,
   EmptyState,
+  ErrorState,
   PageHeader,
   SearchInput,
   SectionCard,
@@ -21,6 +22,7 @@ import {
   TextAreaField,
   TxnStatusBadge,
 } from '../components/ui'
+import { LocationCaptureField } from '../components/LocationCapture'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import { useDebounced, useTransactions } from '../hooks'
@@ -57,7 +59,7 @@ export default function ReturnPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
 
-  const { transactions, loading } = useTransactions()
+  const { transactions, loading, error, reload } = useTransactions()
   const preselectedTool = searchParams.get('tool')
 
   const [selectedId, setSelectedId] = useState('')
@@ -68,6 +70,9 @@ export default function ReturnPage() {
   const [notes, setNotes] = useState('')
   const [errors, setErrors] = useState({})
   const [submitting, setSubmitting] = useState(false)
+  // Where the tool is being handed back. Independent of the collection point —
+  // the two are stored and shown as separate readings, never as a route.
+  const [returnLocation, setReturnLocation] = useState(null)
 
   const openLoans = useMemo(
     () =>
@@ -104,20 +109,28 @@ export default function ReturnPage() {
     setErrors({})
 
     try {
-      await txnService.returnTool({ transactionId: selected.id, condition, notes }, user)
+      await txnService.returnTool(
+        { transactionId: selected.id, condition, notes, returnLocation },
+        user,
+      )
+
+      const where = returnLocation
+        ? 'The return location was recorded.'
+        : 'No return location was recorded.'
 
       if (condition === CONDITION.DAMAGED) {
         toast.warning(
-          `${selected.toolName} was returned damaged and removed from circulation.`,
+          `${selected.toolName} was returned damaged and removed from circulation. ${where}`,
           { title: 'Tool returned — damaged' },
         )
       } else {
-        toast.success('Tool successfully returned.', { title: selected.toolName })
+        toast.success(`Tool successfully returned. ${where}`, { title: selected.toolName })
       }
 
       setSelectedId('')
       setNotes('')
       setCondition(CONDITION.GOOD)
+      setReturnLocation(null)
       navigate(`/tools/${selected.toolId}`)
     } catch (err) {
       if (err instanceof ValidationError) {
@@ -165,7 +178,13 @@ export default function ReturnPage() {
             />
           </div>
 
-          {loading && !transactions.length ? (
+          {error ? (
+            <ErrorState
+              title="Open loans could not be loaded"
+              description={error.message}
+              onRetry={reload}
+            />
+          ) : loading && !transactions.length ? (
             <div className="space-y-2 p-4">
               {Array.from({ length: 4 }).map((_, i) => (
                 <div key={i} className="skeleton h-16 rounded-lg" />
@@ -352,6 +371,14 @@ export default function ReturnPage() {
                     onChange={(e) => setNotes(e.target.value)}
                     placeholder="e.g. Ratchet mechanism slips under load; calibration sticker missing."
                     rows={3}
+                  />
+
+                  <LocationCaptureField
+                    value={returnLocation}
+                    onChange={setReturnLocation}
+                    title="Where is this tool being handed back?"
+                    description="One reading, taken now, stored as the loan's return point. It is kept separately from where the tool was collected."
+                    disabled={submitting}
                   />
 
                   <button

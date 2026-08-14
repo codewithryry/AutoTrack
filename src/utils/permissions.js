@@ -3,9 +3,15 @@ import { ROLE } from './constants'
 /**
  * Single source of truth for who may do what.
  *
- * The UI uses `can()` to hide controls, and every service mutation calls
- * `assertCan()` before touching the database — hiding a button is a courtesy,
- * the guard in the service layer is the actual rule.
+ * Three layers enforce the same matrix, and all three are required:
+ *
+ *   1. `visibleNavItems()` hides what a role cannot reach (a courtesy).
+ *   2. Route guards in `App.jsx` and `assertCan()` in the services refuse the
+ *      action even when the URL is typed by hand.
+ *   3. the data layer scopes every read to the role, so a screen cannot
+ *      show records the role may not see.
+ *
+ * Keep this file, `the data layer` and `components/navigation.js` in step.
  */
 
 export const PERM = {
@@ -25,7 +31,8 @@ export const PERM = {
   TXN_EDIT: 'txn:edit',
 
   // Users
-  USER_VIEW: 'user:view',
+  USER_VIEW: 'user:view', // read the directory (borrower pickers, loan owners)
+  USER_MANAGE: 'user:manage', // reach the Users page at all
   USER_CREATE: 'user:create',
   USER_EDIT: 'user:edit',
   USER_DELETE: 'user:delete',
@@ -40,6 +47,12 @@ export const PERM = {
   DATA_MANAGE: 'settings:data',
 }
 
+/**
+ * Instructors run the tool crib: they issue and receive equipment for any
+ * student, correct transactions and manage servicing. They may read the user
+ * directory (a borrower has to be selectable) but cannot create, edit or delete
+ * accounts, cannot open the Users page, and cannot touch reports or settings.
+ */
 const INSTRUCTOR_PERMS = [
   PERM.TOOL_VIEW,
   PERM.TOOL_EDIT,
@@ -53,18 +66,14 @@ const INSTRUCTOR_PERMS = [
   PERM.USER_VIEW,
   PERM.MAINTENANCE_VIEW,
   PERM.MAINTENANCE_MANAGE,
-  PERM.REPORTS_VIEW,
-  PERM.REPORTS_EXPORT,
-  PERM.SETTINGS_VIEW,
 ]
 
-const STUDENT_PERMS = [
-  PERM.TOOL_VIEW,
-  PERM.BORROW,
-  PERM.RETURN,
-  PERM.MAINTENANCE_VIEW,
-  PERM.SETTINGS_VIEW,
-]
+/**
+ * Students see the inventory, and their own loans and notifications — nothing
+ * else. They cannot change a tool's status, read the directory, or open
+ * maintenance, reports or settings.
+ */
+const STUDENT_PERMS = [PERM.TOOL_VIEW, PERM.BORROW, PERM.RETURN]
 
 const ROLE_PERMISSIONS = {
   [ROLE.ADMIN]: Object.values(PERM), // full access
@@ -105,6 +114,8 @@ export function assertCan(user, permission, message) {
 export const isAdmin = (user) => user?.role === ROLE.ADMIN
 export const isInstructor = (user) => user?.role === ROLE.INSTRUCTOR
 export const isStudent = (user) => user?.role === ROLE.STUDENT
+/** Staff share the laboratory-wide view; students are scoped to themselves. */
+export const isStaff = (user) => isAdmin(user) || isInstructor(user)
 
 /** Students may only borrow for themselves. */
 export function canBorrowFor(user, targetUserId) {
@@ -120,7 +131,12 @@ export function canReturnTransaction(user, transaction) {
   return can(user, PERM.RETURN) && transaction.userId === user.id
 }
 
-/** Which transactions a role is allowed to see. */
+/**
+ * Belt-and-braces filter for transaction lists.
+ *
+ * A student's queries are already scoped to their own uid in the data layer and
+ * by the security rules; this keeps a mixed list (say, a cached page) honest.
+ */
 export function visibleTransactions(user, transactions = []) {
   if (!user) return []
   if (can(user, PERM.TXN_VIEW_ALL)) return transactions

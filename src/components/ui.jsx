@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from 'react'
+import { Children, useEffect, useId, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { AlertTriangle, Loader2, Search, X } from 'lucide-react'
 import { cx } from '../utils/helpers'
@@ -61,38 +61,114 @@ export const MaintenanceStatusBadge = ({ status }) => (
  * Page furniture
  * ------------------------------------------------------------------ */
 
-export function PageHeader({ title, description, children, icon: Icon }) {
+export function PageHeader({
+  title,
+  description,
+  children,
+  icon: Icon,
+  hideTitleMobile = false,
+  hideTitle = false,
+}) {
+  // `false`/`null` children are what a permission check leaves behind, so the
+  // actions are counted after they are dropped — a header with nothing left in
+  // it must not reserve any space.
+  const actions = Children.toArray(children)
+  const hasActions = actions.length > 0
+  // The sticky header already names the page on a phone, so a page may drop its
+  // own H1 there and keep only the action buttons. With no actions nothing is
+  // left to show, so the whole block is hidden until `sm`, where it returns.
+  //
+  // `hideTitle` goes further: the sidebar and the sticky header both name the
+  // page on every width, so the page drops its H1 outright and keeps only its
+  // actions — and nothing at all when it has none, leaving no empty gap.
+  if (hideTitle && !hasActions) return null
   return (
-    <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-      <div className="min-w-0">
-        <div className="flex items-center gap-2.5">
-          {Icon && (
-            <span
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-lg
-                         bg-amberline-400/15 text-amberline-600 dark:text-amberline-400"
-            >
-              <Icon className="h-5 w-5" />
-            </span>
-          )}
-          <h1 className="truncate text-xl font-extrabold tracking-tight sm:text-2xl">{title}</h1>
+    <div
+      className={cx(
+        'mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between',
+        hideTitleMobile && !hasActions && 'hidden sm:block',
+        // Nothing sits on the left any more, so the actions keep their place.
+        hideTitle && 'sm:justify-end',
+      )}
+    >
+      {!hideTitle && (
+        <div className={cx('min-w-0', hideTitleMobile && 'hidden sm:block')}>
+          <div className="flex items-center gap-2.5">
+            {Icon && (
+              <span
+                className="grid h-9 w-9 shrink-0 place-items-center rounded-lg
+                           bg-amberline-400/15 text-amberline-600 dark:text-amberline-400"
+              >
+                <Icon className="h-5 w-5" />
+              </span>
+            )}
+            <h1 className="truncate text-xl font-extrabold tracking-tight sm:text-2xl">{title}</h1>
+          </div>
+          {description && <p className="muted mt-1.5 text-sm">{description}</p>}
         </div>
-        {description && <p className="muted mt-1.5 text-sm">{description}</p>}
-      </div>
-      {children && <div className="flex flex-wrap items-center gap-2">{children}</div>}
+      )}
+      {hasActions && <div className="flex flex-wrap items-center gap-2">{children}</div>}
     </div>
   )
 }
 
-export function SectionCard({ title, description, action, children, className, bodyClassName }) {
+/**
+ * A titled panel.
+ *
+ * `flat` is opt-in and changes nothing for the pages that do not ask for it: the
+ * header keeps the card's own surface and loses the filled strip and the rule
+ * under it, so several panels stacked on one screen read as modules of a single
+ * page rather than as a column of separate boxes.
+ */
+/**
+ * `variant` picks the surface, and with it the section's rank on the page:
+ * `card` is the original and stays the default, so every existing caller is
+ * untouched. `panel` and `quiet` are the dashboard's primary/secondary pair —
+ * see the `.panel` block in `index.css`.
+ */
+const SECTION_SURFACE = { card: 'card', panel: 'panel', quiet: 'panel-quiet' }
+
+export function SectionCard({
+  title,
+  description,
+  action,
+  children,
+  className,
+  bodyClassName,
+  flat = false,
+  variant = 'card',
+  ...rest // `data-tour` and friends, so a card can be a walkthrough target
+}) {
+  // A quiet panel is already recessed; a heavy filled header on top of it would
+  // put the ranking back the wrong way round, so it is always flat.
+  const bare = flat || variant === 'quiet'
   return (
-    <section className={cx('card overflow-hidden', className)}>
+    <section
+      className={cx(SECTION_SURFACE[variant] ?? 'card', 'overflow-hidden', className)}
+      {...rest}
+    >
       {(title || action) && (
         <header
-          className="flex items-center justify-between gap-3 border-b px-4 py-3"
-          style={{ background: 'rgb(var(--surface-2))' }}
+          // `px-4` for every variant, deliberately: the list rows inside these
+          // sections are `px-4` too, and a roomier header would leave the title
+          // hanging four pixels off the column of text beneath it.
+          className={cx(
+            'flex items-center justify-between gap-3 px-4',
+            bare ? 'pb-2 pt-3.5 sm:pt-4' : 'border-b py-3',
+          )}
+          style={bare ? undefined : { background: 'rgb(var(--surface-2))' }}
         >
           <div className="min-w-0">
-            {title && <h2 className="truncate text-sm font-bold">{title}</h2>}
+            {title && (
+              <h2
+                className={cx(
+                  'truncate font-bold tracking-tight',
+                  variant === 'card' ? (flat ? 'text-[15px]' : 'text-sm') : 'text-[15px] sm:text-base',
+                )}
+              >
+                {title}
+              </h2>
+            )}
             {description && <p className="subtle mt-0.5 text-xs">{description}</p>}
           </div>
           {action}

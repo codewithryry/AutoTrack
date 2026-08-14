@@ -79,9 +79,18 @@ export function ToastProvider({ children }) {
     <ToastContext.Provider value={api}>
       {children}
       <div
+        // On the phone the toasts sit along the bottom, the reachable end of the
+        // screen, stacked just above the fixed bottom bar: 4rem of bar plus its
+        // safe-area inset plus a gap, so they clear the navigation and the raised
+        // scan button instead of covering them. `inset-x-3` keeps them inside the
+        // viewport on the narrowest phone.
+        //
+        // From `lg` — where the desktop rail replaces the bottom bar — they
+        // return to the upper right exactly as before, safe-area inset included.
         className="fixed z-[100] flex flex-col gap-2 pointer-events-none
-                   left-1/2 -translate-x-1/2 bottom-24 w-[min(24rem,calc(100vw-2rem))]
-                   sm:left-auto sm:translate-x-0 sm:right-4 sm:bottom-4 sm:w-96"
+                   inset-x-3 bottom-[calc(env(safe-area-inset-bottom,0px)+4.75rem)]
+                   lg:inset-x-auto lg:bottom-auto
+                   lg:right-4 lg:top-[calc(env(safe-area-inset-top,0px)+1rem)] lg:w-96"
         role="region"
         aria-live="polite"
         aria-label="Notifications"

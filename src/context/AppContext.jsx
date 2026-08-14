@@ -1,235 +1,172 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import * as db from '../services/db'
+import { COLLECTIONS } from '../services/db'
 import * as authService from '../services/auth'
 import * as settingsService from '../services/settings'
 import * as transactionService from '../services/transactions'
 import * as maintenanceService from '../services/maintenance'
-import { seedIfEmpty } from '../data/seed'
 import { DEFAULT_SETTINGS } from '../utils/constants'
-import { can as hasPermission } from '../utils/permissions'
+import { PERM, can as hasPermission, isStaff } from '../utils/permissions'
 
 /**
- * Application shell state: the boot sequence, session, settings, and a revision
- * counter that data hooks watch so any write anywhere refreshes every screen
+ * Application shell state: the local session, the signed-in user's stored
+ * profile, laboratory settings, and a revision counter that data hooks watch so
+ * a write anywhere — including one made in another tab — refreshes every screen
  * showing that data.
+ *
+ * The session is owned by `services/localAuth.js`. Its listener fires
+ * once as soon as the persisted session has been read, which is
+ * what ends the loading state: `authReady` is never left false, so the app can
+ * never sit on a spinner.
+ *
+ * The role always comes from the stored `users` record, never from anything the
+ * client could set. A session whose profile is missing, roleless or inactive is
+ * signed straight back out with an explanation on the login screen.
  */
 
 const AppContext = createContext(null)
 
-/** Failsafe. The boot is fast; anything beyond this is a stuck environment. */
-const BOOT_TIMEOUT_MS = 10_000
-
-const isDev = import.meta.env?.DEV ?? false
-const stage = (message) => {
-  if (isDev) console.info(`[BOOT] ${message}`)
-}
-
-/* ------------------------------------------------------------------ *
- * Boot sequence
- *
- * The sequence lives at module scope, not inside the effect, and is memoised
- * in `bootPromise`. That is what makes it survive React.StrictMode: in
- * development React mounts, runs effects, tears them down and runs them again.
- * An effect that both starts the boot *and* owns a `cancelled` flag will have
- * that flag set by the teardown, so the in-flight boot can never apply its
- * result — and a "only boot once" ref stops the second run from starting a
- * fresh one. The app then sits on the boot screen forever, in dev only.
- *
- * Hoisting the work here means the second effect run simply awaits the same
- * promise and applies the result itself.
- * ------------------------------------------------------------------ */
-
-let environmentPromise = null
-let bootOverrides = {}
-
-/** Memoised environment preparation — one run per page load. */
-function preparedEnvironment(overrides) {
-  environmentPromise ??= prepareEnvironment(overrides)
-  return environmentPromise
-}
-
 /**
- * Prepare the environment: open the database, seed it if empty, load settings
- * and reconcile overdue loans.
+ * Failsafe for the profile read.
  *
- * This is the expensive, idempotent half of the boot, so it is memoised and
- * runs once per page load. The session is deliberately *not* part of it —
- * see `runBootSequence`.
- *
- * Only `ready()` and `loadSettings()` are on the critical path. Seeding and
- * reconciliation are best-effort: a technician must still reach the login
- * screen when demo data or an overdue sweep fails.
- *
- * @returns {Promise<{ settings: object, warnings: string[] }>}
+ * The session is restored quickly, but the profile read that
+ * turns it into a role can hang on a cold, offline first load with nothing
+ * cached. Without this the app would sit on the boot skeleton — exactly the state
+ * the boot is designed never to reach.
  */
-async function prepareEnvironment(overrides = {}) {
-  const {
-    ready = db.ready,
-    seed = seedIfEmpty,
-    loadSettings = settingsService.load,
-    runOverdueCheck = transactionService.runOverdueCheck,
-    notifyMaintenanceDue = maintenanceService.notifyDue,
-  } = overrides
+const PROFILE_TIMEOUT_MS = 15_000
 
-  const warnings = []
-
-  stage('starting application')
-
-  stage('initialising database')
-  await ready()
-  stage('database initialised')
-
-  try {
-    stage('seeding database')
-    const seeded = await seed()
-    stage(seeded ? `database seed complete (${seeded.tools} tools)` : 'database already populated')
-  } catch (err) {
-    console.error('[BOOT ERROR] demo data could not be seeded', err)
-    warnings.push('Demo data could not be loaded. The laboratory database is otherwise usable.')
-  }
-
-  stage('loading settings')
-  const settings = await loadSettings()
-
-  try {
-    stage('reconciling overdue loans')
-    await runOverdueCheck({
-      dueSoonThresholdDays: settings.dueSoonThresholdDays,
-      notify: settings.notifyOverdue !== false,
-    })
-    if (settings.notifyMaintenance !== false) await notifyMaintenanceDue()
-    stage('reconciliation complete')
-  } catch (err) {
-    console.error('[BOOT ERROR] overdue/maintenance reconciliation failed', err)
-    warnings.push('Overdue and maintenance alerts could not be refreshed.')
-  }
-
-  return { settings, warnings }
-}
-
-/**
- * Full boot: the memoised environment, then a *fresh* session read.
- *
- * Restoring the session is one indexed lookup, and it must reflect what is in
- * localStorage right now rather than a snapshot taken when the module first
- * loaded — otherwise a provider mounted after a sign-in would still believe
- * nobody is logged in.
- */
-async function runBootSequence(overrides = {}) {
-  const { restoreSession = authService.restore } = overrides
-  const { settings, warnings } = await preparedEnvironment(overrides)
-
-  stage('initialising authentication')
-  const user = await restoreSession()
-  stage(user ? `authentication initialised (${user.username})` : 'no stored session')
-
-  stage('application boot complete')
-  return { settings, user, warnings }
-}
-
-/** Reject if the sequence stalls, so the UI can offer a retry instead of hanging. */
 function withTimeout(promise, ms) {
-  if (!ms || ms <= 0) return promise
   let timer
   const timeout = new Promise((_, reject) => {
-    timer = setTimeout(
-      () =>
-        reject(
-          new Error(
-            'Starting the laboratory database took too long. The browser may be blocking ' +
-              'local storage, or another tab is holding the database open.',
-          ),
-        ),
-      ms,
-    )
+    timer = setTimeout(() => {
+      const err = new Error('Timed out waiting for the profile.')
+      err.name = 'TimeoutError'
+      reject(err)
+    }, ms)
   })
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
 }
 
-/**
- * Run the boot for one provider mount.
- *
- * The expensive half is memoised, so a StrictMode remount re-reads only the
- * session. `force` is used by the retry control on the error screen and drops
- * the memo so a failed database open is genuinely attempted again.
- */
-function startBoot({ force = false } = {}) {
-  if (force) environmentPromise = null
-  const { timeoutMs = BOOT_TIMEOUT_MS, ...deps } = bootOverrides
-  return withTimeout(runBootSequence(deps), timeoutMs)
-}
-
-/**
- * Test seam: drop the memoised environment and optionally inject stand-ins for
- * the boot's dependencies. Not used by the application itself.
- */
-export function __resetBootForTests(overrides = {}) {
-  environmentPromise = null
-  bootOverrides = overrides
-}
-
-/* ------------------------------------------------------------------ */
-
 export function AppProvider({ children }) {
-  const [booting, setBooting] = useState(true)
+  /** False only until the stored session has been read. */
+  const [authReady, setAuthReady] = useState(false)
+  const [user, setUser] = useState(null)
+  /** Why a session was rejected — surfaced on the login screen. */
+  const [sessionError, setSessionError] = useState(null)
+  /** A hard failure that leaves the app unusable. */
   const [bootError, setBootError] = useState(null)
   const [bootWarnings, setBootWarnings] = useState([])
-  const [bootAttempt, setBootAttempt] = useState(0)
-  const [user, setUser] = useState(null)
-  const [settings, setSettings] = useState(DEFAULT_SETTINGS)
+  const [settings, setSettings] = useState(() => ({
+    ...DEFAULT_SETTINGS,
+    theme: settingsService.loadTheme(),
+  }))
   const [revision, setRevision] = useState(0)
   const [online, setOnline] = useState(navigator.onLine)
+  const [attempt, setAttempt] = useState(0)
 
   const bumpRevision = useCallback(() => setRevision((r) => r + 1), [])
 
-  /* --------------------------- boot --------------------------- */
+  /* --------------------------- session --------------------------- */
 
   useEffect(() => {
-    // `active` guards only *this* effect run's state updates — it never cancels
-    // the boot. A StrictMode teardown therefore cannot orphan the work: the
-    // second effect run reuses the memoised environment and applies the result
-    // itself. Cancelling here instead is what left the app booting forever.
+    // The device theme applies before anything else so the first paint is right.
+    settingsService.applyTheme(settingsService.loadTheme())
+  }, [])
+
+  useEffect(() => {
     let active = true
 
-    setBooting(true)
-    setBootError(null)
+    const unsubscribe = authService.onAuthChange(async (sessionUser) => {
+      if (!sessionUser) {
+        db.clearScope()
+        if (!active) return
+        setUser(null)
+        setAuthReady(true)
+        return
+      }
 
-    startBoot({ force: bootAttempt > 0 })
-      .then(({ settings: loaded, user: restored, warnings }) => {
-        if (!active) return
-        settingsService.applyTheme(loaded.theme)
-        setSettings(loaded)
-        setUser(restored)
-        setBootWarnings(warnings)
-      })
-      .catch((err) => {
-        console.error('[BOOT ERROR] application boot failed', err)
-        if (!active) return
-        setBootError(
-          err?.message ??
-            'The local database could not be opened. Try reloading, or clear site data.',
+      try {
+        const profile = await withTimeout(
+          authService.loadProfile(sessionUser),
+          PROFILE_TIMEOUT_MS,
         )
-      })
-      .finally(() => {
-        // Always leaves the loading state — success, failure or timeout.
-        if (active) setBooting(false)
-      })
+        // Scope the data layer before any screen reads from it.
+        db.setScope({ uid: profile.id, role: profile.role })
+        if (!active) return
+        setSessionError(null)
+        setUser(profile)
+      } catch (err) {
+        console.error('[app] the signed-in account cannot be used', err)
+        if (!active) return
+        if (err?.name === 'TimeoutError') {
+          // The profile never arrived — nothing
+          // cached. The session is left alone; the boot error state offers a retry.
+          setBootError(
+            'Your laboratory profile could not be loaded. Check the internet connection and try again.',
+          )
+        } else {
+          // The account authenticates but cannot be used: no profile, no role,
+          // or not active. Drop the session and explain why on the login screen.
+          await authService.logout().catch(() => {})
+          setSessionError(err?.message ?? 'This account cannot be used right now.')
+          setUser(null)
+        }
+      } finally {
+        if (active) setAuthReady(true)
+      }
+    })
 
     return () => {
       active = false
+      unsubscribe()
     }
-  }, [bootAttempt])
+  }, [attempt])
 
-  /** Re-run the boot from the error screen. */
-  const retryBoot = useCallback(() => setBootAttempt((n) => n + 1), [])
+  /* --------------------------- settings --------------------------- */
 
-  /** Dismiss a boot failure and continue with whatever loaded. */
-  const continueWithoutBoot = useCallback(() => {
-    setBootError(null)
-    setBooting(false)
-  }, [])
+  /**
+   * Load the settings once per session, and again when the settings document
+   * itself changes.
+   *
+   * Deliberately *not* on every revision bump: that fires on any write anywhere,
+   * and each load produces a new settings object, which would reset the Settings
+   * form under an administrator mid-edit.
+   */
+  useEffect(() => {
+    if (!user) {
+      setSettings((s) => ({ ...DEFAULT_SETTINGS, theme: s.theme }))
+      return
+    }
 
-  /* ------------------- database change fan-out ------------------- */
+    let active = true
+    const load = () =>
+      settingsService
+        .load()
+        .then((loaded) => {
+          if (!active) return
+          settingsService.applyTheme(loaded.theme)
+          setSettings(loaded)
+        })
+        .catch((err) => {
+          console.error('[app] settings could not be loaded', err)
+          if (!active) return
+          // The defaults are usable, so this is a warning rather than a dead end.
+          setBootWarnings((w) => (w.includes(SETTINGS_WARNING) ? w : [...w, SETTINGS_WARNING]))
+        })
+
+    load()
+    const unsubscribe = db.subscribe((collection) => {
+      if (collection === COLLECTIONS.settings || collection === '*') load()
+    })
+
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [user])
+
+  /* ------------------- data change fan-out ------------------- */
   useEffect(() => db.subscribe(() => bumpRevision()), [bumpRevision])
 
   /* ------------------------ connectivity ------------------------ */
@@ -253,52 +190,111 @@ export function AppProvider({ children }) {
     return () => media.removeEventListener('change', apply)
   }, [settings.theme])
 
+  /* ---------------------- overdue reconciliation ---------------------- */
+
   /**
-   * Re-run the overdue sweep when the tab regains focus. A laboratory PC is
-   * often left open overnight, so "today" can change without a reload.
+   * Flip due loans to Overdue and raise the alerts.
+   *
+   * Only staff run this: it writes to transactions and tools, which the security
+   * rules (rightly) forbid a student from doing. A student's own overdue loan is
+   * still shown as late by the due-date comparison in the UI.
    */
+  const sweptRef = useRef(null)
   useEffect(() => {
-    if (!user) return
-    const onVisible = async () => {
-      if (document.visibilityState !== 'visible') return
+    if (!user || !isStaff(user)) return
+    const key = `${user.id}:${settings.dueSoonThresholdDays}`
+
+    const sweep = async () => {
       try {
         await transactionService.runOverdueCheck({
           dueSoonThresholdDays: settings.dueSoonThresholdDays,
           notify: settings.notifyOverdue !== false,
         })
+        if (settings.notifyMaintenance !== false) await maintenanceService.notifyDue()
       } catch (err) {
-        console.error('[app] overdue refresh failed', err)
+        console.error('[app] overdue reconciliation failed', err)
       }
+    }
+
+    if (sweptRef.current !== key) {
+      sweptRef.current = key
+      sweep()
+    }
+
+    // A laboratory PC is often left open overnight, so "today" can change
+    // without a reload.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') sweep()
     }
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
-  }, [user, settings.dueSoonThresholdDays, settings.notifyOverdue])
+  }, [
+    user,
+    settings.dueSoonThresholdDays,
+    settings.notifyOverdue,
+    settings.notifyMaintenance,
+  ])
 
   /* --------------------------- actions --------------------------- */
 
-  const login = useCallback(async (username, password) => {
-    const signedIn = await authService.login(username, password)
-    setUser(signedIn)
-    return signedIn
+  /** Sign in. The auth listener applies the profile; this returns it early so
+   *  the login screen can greet the user by name. */
+  const login = useCallback(async (email, password) => {
+    setSessionError(null)
+    const profile = await authService.login(email, password)
+    db.setScope({ uid: profile.id, role: profile.role })
+    setUser(profile)
+    return profile
   }, [])
 
-  const logout = useCallback(() => {
-    authService.logout()
+  const logout = useCallback(async () => {
+    await authService.logout()
     setUser(null)
+    setSessionError(null)
   }, [])
 
+  /**
+   * Delete the signed-in account. The service removes the credential and the
+   * profile (signing the session out along the way); the shell drops its own
+   * state so nothing on screen keeps referring to an account that is gone.
+   */
+  const deleteOwnAccount = useCallback(async () => {
+    await authService.deleteAccount(user)
+    setUser(null)
+    setSessionError(null)
+  }, [user])
+
+  /** Re-read the profile — used after a user edits their own details. */
   const refreshUser = useCallback(async () => {
-    const restored = await authService.restore()
-    setUser(restored)
-    return restored
+    const sessionUser = authService.currentSessionUser()
+    if (!sessionUser) return null
+    const profile = await authService.loadProfile(sessionUser)
+    db.setScope({ uid: profile.id, role: profile.role })
+    setUser(profile)
+    return profile
   }, [])
 
-  const saveSettings = useCallback(async (patch) => {
-    const next = await settingsService.save(patch)
-    settingsService.applyTheme(next.theme)
-    setSettings(next)
-    return next
+  const retryBoot = useCallback(() => {
+    setBootError(null)
+    setBootWarnings([])
+    setAuthReady(false)
+    setAttempt((n) => n + 1)
   }, [])
+
+  const continueWithoutBoot = useCallback(() => {
+    setBootError(null)
+    setAuthReady(true)
+  }, [])
+
+  const saveSettings = useCallback(
+    async (patch) => {
+      const next = await settingsService.save(patch, user)
+      settingsService.applyTheme(next.theme)
+      setSettings(next)
+      return next
+    },
+    [user],
+  )
 
   const reloadSettings = useCallback(async () => {
     const next = await settingsService.load()
@@ -311,28 +307,37 @@ export function AppProvider({ children }) {
 
   const value = useMemo(
     () => ({
-      booting,
+      authReady,
+      // `booting` is kept for the shell: the app is booting until the session has
+      // reported whether somebody is signed in.
+      booting: !authReady,
       bootError,
       bootWarnings,
+      sessionError,
+      clearSessionError: () => setSessionError(null),
       retryBoot,
       continueWithoutBoot,
       user,
+      role: user?.role ?? null,
       isAuthenticated: !!user,
       settings,
       revision,
       online,
       login,
       logout,
+      deleteOwnAccount,
       refreshUser,
       saveSettings,
       reloadSettings,
       bumpRevision,
       can,
+      PERM,
     }),
     [
-      booting,
+      authReady,
       bootError,
       bootWarnings,
+      sessionError,
       retryBoot,
       continueWithoutBoot,
       user,
@@ -341,6 +346,7 @@ export function AppProvider({ children }) {
       online,
       login,
       logout,
+      deleteOwnAccount,
       refreshUser,
       saveSettings,
       reloadSettings,
@@ -352,6 +358,9 @@ export function AppProvider({ children }) {
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }
 
+const SETTINGS_WARNING =
+  'Laboratory settings could not be read. The defaults are in use for now.'
+
 export function useApp() {
   const ctx = useContext(AppContext)
   if (!ctx) throw new Error('useApp must be used inside <AppProvider>')
@@ -359,8 +368,14 @@ export function useApp() {
 }
 
 export const useAuth = () => {
-  const { user, isAuthenticated, login, logout, refreshUser, can } = useApp()
-  return { user, isAuthenticated, login, logout, refreshUser, can }
+  const { user, role, isAuthenticated, authReady, login, logout, refreshUser, can } = useApp()
+  return { user, role, isAuthenticated, authReady, login, logout, refreshUser, can }
+}
+
+/** The authenticated user's role, straight from their stored profile. */
+export const useUserRole = () => {
+  const { role, user, can } = useApp()
+  return { role, user, can }
 }
 
 export const useSettings = () => {

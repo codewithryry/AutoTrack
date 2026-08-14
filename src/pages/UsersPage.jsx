@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Download,
+  KeyRound,
   Mail,
   Pencil,
   Phone,
@@ -14,6 +15,7 @@ import {
   ConfirmDialog,
   DetailItem,
   EmptyState,
+  ErrorState,
   FilterSelect,
   Modal,
   PageHeader,
@@ -48,15 +50,16 @@ import { cx, downloadCSV, initials } from '../utils/helpers'
 import { formatDate } from '../utils/dates'
 
 const CSV_COLUMNS = [
-  { key: 'id', label: 'User ID' },
+  { key: 'id', label: 'Auth UID' },
   { key: 'fullName', label: 'Full Name' },
-  { key: 'username', label: 'Username' },
+  { key: 'email', label: 'Email' },
   { key: 'role', label: 'Role' },
   { key: 'studentId', label: 'Student ID' },
   { key: 'course', label: 'Course' },
   { key: 'yearLevel', label: 'Year Level' },
+  { key: 'employeeId', label: 'Employee ID' },
+  { key: 'department', label: 'Department' },
   { key: 'contact', label: 'Contact' },
-  { key: 'email', label: 'Email' },
   { key: 'status', label: 'Status' },
   { key: 'createdAt', label: 'Registered', format: (v) => formatDate(v, '') },
 ]
@@ -64,7 +67,7 @@ const CSV_COLUMNS = [
 export default function UsersPage() {
   const { user: currentUser, can } = useApp()
   const toast = useToast()
-  const { users, loading } = useUsers()
+  const { users, loading, error, reload } = useUsers()
   const { transactions } = useTransactions()
 
   const [search, setSearch] = useState('')
@@ -86,6 +89,32 @@ export default function UsersPage() {
     [users, debouncedSearch, role, status, sort],
   )
 
+  /** Self-registered accounts waiting for a decision. */
+  const pending = useMemo(() => userService.pendingAccounts(users), [users])
+
+  /** Students whose profile edits are waiting for a decision. */
+  const pendingProfiles = useMemo(() => userService.pendingProfileChanges(users), [users])
+
+  const decideProfile = async (target, approve) => {
+    setBusy(true)
+    try {
+      if (approve) {
+        await userService.approveProfileChanges(target.id, currentUser)
+        toast.success(`${target.fullName}'s profile was updated.`, { title: 'Changes approved' })
+      } else {
+        await userService.rejectProfileChanges(target.id, currentUser)
+        toast.success(`${target.fullName}'s previous details were kept.`, {
+          title: 'Changes rejected',
+        })
+      }
+      reload()
+    } catch (err) {
+      toast.error(err.message ?? 'That decision could not be recorded.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   /** Outstanding loans per user, so instructors can see who holds what. */
   const loansByUser = useMemo(() => {
     const map = {}
@@ -104,8 +133,10 @@ export default function UsersPage() {
   const requestDelete = (target) =>
     setConfirm({
       title: `Delete ${target.fullName}?`,
-      message: `The account and its access will be removed. Transaction history remains in the laboratory record.`,
-      confirmLabel: 'Delete account',
+      message:
+        'The laboratory profile is deleted, which revokes access immediately — without a profile ' +
+        'the sign-in has no role. Transaction history stays in the laboratory record.',
+      confirmLabel: 'Delete profile',
       onConfirm: async () => {
         setBusy(true)
         try {
@@ -120,6 +151,47 @@ export default function UsersPage() {
         }
       },
     })
+
+  /** Password reset needs a backend, which this local build does not have. */
+  const sendReset = async (target) => {
+    setBusy(true)
+    try {
+      await userService.requestPasswordReset(target.email, currentUser)
+      toast.success(`A password reset link was sent to ${target.email}.`)
+    } catch (err) {
+      toast.error(err.message ?? 'The reset email could not be sent.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** Activate a self-registered instructor. */
+  const approveAccount = async (target) => {
+    setBusy(true)
+    try {
+      await userService.approve(target.id, currentUser)
+      toast.success(`${target.fullName} can now sign in.`, { title: 'Account approved' })
+      setViewing((v) => (v && v.id === target.id ? { ...v, status: USER_STATUS.ACTIVE } : v))
+    } catch (err) {
+      toast.error(err.message ?? 'Unable to approve the account.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const toggleStatus = async (target) => {
+    const next = target.status === USER_STATUS.ACTIVE ? USER_STATUS.INACTIVE : USER_STATUS.ACTIVE
+    setBusy(true)
+    try {
+      await userService.setStatus(target.id, next, currentUser)
+      toast.success(`${target.fullName}'s account is now ${next.toLowerCase()}.`)
+      setViewing((v) => (v && v.id === target.id ? { ...v, status: next } : v))
+    } catch (err) {
+      toast.error(err.message ?? 'Unable to change the account status.')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const exportCSV = () => {
     downloadCSV(filtered, CSV_COLUMNS, `users-${new Date().toISOString().slice(0, 10)}.csv`)
@@ -157,13 +229,123 @@ export default function UsersPage() {
         )}
       </PageHeader>
 
+      {/* ---------------------- pending profile changes ---------------------- */}
+      {canManage && pendingProfiles.length > 0 && (
+        <SectionCard
+          title={`${pendingProfiles.length} profile change${
+            pendingProfiles.length === 1 ? '' : 's'
+          } awaiting approval`}
+          description="A student's current details, and what they have asked to change them to."
+          bodyClassName="p-0"
+          className="mb-4"
+        >
+          <ul className="divide-y">
+            {pendingProfiles.map((row) => (
+              <li key={row.id} className="px-4 py-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <Avatar name={row.fullName} size="sm" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-bold">{row.fullName}</p>
+                    <p className="subtle truncate text-xs">
+                      {row.email}
+                      {row.studentId ? ` · ${row.studentId}` : ''}
+                    </p>
+                  </div>
+                  <RoleBadge role={row.role} />
+                  <div className="flex shrink-0 gap-1.5">
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-sm"
+                      onClick={() => decideProfile(row, false)}
+                    >
+                      Reject
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-success btn-sm"
+                      onClick={() => decideProfile(row, true)}
+                    >
+                      Approve
+                    </button>
+                  </div>
+                </div>
+
+                <dl className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {Object.entries(row.pendingProfile ?? {}).map(([field, value]) => (
+                    <div
+                      key={field}
+                      className="rounded-lg border px-3 py-2"
+                      style={{ background: 'rgb(var(--surface-2))' }}
+                    >
+                      <dt className="subtle text-[11px] font-bold uppercase tracking-wider">
+                        {field.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())}
+                      </dt>
+                      <dd className="mt-0.5 flex flex-wrap items-center gap-2 text-sm">
+                        <span className="subtle line-through">{row[field] || '—'}</span>
+                        <span aria-hidden="true">→</span>
+                        <span className="font-semibold">{value || '—'}</span>
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              </li>
+            ))}
+          </ul>
+        </SectionCard>
+      )}
+
+      {/* --------------------------- pending approvals --------------------------- */}
+      {canManage && pending.length > 0 && (
+        <SectionCard
+          title={`${pending.length} account${pending.length === 1 ? '' : 's'} awaiting approval`}
+          description="Self-registered instructors cannot sign in until an administrator approves them."
+          bodyClassName="p-0"
+          className="mb-4"
+        >
+          <ul className="divide-y">
+            {pending.map((row) => (
+              <li key={row.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+                <Avatar name={row.fullName} size="sm" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-bold">{row.fullName}</p>
+                  <p className="subtle truncate text-xs">
+                    {row.email}
+                    {row.employeeId ? ` · ${row.employeeId}` : ''}
+                    {row.department ? ` · ${row.department}` : ''}
+                  </p>
+                </div>
+                <RoleBadge role={row.role} />
+                <div className="flex shrink-0 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setViewing(row)}
+                    className="btn btn-ghost btn-sm"
+                  >
+                    Review
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => approveAccount(row)}
+                    className="btn btn-primary btn-sm"
+                    disabled={busy}
+                  >
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                    Approve
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </SectionCard>
+      )}
+
       {/* -------------------------------- filters -------------------------------- */}
       <div className="card mb-4 p-3">
         <div className="space-y-3">
           <SearchInput
             value={search}
             onChange={setSearch}
-            placeholder="Search by name, username, student ID or email…"
+            placeholder="Search by name, email, student ID or department…"
           />
           <div className="no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 pb-0.5">
             <FilterSelect
@@ -195,7 +377,13 @@ export default function UsersPage() {
 
       {/* --------------------------------- list --------------------------------- */}
       <SectionCard title={`${filtered.length} accounts`} bodyClassName="p-0">
-        {loading && !users.length ? (
+        {error ? (
+          <ErrorState
+            title="The user directory could not be loaded"
+            description={error.message}
+            onRetry={reload}
+          />
+        ) : loading && !users.length ? (
           <SkeletonRows rows={6} columns={4} />
         ) : filtered.length === 0 ? (
           <EmptyState
@@ -218,7 +406,7 @@ export default function UsersPage() {
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-bold">{row.fullName}</p>
                       <p className="subtle truncate text-xs">
-                        @{row.username}
+                        {row.email}
                         {row.studentId ? ` · ${row.studentId}` : ''}
                       </p>
                       <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -261,8 +449,7 @@ export default function UsersPage() {
                             <div className="min-w-0">
                               <p className="truncate font-semibold">{row.fullName}</p>
                               <p className="subtle truncate text-xs">
-                                @{row.username}
-                                {row.studentId ? ` · ${row.studentId}` : ''}
+                                {row.studentId || row.employeeId || row.email}
                               </p>
                             </div>
                           </div>
@@ -275,6 +462,11 @@ export default function UsersPage() {
                             <>
                               <p className="truncate text-xs font-medium">{row.course}</p>
                               <p className="subtle text-xs">{row.yearLevel}</p>
+                            </>
+                          ) : row.department ? (
+                            <>
+                              <p className="truncate text-xs font-medium">{row.department}</p>
+                              <p className="subtle mono text-xs">{row.employeeId}</p>
                             </>
                           ) : (
                             <span className="subtle text-xs">—</span>
@@ -356,12 +548,17 @@ export default function UsersPage() {
         onClose={() => setViewing(null)}
         canManage={canManage || viewing?.id === currentUser?.id}
         canDelete={can(PERM.USER_DELETE) && viewing?.id !== currentUser?.id}
+        canReset={can(PERM.USER_EDIT)}
+        busy={busy}
         onEdit={() => {
           setEditing(viewing)
           setViewing(null)
           setFormOpen(true)
         }}
         onDelete={() => requestDelete(viewing)}
+        onResetPassword={() => sendReset(viewing)}
+        onToggleStatus={() => toggleStatus(viewing)}
+        onApprove={() => approveAccount(viewing)}
       />
 
       <ConfirmDialog
@@ -396,31 +593,64 @@ function Avatar({ name, size = 'md' }) {
  * Detail dialog
  * ------------------------------------------------------------------ */
 
-function UserDetail({ user, loans, open, onClose, onEdit, onDelete, canManage, canDelete }) {
+function UserDetail({
+  user,
+  loans,
+  open,
+  onClose,
+  onEdit,
+  onDelete,
+  onResetPassword,
+  onToggleStatus,
+  onApprove,
+  canManage,
+  canDelete,
+  canReset,
+  busy,
+}) {
   if (!user) return null
+
+  const isPending = user.status === USER_STATUS.PENDING
 
   return (
     <Modal
       open={open}
       onClose={onClose}
       title={user.fullName}
-      description={`@${user.username} · ${user.id}`}
+      description={user.email}
       size="md"
       footer={
         <>
           <button type="button" className="btn btn-outline" onClick={onClose}>
             Close
           </button>
+          {canReset && (
+            <button
+              type="button"
+              className="btn btn-outline"
+              onClick={onResetPassword}
+              disabled={busy}
+            >
+              <KeyRound className="h-4 w-4" />
+              Reset password
+            </button>
+          )}
           {canDelete && (
             <button type="button" className="btn btn-danger" onClick={onDelete}>
               <Trash2 className="h-4 w-4" />
               Delete
             </button>
           )}
-          {canManage && (
+          {canManage && !isPending && (
             <button type="button" className="btn btn-primary" onClick={onEdit}>
               <Pencil className="h-4 w-4" />
               Edit account
+            </button>
+          )}
+          {canManage && isPending && (
+            <button type="button" className="btn btn-primary" onClick={onApprove} disabled={busy}>
+              <ShieldCheck className="h-4 w-4" />
+              Approve account
             </button>
           )}
         </>
@@ -441,6 +671,12 @@ function UserDetail({ user, loans, open, onClose, onEdit, onDelete, canManage, c
               {user.studentId}
             </DetailItem>
           )}
+          {user.employeeId && (
+            <DetailItem label="Employee ID" mono>
+              {user.employeeId}
+            </DetailItem>
+          )}
+          {user.department && <DetailItem label="Department">{user.department}</DetailItem>}
           {user.course && (
             <DetailItem label="Course" className="col-span-2">
               {user.course}
@@ -497,6 +733,21 @@ function UserDetail({ user, loans, open, onClose, onEdit, onDelete, canManage, c
             {user.role} permissions
           </p>
           <p className="subtle mt-1 text-xs leading-relaxed">{ROLE_SUMMARY[user.role]}</p>
+          {canManage && (
+            <button
+              type="button"
+              onClick={onToggleStatus}
+              disabled={busy}
+              className="btn btn-outline btn-sm mt-3"
+            >
+              <UserX className="h-3.5 w-3.5" />
+              {user.status === USER_STATUS.ACTIVE ? 'Deactivate account' : 'Activate account'}
+            </button>
+          )}
+          <p className="subtle mt-2 text-[11px] leading-relaxed">
+            Sign-in is handled locally (id {user.id}). Passwords are never shown in the
+            laboratory database — use “Reset password” to email a link.
+          </p>
         </div>
       </div>
     </Modal>
@@ -507,9 +758,9 @@ const ROLE_SUMMARY = {
   [ROLE.ADMIN]:
     'Full control — manage tools, users, transactions, maintenance, reports and system settings.',
   [ROLE.INSTRUCTOR]:
-    'Issue and receive tools for any student, oversee transactions, manage maintenance and view reports.',
+    'Issue and receive tools for any student, oversee all transactions and manage maintenance. No user management, reports or system settings.',
   [ROLE.STUDENT]:
-    'Scan tools, borrow available equipment under their own name and return what they borrowed.',
+    'Scan tools, borrow available equipment under their own name, return what they borrowed, and see only their own loans and notifications.',
 }
 
 /* ------------------------------------------------------------------ *
@@ -518,11 +769,12 @@ const ROLE_SUMMARY = {
 
 const BLANK_USER = {
   fullName: '',
-  username: '',
   role: '',
   studentId: '',
   course: '',
   yearLevel: 'N/A',
+  employeeId: '',
+  department: '',
   contact: '',
   email: '',
   status: USER_STATUS.ACTIVE,
@@ -558,15 +810,20 @@ function UserForm({ open, user, onClose, currentUser }) {
     setErrors({})
     try {
       const payload = { ...form }
-      if (isEdit && !payload.password) {
+      // Credentials are only ever collected when the Auth account is created.
+      if (isEdit) {
         delete payload.password
         delete payload.confirmPassword
       }
       const saved = isEdit
         ? await userService.updateUser(user.id, payload, currentUser)
         : await userService.create(payload, currentUser)
+      // Never leave a password in component state.
+      setForm((f) => ({ ...f, password: '', confirmPassword: '' }))
       toast.success(
-        isEdit ? `${saved.fullName}'s account was updated.` : `${saved.fullName} was added.`,
+        isEdit
+          ? `${saved.fullName}'s account was updated.`
+          : `${saved.fullName} was added — they can sign in with ${saved.email}.`,
       )
       onClose()
     } catch (err) {
@@ -592,8 +849,8 @@ function UserForm({ open, user, onClose, currentUser }) {
         isEdit
           ? isSelf
             ? 'Update your own profile details.'
-            : `Account ${user.id}`
-          : 'Create a laboratory account and assign its role.'
+            : user.email
+          : 'Creates a sign-in account and its laboratory profile.'
       }
       size="lg"
       footer={
@@ -621,14 +878,21 @@ function UserForm({ open, user, onClose, currentUser }) {
               placeholder="e.g. Juan Dela Cruz"
             />
             <TextField
-              label="Username"
+              label="Email address"
+              type="email"
               required
-              value={form.username}
-              onChange={setField('username')}
-              error={errors.username}
+              value={form.email}
+              onChange={setField('email')}
+              error={errors.email}
               autoCapitalize="none"
               spellCheck="false"
-              placeholder="e.g. jdelacruz"
+              placeholder="name@autolab.edu.ph"
+              disabled={isEdit}
+              hint={
+                isEdit
+                  ? 'The sign-in address cannot be changed here.'
+                  : 'This is the sign-in name.'
+              }
             />
           </div>
 
@@ -696,53 +960,76 @@ function UserForm({ open, user, onClose, currentUser }) {
           </fieldset>
         )}
 
-        <fieldset className="space-y-4 border-t pt-5">
-          <legend className="label mb-2">Contact</legend>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <TextField
-              label="Email"
-              type="email"
-              value={form.email}
-              onChange={setField('email')}
-              error={errors.email}
-              placeholder="name@autolab.edu.ph"
-            />
-            <TextField
-              label="Contact number"
-              value={form.contact}
-              onChange={setField('contact')}
-              error={errors.contact}
-              placeholder="0917 000 0000"
-            />
-          </div>
-        </fieldset>
+        {form.role && !isStudent && (
+          <fieldset className="space-y-4 border-t pt-5">
+            <legend className="label mb-2">Staff details</legend>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <TextField
+                label="Employee ID"
+                value={form.employeeId}
+                onChange={setField('employeeId')}
+                error={errors.employeeId}
+                placeholder="e.g. EMP-2019-0142"
+                className="mono"
+              />
+              <TextField
+                label="Department"
+                value={form.department}
+                onChange={setField('department')}
+                error={errors.department}
+                placeholder="e.g. Automotive Technology"
+              />
+            </div>
+          </fieldset>
+        )}
 
         <fieldset className="space-y-4 border-t pt-5">
-          <legend className="label mb-2">
-            {isEdit ? 'Change password (optional)' : 'Password'}
-          </legend>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <TextField
-              label={isEdit ? 'New password' : 'Password'}
-              type="password"
-              required={!isEdit}
-              autoComplete="new-password"
-              value={form.password}
-              onChange={setField('password')}
-              error={errors.password}
-              hint={isEdit ? 'Leave blank to keep the current password.' : 'At least 6 characters.'}
-            />
-            <TextField
-              label="Confirm password"
-              type="password"
-              required={!isEdit}
-              autoComplete="new-password"
-              value={form.confirmPassword}
-              onChange={setField('confirmPassword')}
-              error={errors.confirmPassword}
-            />
-          </div>
+          <legend className="label mb-2">Contact</legend>
+          <TextField
+            label="Contact number"
+            value={form.contact}
+            onChange={setField('contact')}
+            error={errors.contact}
+            placeholder="0917 000 0000"
+            className="sm:w-1/2"
+          />
         </fieldset>
+
+        {isEdit ? (
+          <fieldset className="space-y-2 border-t pt-5">
+            <legend className="label mb-2">Password</legend>
+            <p className="subtle text-xs leading-relaxed">
+              Passwords are held with the account and are never shown in the laboratory
+              database, so they cannot be edited here. Use <strong>Reset password</strong> on the
+              account to email a reset link.
+            </p>
+          </fieldset>
+        ) : (
+          <fieldset className="space-y-4 border-t pt-5">
+            <legend className="label mb-2">Sign-in password</legend>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <TextField
+                label="Password"
+                type="password"
+                required
+                autoComplete="new-password"
+                value={form.password}
+                onChange={setField('password')}
+                error={errors.password}
+                hint="At least 6 characters."
+              />
+              <TextField
+                label="Confirm password"
+                type="password"
+                required
+                autoComplete="new-password"
+                value={form.confirmPassword}
+                onChange={setField('confirmPassword')}
+                error={errors.confirmPassword}
+              />
+            </div>
+          </fieldset>
+        )}
       </form>
     </Modal>
   )

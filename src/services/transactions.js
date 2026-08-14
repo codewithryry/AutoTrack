@@ -11,7 +11,7 @@ import {
   TOOL_STATUS,
   TXN_STATUS,
 } from '../utils/constants'
-import { PERM, assertCan, canBorrowFor, canReturnTransaction } from '../utils/permissions'
+import { PERM, assertCan, can, canBorrowFor, canReturnTransaction } from '../utils/permissions'
 import { generateTxnId, matchesQuery, sortBy } from '../utils/helpers'
 import {
   daysBetween,
@@ -30,6 +30,15 @@ import {
  * side effects — transaction, tool status, activity log, notification — so the
  * dashboard, the tool page and the notification centre can never disagree about
  * where a tool is.
+ *
+ * The two writes that must not drift — the loan record and the tool's status —
+ * go through `db.runAtomic()`, which rolls back on failure. It re-reads the tool
+ * inside the transaction, so two tabs (or two students at the crib) cannot both
+ * check out the same wrench: the second commit sees the tool is no longer
+ * available and fails instead of overwriting.
+ *
+ * Reads are scoped by role in the data layer, so a student's queries here only
+ * ever return their own loans.
  */
 
 /* ------------------------------------------------------------------ *
@@ -61,13 +70,25 @@ export async function listActive() {
   return sortBy(rows, 'dueDate', 'asc')
 }
 
-/** The open loan for a tool, if any. */
-export async function findActiveForTool(toolId) {
-  const rows = await db.query(
-    COLLECTIONS.transactions,
-    (t) => t.toolId === toolId && ACTIVE_TXN_STATUSES.includes(t.status),
-  )
-  return sortBy(rows, 'borrowDate', 'desc')[0] ?? null
+/**
+ * The open loan for a tool, if any.
+ *
+ * Staff get a targeted server-side query; a student sees only their own loans,
+ * because the rules do not let them read anybody else's.
+ */
+export async function findActiveForTool(toolId, actor) {
+  // Falls back to the session's role rather than to "see everything" when no
+  // actor is passed: an unfiltered query would be rejected for a student.
+  const viewer = actor ?? { role: db.currentScope().role }
+  const rows = can(viewer, PERM.TXN_VIEW_ALL)
+    ? await db.findWhere(COLLECTIONS.transactions, [['toolId', '==', toolId]])
+    : await db.query(COLLECTIONS.transactions, (t) => t.toolId === toolId)
+
+  return sortBy(
+    rows.filter((t) => ACTIVE_TXN_STATUSES.includes(t.status)),
+    'borrowDate',
+    'desc',
+  )[0] ?? null
 }
 
 export async function listOverdue() {
@@ -106,6 +127,119 @@ export function filterTransactions(
       out = sortBy(out, 'borrowDate', 'desc')
   }
   return out
+}
+
+/* ------------------------------------------------------------------ *
+ * Location
+ *
+ * A loan carries three separate things, and they are never merged:
+ *
+ *   borrowLocation        where the tool changed hands, at the moment it did
+ *   locationCheckpoints   readings the borrower chose to record while it was out
+ *   returnLocation        where it was handed back, at the moment it was
+ *
+ * Each one is a single fix with its own timestamp. None of them describes where
+ * the tool was at any other time, and nothing here is ever written without a
+ * person having just pressed something — there is no sweep, no timer and no
+ * background write anywhere in this module.
+ * ------------------------------------------------------------------ */
+
+/** Columns added by `0008_location_checkpoints.sql`. */
+const LOCATION_COLUMN = 'borrowLocation'
+const MAX_CHECKPOINTS = 100
+
+/**
+ * Whether this database has had the location migration applied.
+ *
+ * Until it has, every location write is skipped and the borrow, return and
+ * transaction flows behave exactly as they did before — an un-migrated project
+ * loses the new feature, never the working one.
+ */
+export const locationTrackingAvailable = () =>
+  db.supportsColumn(COLLECTIONS.transactions, LOCATION_COLUMN)
+
+/** Strip a captured reading down to what is stored, with the actor stamped on. */
+function toStoredLocation(location, actor, note) {
+  if (!location || !Number.isFinite(location.lat) || !Number.isFinite(location.lng)) return null
+  return {
+    lat: location.lat,
+    lng: location.lng,
+    accuracy: Number.isFinite(location.accuracy) ? location.accuracy : null,
+    capturedAt: location.capturedAt ?? nowISO(),
+    capturedById: actor?.id ?? null,
+    capturedByName: actor?.fullName ?? null,
+    ...(note ? { note: String(note).slice(0, 200) } : {}),
+  }
+}
+
+export const checkpointsOf = (txn) =>
+  Array.isArray(txn?.locationCheckpoints) ? txn.locationCheckpoints : []
+
+/**
+ * Record where the tool is right now, on a loan that is still open.
+ *
+ * This is the only way a point is added mid-loan, and it exists solely so a
+ * borrower can answer "where is it now?" on purpose. It is one append of one
+ * reading; calling it again later appends another. Nothing calls it on a
+ * schedule.
+ *
+ * The borrower may do this for their own loan, and staff for any loan — the same
+ * split the database enforces in `transactions_guard_borrower_update()`. No new
+ * permission is introduced: `PERM.RETURN` is what a role needs to act on a loan
+ * it holds, and `PERM.TXN_EDIT` is what staff already need to correct one.
+ */
+export async function addLocationCheckpoint(
+  { transactionId, location, note = '' },
+  actor,
+) {
+  const txn = await getById(transactionId)
+  if (!txn) throw new Error('Transaction not found.')
+  if (!ACTIVE_TXN_STATUSES.includes(txn.status)) {
+    throw new Error('This loan is closed, so its location can no longer be updated.')
+  }
+  // Exactly who may close this loan may also say where the tool is: the
+  // borrower, or staff. `canReturnTransaction` is that rule, unchanged.
+  if (!canReturnTransaction(actor, txn)) {
+    throw new Error('You can only record the location of a tool you borrowed yourself.')
+  }
+
+  const entry = toStoredLocation(location, actor, note)
+  if (!entry) throw new Error('No usable location reading was provided.')
+
+  if (!(await locationTrackingAvailable())) {
+    throw new Error(
+      'Location checkpoints are not enabled on this database yet. Ask an administrator to apply the latest migration.',
+    )
+  }
+
+  const existing = checkpointsOf(txn)
+  if (existing.length >= MAX_CHECKPOINTS) {
+    throw new Error(
+      `This loan already has the maximum of ${MAX_CHECKPOINTS} location checkpoints.`,
+    )
+  }
+
+  // Append only — the guard trigger rejects an update that drops or rewrites an
+  // entry, so the list can only ever grow.
+  const updated = await db.update(COLLECTIONS.transactions, txn.id, {
+    locationCheckpoints: [...existing, entry],
+    updatedAt: nowISO(),
+  })
+
+  await afterWrite('location checkpoint follow-up', async () => {
+    await activity.log({
+      action: ACTIVITY.STATUS_CHANGED,
+      toolId: txn.toolId,
+      toolName: txn.toolName,
+      userId: actor?.id,
+      userName: actor?.fullName,
+      transactionId: txn.id,
+      message: `Location checkpoint recorded while the tool was out with ${txn.userName}.`,
+      meta: { checkpoint: existing.length + 1, accuracy: entry.accuracy },
+    })
+  })
+
+  return updated
 }
 
 /* ------------------------------------------------------------------ *
@@ -148,8 +282,10 @@ export function validateBorrow({ toolId, userId, borrowDate, dueDate, purpose },
 /**
  * Issue a tool.
  *
- * Side effects, in order: create the transaction, flip the tool to Borrowed,
- * write an activity entry, raise a notification.
+ * The transaction record and the tool's status change together inside one
+ * atomic step, which re-checks availability before committing. Everything
+ * after that — activity entry, notifications — is follow-up: a failure there is
+ * logged but does not undo a completed loan.
  */
 export async function borrow(input, actor, { maxDays = 30 } = {}) {
   assertCan(actor, PERM.BORROW, 'Your role is not allowed to borrow tools.')
@@ -161,81 +297,137 @@ export async function borrow(input, actor, { maxDays = 30 } = {}) {
     throw new Error('Students can only borrow tools for themselves.')
   }
 
-  const tool = await db.get(COLLECTIONS.tools, input.toolId)
-  if (!tool) throw new Error('Tool not found. Please check the QR code.')
-
-  if (tool.status !== TOOL_STATUS.AVAILABLE) {
-    throw new Error(
-      tool.status === TOOL_STATUS.MAINTENANCE
-        ? 'This tool is currently under maintenance.'
-        : `${tool.name} is not available (${tool.status}).`,
-    )
-  }
-
-  // Guard against a double-issue caused by two tabs or a double-tap.
-  const openLoan = await findActiveForTool(tool.id)
-  if (openLoan) {
-    throw new Error(`${tool.name} is already issued to ${openLoan.userName}.`)
-  }
-
-  const user = await db.get(COLLECTIONS.users, input.userId)
+  // Borrowing for yourself uses the session profile: a student is not allowed to
+  // read anyone else's, and does not need to.
+  const user =
+    input.userId === actor?.id ? actor : await db.get(COLLECTIONS.users, input.userId)
   if (!user) throw new Error('Borrower not found.')
   if (user.status && user.status !== 'Active') {
     throw new Error(`${user.fullName}'s account is ${user.status.toLowerCase()} and cannot borrow.`)
   }
 
+  // A friendlier message than "not available" when staff can see who has it.
+  if (can(actor, PERM.TXN_VIEW_ALL)) {
+    const openLoan = await findActiveForTool(input.toolId, actor)
+    if (openLoan) throw new Error(`${openLoan.toolName} is already issued to ${openLoan.userName}.`)
+  }
+
   const timestamp = nowISO()
-  const txn = {
-    id: generateTxnId(toDate(input.borrowDate) ?? new Date()),
-    toolId: tool.id,
-    toolName: tool.name,
-    toolCategory: tool.category,
-    userId: user.id,
-    userName: user.fullName,
-    userRole: user.role,
-    borrowDate: input.borrowDate,
-    dueDate: input.dueDate,
-    returnDate: null,
-    status: TXN_STATUS.BORROWED,
-    conditionOut: tool.condition,
-    conditionIn: null,
-    purpose: input.purpose?.trim() ?? '',
-    notes: input.notes?.trim() ?? '',
-    issuedById: actor?.id ?? null,
-    issuedByName: actor?.fullName ?? null,
-    receivedById: null,
-    receivedByName: null,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  }
 
-  await db.insert(COLLECTIONS.transactions, txn)
-  await db.update(COLLECTIONS.tools, tool.id, {
-    status: TOOL_STATUS.BORROWED,
-    updatedAt: timestamp,
+  // Where the tool was handed over, if the borrower agreed to a reading and the
+  // database has somewhere to keep it. A refusal, a failed fix or a pending
+  // migration all land here as `null`, and the loan proceeds unchanged.
+  const borrowLocation = (await locationTrackingAvailable())
+    ? toStoredLocation(input.borrowLocation, actor)
+    : null
+
+  const { record, tool } = await db.runAtomic(async (atomic) => {
+    const tool = await atomic.get(COLLECTIONS.tools, input.toolId)
+    if (!tool) throw new Error('Tool not found. Please check the QR code.')
+
+    if (tool.status !== TOOL_STATUS.AVAILABLE) {
+      throw new Error(
+        tool.status === TOOL_STATUS.MAINTENANCE
+          ? 'This tool is currently under maintenance.'
+          : `${tool.name} is not available (${tool.status}).`,
+      )
+    }
+
+    const record = {
+      id: generateTxnId(toDate(input.borrowDate) ?? new Date()),
+      toolId: tool.id,
+      toolName: tool.name,
+      toolCategory: tool.category,
+      userId: user.id,
+      userName: user.fullName,
+      userRole: user.role,
+      borrowDate: input.borrowDate,
+      dueDate: input.dueDate,
+      returnDate: null,
+      status: TXN_STATUS.BORROWED,
+      conditionOut: tool.condition,
+      conditionIn: null,
+      purpose: input.purpose?.trim() ?? '',
+      notes: input.notes?.trim() ?? '',
+      issuedById: actor?.id ?? null,
+      issuedByName: actor?.fullName ?? null,
+      receivedById: null,
+      receivedByName: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      // Omitted entirely when the migration is not applied, so the insert never
+      // names a column this database does not have.
+      ...(borrowLocation ? { borrowLocation, locationCheckpoints: [] } : {}),
+    }
+
+    atomic.set(COLLECTIONS.transactions, record)
+    // `currentBorrowerId` is what the security rules use to let the borrower —
+    // and only the borrower — hand this tool back again.
+    atomic.update(COLLECTIONS.tools, tool.id, {
+      status: TOOL_STATUS.BORROWED,
+      currentBorrowerId: user.id,
+      currentTransactionId: record.id,
+      updatedAt: timestamp,
+    })
+
+    // The tool is carried out for the notification copy below.
+    return { record, tool }
   })
 
-  await activity.log({
-    action: ACTIVITY.TOOL_BORROWED,
-    toolId: tool.id,
-    toolName: tool.name,
-    userId: user.id,
-    userName: user.fullName,
-    transactionId: txn.id,
-    message: `${user.fullName} borrowed the tool${
-      input.purpose ? ` for ${input.purpose}` : ''
-    }.`,
-    meta: { dueDate: txn.dueDate, issuedBy: actor?.fullName ?? null },
+  await afterWrite('borrow follow-up', async () => {
+    await activity.log({
+      action: ACTIVITY.TOOL_BORROWED,
+      toolId: record.toolId,
+      toolName: record.toolName,
+      userId: user.id,
+      userName: user.fullName,
+      transactionId: record.id,
+      message: `${user.fullName} borrowed the tool${
+        input.purpose ? ` for ${input.purpose}` : ''
+      }.`,
+      meta: { dueDate: record.dueDate, issuedBy: actor?.fullName ?? null },
+    })
+
+    await notifications.create(
+      addressed(notifications.templates.borrowed(tool, record, user), actor, user.id),
+    )
+
+    // If it is already due within the warning window, say so immediately.
+    if (isDueSoon(record.dueDate, 1)) {
+      await notifications.create(notifications.templates.dueSoon(tool, record, user))
+    }
   })
 
-  await notifications.create(notifications.templates.borrowed(tool, txn, user))
+  return record
+}
 
-  // If it is already due within the warning window, say so immediately.
-  if (isDueSoon(txn.dueDate, 1)) {
-    await notifications.create(notifications.templates.dueSoon(tool, txn, user))
+/**
+ * Run the bookkeeping that follows a committed loan or return.
+ *
+ * The tool has physically changed hands by this point, so a failed activity
+ * entry or notification must not surface as "the borrow failed". It is reported
+ * to the console instead.
+ */
+async function afterWrite(label, fn) {
+  try {
+    await fn()
+  } catch (err) {
+    console.error(`[transactions] ${label} incomplete`, err)
   }
+}
 
-  return txn
+/**
+ * Address a notification.
+ *
+ * Staff actions raise a laboratory-wide alert (`userId: null`), which is what the
+ * tool room wants to see. A student acting for themselves gets a personal
+ * confirmation instead: the security rules only let them notify themselves, so
+ * that one account cannot fill every notification centre with broadcasts nobody
+ * else is able to delete. Staff still see the loan itself in transactions and the
+ * activity log.
+ */
+function addressed(input, actor, recipientId) {
+  return can(actor, PERM.TXN_VIEW_ALL) ? input : { ...input, userId: recipientId }
 }
 
 /* ------------------------------------------------------------------ *
@@ -249,7 +441,7 @@ export async function borrow(input, actor, { maxDays = 30 } = {}) {
  * to the Available pool, and marks the transaction itself as Damaged so the
  * report on breakages stays accurate.
  */
-export async function returnTool({ transactionId, condition, notes }, actor) {
+export async function returnTool({ transactionId, condition, notes, returnLocation }, actor) {
   assertCan(actor, PERM.RETURN, 'Your role is not allowed to return tools.')
 
   const txn = await getById(transactionId)
@@ -264,12 +456,18 @@ export async function returnTool({ transactionId, condition, notes }, actor) {
     throw new ValidationError({ condition: 'Select the condition of the returned tool.' })
   }
 
-  const tool = await db.get(COLLECTIONS.tools, txn.toolId)
   const timestamp = nowISO()
   const damaged = condition === CONDITION.DAMAGED
   const wasOverdue = txn.status === TXN_STATUS.OVERDUE
 
-  const updatedTxn = await db.update(COLLECTIONS.transactions, txn.id, {
+  // Where it came back, on the same terms as the borrow point: optional, and
+  // never a reason for the return to fail.
+  const closingLocation = (await locationTrackingAvailable())
+    ? toStoredLocation(returnLocation, actor)
+    : null
+
+  const patch = {
+    ...(closingLocation ? { returnLocation: closingLocation } : {}),
     returnDate: timestamp,
     status: damaged ? TXN_STATUS.DAMAGED : TXN_STATUS.RETURNED,
     conditionIn: condition,
@@ -278,51 +476,74 @@ export async function returnTool({ transactionId, condition, notes }, actor) {
     receivedById: actor?.id ?? null,
     receivedByName: actor?.fullName ?? null,
     updatedAt: timestamp,
-  })
+  }
 
-  if (tool) {
-    const previousCondition = tool.condition
-    await db.update(COLLECTIONS.tools, tool.id, {
-      status: damaged ? TOOL_STATUS.DAMAGED : TOOL_STATUS.AVAILABLE,
-      condition,
-      updatedAt: timestamp,
-    })
-
-    await activity.log({
-      action: ACTIVITY.TOOL_RETURNED,
-      toolId: tool.id,
-      toolName: tool.name,
-      userId: txn.userId,
-      userName: txn.userName,
-      transactionId: txn.id,
-      message: damaged
-        ? `Tool returned damaged by ${txn.userName} and removed from circulation.`
-        : `Tool returned by ${txn.userName}${wasOverdue ? ' (was overdue)' : ''}.`,
-      meta: { condition, wasOverdue },
-    })
-
-    if (previousCondition !== condition) {
-      await activity.log({
-        action: ACTIVITY.CONDITION_CHANGED,
-        toolId: tool.id,
-        toolName: tool.name,
-        userId: actor?.id,
-        userName: actor?.fullName,
-        transactionId: txn.id,
-        message: `Condition changed from ${previousCondition} to ${condition}.`,
-        meta: { from: previousCondition, to: condition },
-      })
+  // Closing the loan and putting the tool back (or pulling it out of service)
+  // is one atomic step, so the tool can never be left "Borrowed" against a
+  // closed transaction.
+  const tool = await db.runAtomic(async (atomic) => {
+    const current = await atomic.get(COLLECTIONS.transactions, txn.id)
+    if (!current) throw new Error('Transaction not found.')
+    if (!ACTIVE_TXN_STATUSES.includes(current.status)) {
+      throw new Error('This tool has already been returned.')
     }
 
-    const user = await db.get(COLLECTIONS.users, txn.userId)
-    await notifications.create(
-      damaged
-        ? notifications.templates.damaged(tool, updatedTxn, user)
-        : notifications.templates.returned(tool, updatedTxn, user),
-    )
+    atomic.update(COLLECTIONS.transactions, txn.id, patch)
 
-    // The loan is closed, so its overdue/due-soon alerts are no longer actionable.
-    await clearAlertsFor(txn.id)
+    const toolRecord = await atomic.get(COLLECTIONS.tools, current.toolId)
+    if (toolRecord) {
+      atomic.update(COLLECTIONS.tools, toolRecord.id, {
+        status: damaged ? TOOL_STATUS.DAMAGED : TOOL_STATUS.AVAILABLE,
+        condition,
+        currentBorrowerId: null,
+        currentTransactionId: null,
+        updatedAt: timestamp,
+      })
+    }
+    return toolRecord
+  })
+
+  const updatedTxn = { ...txn, ...patch }
+
+  if (tool) {
+    await afterWrite('return follow-up', async () => {
+      await activity.log({
+        action: ACTIVITY.TOOL_RETURNED,
+        toolId: tool.id,
+        toolName: tool.name,
+        userId: txn.userId,
+        userName: txn.userName,
+        transactionId: txn.id,
+        message: damaged
+          ? `Tool returned damaged by ${txn.userName} and removed from circulation.`
+          : `Tool returned by ${txn.userName}${wasOverdue ? ' (was overdue)' : ''}.`,
+        meta: { condition, wasOverdue },
+      })
+
+      if (tool.condition !== condition) {
+        await activity.log({
+          action: ACTIVITY.CONDITION_CHANGED,
+          toolId: tool.id,
+          toolName: tool.name,
+          userId: actor?.id,
+          userName: actor?.fullName,
+          transactionId: txn.id,
+          message: `Condition changed from ${tool.condition} to ${condition}.`,
+          meta: { from: tool.condition, to: condition },
+        })
+      }
+
+      const borrower = txn.userId === actor?.id ? actor : { fullName: txn.userName }
+      const template = damaged
+        ? notifications.templates.damaged(tool, updatedTxn, borrower)
+        : notifications.templates.returned(tool, updatedTxn, borrower)
+      await notifications.create(addressed(template, actor, txn.userId))
+
+      // The loan is closed, so its overdue/due-soon alerts are no longer
+      // actionable. A student may not delete laboratory-wide alerts, so this is
+      // deliberately best-effort.
+      await clearAlertsFor(txn.id)
+    })
   }
 
   return updatedTxn
@@ -330,11 +551,15 @@ export async function returnTool({ transactionId, condition, notes }, actor) {
 
 /** Remove the open alerts tied to a transaction once it is closed. */
 async function clearAlertsFor(transactionId) {
-  await db.removeWhere(
-    COLLECTIONS.notifications,
-    (n) =>
-      n.dedupeKey === `overdue:${transactionId}` || n.dedupeKey === `due-soon:${transactionId}`,
-  )
+  try {
+    await db.removeWhere(
+      COLLECTIONS.notifications,
+      (n) =>
+        n.dedupeKey === `overdue:${transactionId}` || n.dedupeKey === `due-soon:${transactionId}`,
+    )
+  } catch (err) {
+    console.warn('[transactions] closed-loan alerts could not be cleared', err)
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -344,13 +569,20 @@ async function clearAlertsFor(transactionId) {
 /**
  * Reconcile every open loan against today's date.
  *
- * Runs on each app load and after any borrow/return. It flips due loans to
- * Overdue, syncs the tool status, and raises one notification per event —
- * deduplicated by transaction id so repeated sweeps stay quiet.
+ * Runs when staff open the app and when the tab regains focus. It flips due
+ * loans to Overdue, syncs the tool status, and raises one notification per event
+ * — deduplicated by transaction id so repeated sweeps stay quiet.
  *
- * @returns {{ overdue: number, dueSoon: number }}
+ * Staff only: it writes to transactions and tools, which the security rules do
+ * not allow a student to do. A student's own late loan is still shown as overdue
+ * by the due-date comparison in the UI.
+ *
+ * @returns {{ overdue: number, dueSoon: number, skipped?: boolean }}
  */
 export async function runOverdueCheck({ dueSoonThresholdDays = 1, notify = true } = {}) {
+  const { role } = db.currentScope()
+  if (!can({ role }, PERM.TXN_EDIT)) return { overdue: 0, dueSoon: 0, skipped: true }
+
   const active = await listActive()
   let overdueCount = 0
   let dueSoonCount = 0
@@ -430,6 +662,8 @@ export async function markLost(transactionId, actor, note) {
   if (tool) {
     await db.update(COLLECTIONS.tools, tool.id, {
       status: TOOL_STATUS.LOST,
+      currentBorrowerId: null,
+      currentTransactionId: null,
       updatedAt: timestamp,
     })
     await activity.log({
@@ -496,13 +730,20 @@ export async function extendDueDate(transactionId, newDueDate, actor) {
   return updated
 }
 
-/** Everything a return screen needs, resolved from a tool id. */
-export async function activeLoanContext(toolId) {
-  const txn = await findActiveForTool(toolId)
+/**
+ * Everything a return screen needs, resolved from a tool id.
+ *
+ * The borrower's profile is a bonus: a student scanning a tool that somebody
+ * else has out may not read that profile, and does not need to — the loan record
+ * already carries the borrower's name.
+ */
+export async function activeLoanContext(toolId, actor) {
+  const txn = await findActiveForTool(toolId, actor)
   if (!txn) return null
-  const [tool, user] = await Promise.all([
-    db.get(COLLECTIONS.tools, txn.toolId),
-    db.get(COLLECTIONS.users, txn.userId),
-  ])
-  return { transaction: txn, tool, borrower: user }
+  const tool = await db.get(COLLECTIONS.tools, txn.toolId)
+  const borrower =
+    txn.userId === actor?.id
+      ? actor
+      : await db.get(COLLECTIONS.users, txn.userId).catch(() => null)
+  return { transaction: txn, tool, borrower: borrower ?? { id: txn.userId, fullName: txn.userName } }
 }

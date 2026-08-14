@@ -16,6 +16,7 @@ import {
 import { BarChart3, Download, FileSpreadsheet, RotateCcw } from 'lucide-react'
 import {
   EmptyState,
+  ErrorState,
   LoadingBlock,
   PageHeader,
   ProgressBar,
@@ -64,7 +65,7 @@ export default function ReportsPage() {
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const range = useMemo(() => ({ from, to }), [from, to])
-  const { report, loading } = useReport(range)
+  const { report, loading, error, reload } = useReport(range)
 
   const canExport = can(PERM.REPORTS_EXPORT)
 
@@ -119,6 +120,20 @@ export default function ReportsPage() {
     toast.success('Tool utilisation exported to CSV.')
   }
 
+  if (error && !report) {
+    return (
+      <>
+        <PageHeader title="Reports" description="Laboratory analytics" icon={BarChart3} />
+        <div className="card">
+          <ErrorState
+            title="The report could not be built"
+            description={error.message}
+            onRetry={reload}
+          />
+        </div>
+      </>
+    )
+  }
   if (loading && !report) return <LoadingBlock label="Building the laboratory report…" />
   if (!report) return null
 

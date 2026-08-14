@@ -80,23 +80,43 @@ check('admin has every permission', () => {
   for (const p of Object.values(perms.PERM)) assert.equal(perms.can(admin, p), true, p)
 })
 
-check('student cannot manage tools or users', () => {
+check('student cannot manage tools, users, reports or settings', () => {
   assert.equal(perms.can(student, perms.PERM.TOOL_CREATE), false)
   assert.equal(perms.can(student, perms.PERM.TOOL_EDIT), false)
   assert.equal(perms.can(student, perms.PERM.TOOL_DELETE), false)
+  assert.equal(perms.can(student, perms.PERM.TOOL_STATUS), false)
   assert.equal(perms.can(student, perms.PERM.USER_VIEW), false)
+  assert.equal(perms.can(student, perms.PERM.USER_MANAGE), false)
   assert.equal(perms.can(student, perms.PERM.REPORTS_VIEW), false)
+  assert.equal(perms.can(student, perms.PERM.SETTINGS_VIEW), false)
+  assert.equal(perms.can(student, perms.PERM.MAINTENANCE_VIEW), false)
+  assert.equal(perms.can(student, perms.PERM.TXN_VIEW_ALL), false)
   assert.equal(perms.can(student, perms.PERM.BORROW), true)
   assert.equal(perms.can(student, perms.PERM.RETURN), true)
 })
 
-check('instructor can manage transactions but not delete tools', () => {
+check('instructor runs the crib but has no admin access', () => {
   assert.equal(perms.can(instructor, perms.PERM.TOOL_DELETE), false)
   assert.equal(perms.can(instructor, perms.PERM.TOOL_CREATE), false)
   assert.equal(perms.can(instructor, perms.PERM.TOOL_EDIT), true)
   assert.equal(perms.can(instructor, perms.PERM.TXN_EDIT), true)
+  assert.equal(perms.can(instructor, perms.PERM.TXN_VIEW_ALL), true)
+  assert.equal(perms.can(instructor, perms.PERM.MAINTENANCE_MANAGE), true)
+  // Reads the directory to pick a borrower, but manages nobody.
+  assert.equal(perms.can(instructor, perms.PERM.USER_VIEW), true)
+  assert.equal(perms.can(instructor, perms.PERM.USER_MANAGE), false)
+  assert.equal(perms.can(instructor, perms.PERM.USER_CREATE), false)
   assert.equal(perms.can(instructor, perms.PERM.USER_DELETE), false)
-  assert.equal(perms.can(instructor, perms.PERM.REPORTS_VIEW), true)
+  assert.equal(perms.can(instructor, perms.PERM.REPORTS_VIEW), false)
+  assert.equal(perms.can(instructor, perms.PERM.SETTINGS_VIEW), false)
+  assert.equal(perms.can(instructor, perms.PERM.DATA_MANAGE), false)
+})
+
+check('staff is admin + instructor only', () => {
+  assert.equal(perms.isStaff(admin), true)
+  assert.equal(perms.isStaff(instructor), true)
+  assert.equal(perms.isStaff(student), false)
+  assert.equal(perms.isStaff(null), false)
 })
 
 check('students may only borrow and return for themselves', () => {

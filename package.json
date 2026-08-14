@@ -1,20 +1,21 @@
 {
   "name": "smart-tool-monitoring-pwa",
   "private": true,
-  "version": "1.0.0",
+  "version": "0.1.2",
   "type": "module",
-  "description": "Smart Tool Monitoring System - Automotive Laboratory Tool Management PWA",
+  "description": "ToolTrack AutoLab: QR-Based Automotive Laboratory Tool Monitoring System",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview --port 4173",
     "serve:dist": "node scripts/serve-static.mjs 4180",
     "verify": "node scripts/verify.mjs",
-    "verify:browser": "node scripts/verify-browser.mjs"
+    "verify:browser": "node scripts/verify-browser.mjs",
+    "verify:sql": "node scripts/sql/verify-policies.mjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.112.3",
     "html5-qrcode": "^2.3.8",
-    "localbase": "^0.7.5",
     "lucide-react": "^0.454.0",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",
@@ -23,10 +24,9 @@
     "recharts": "^2.13.3"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.5",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
-    "fake-indexeddb": "^6.2.5",
-    "jsdom": "^28.1.0",
     "playwright": "^1.62.1",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",

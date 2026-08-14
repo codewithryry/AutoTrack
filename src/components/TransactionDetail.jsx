@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { ArrowRight } from 'lucide-react'
 import { DetailItem, Modal, TxnStatusBadge, ConditionBadge } from './ui'
+import { LocationTrail } from './LocationCapture'
 import { dueLabel, formatDate, formatDateTime } from '../utils/dates'
 import { ACTIVE_TXN_STATUSES } from '../utils/constants'
 
@@ -93,6 +94,15 @@ export default function TransactionDetail({ transaction, open, onClose, footer, 
             <span className="muted whitespace-pre-wrap font-normal">{transaction.notes}</span>
           </DetailItem>
         )}
+
+        {/* Borrow point, usage checkpoints and return point — each labelled with
+            what it means, and none of them presented as the tool's whereabouts
+            for the whole loan. Visible to whoever may already read this record,
+            so a student sees their own and staff see any; no role check is added
+            here because none is needed. */}
+        <div className="border-t pt-4">
+          <LocationTrail transaction={transaction} />
+        </div>
 
         {extra && <div className="border-t pt-4">{extra}</div>}
       </div>

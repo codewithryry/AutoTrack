@@ -1,6 +1,20 @@
 node_modules/
 dist/
 
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Never commit service-account or admin credentials of any kind. Everything
+# under src/ is shipped to the browser; a key that reaches this repository is a
+# key that reaches every visitor.
+*serviceAccount*.json
+*service-account*.json
+*-adminsdk-*.json
+*.pem
+.runtimeconfig.json
+
 # Next.js artifacts (this is a Vite app — these come from running Next by mistake)
 .next/
 .vercel/

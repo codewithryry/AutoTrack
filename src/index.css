@@ -126,6 +126,44 @@
     border: 1px solid rgb(var(--border));
   }
 
+  /* --- Dashboard surfaces -------------------------------------------------
+   * Three tiers, so a dashboard is not one flat wall of identical white cards.
+   * `.card` is left exactly as it was: every other page still uses it.
+   *
+   *   .panel        primary content — the things you act on. White, 16px, one
+   *                 hairline and a wide, very soft lift.
+   *   .panel-quiet  secondary content — reference, not action. Tinted, no
+   *                 shadow, no border, so it recedes behind a .panel beside it.
+   *   .tile         a compact statistic. 12px, hairline, no shadow at all.
+   *
+   * Radii stay inside the 12–16px band, and the borders are deliberately
+   * lighter than `--border` so a column of them does not read as a grid.
+   * -------------------------------------------------------------------- */
+  .panel {
+    @apply rounded-2xl;
+    background: rgb(var(--surface));
+    border: 1px solid rgb(var(--border) / 0.7);
+    box-shadow:
+      0 1px 2px rgb(16 24 40 / 0.04),
+      0 10px 28px -18px rgb(11 18 32 / 0.3);
+  }
+  .panel-quiet {
+    @apply rounded-2xl;
+    background: rgb(var(--surface-2));
+    border: 1px solid transparent;
+  }
+  .tile {
+    @apply rounded-xl transition-shadow duration-150;
+    background: rgb(var(--surface));
+    border: 1px solid rgb(var(--border) / 0.7);
+  }
+  a.tile:hover {
+    border-color: rgb(var(--border-strong));
+    box-shadow:
+      0 1px 2px rgb(16 24 40 / 0.04),
+      0 10px 28px -18px rgb(11 18 32 / 0.3);
+  }
+
   .muted {
     color: rgb(var(--text-muted));
   }

@@ -4,8 +4,23 @@
  * labels and colours stay identical across the whole application.
  */
 
-export const APP_NAME = 'Smart Tool Monitoring System'
-export const APP_TAGLINE = 'Track • Manage • Return'
+/** The product name, as it appears in the interface. */
+export const APP_NAME = 'ToolTrack AutoLab'
+
+/**
+ * The full project title. Only for places where a formal title belongs — the
+ * document description and the installable app's description — not for headings
+ * inside the interface, where it would crowd out everything else.
+ */
+export const APP_TITLE =
+  'ToolTrack AutoLab: QR-Based Automotive Laboratory Tool Monitoring System'
+
+/**
+ * Shown on the loading screen. Kept in step with `package.json`; `npm run
+ * verify` fails if the two drift apart.
+ */
+export const APP_VERSION = '0.1.2'
+export const APP_TAGLINE = 'Scan. Borrow. Track. Return.'
 
 /* ------------------------------------------------------------------ *
  * Tool status
@@ -104,7 +119,20 @@ export const ROLE = {
 
 export const ROLES = Object.values(ROLE)
 
-export const USER_STATUS = { ACTIVE: 'Active', INACTIVE: 'Inactive', SUSPENDED: 'Suspended' }
+/**
+ * Account states.
+ *
+ * `Pending` is what a self-registered instructor gets: the account exists and can
+ * sign in far enough to be told it is waiting, but it authorises nothing until an
+ * administrator approves it. Only `Active` grants access — the service layer
+ * make that decision, not the interface.
+ */
+export const USER_STATUS = {
+  ACTIVE: 'Active',
+  PENDING: 'Pending',
+  INACTIVE: 'Inactive',
+  SUSPENDED: 'Suspended',
+}
 export const USER_STATUSES = Object.values(USER_STATUS)
 
 export const COURSES = [
@@ -241,6 +269,7 @@ export const ROLE_STYLES = {
 
 export const USER_STATUS_STYLES = {
   [USER_STATUS.ACTIVE]: STATUS_STYLES[TOOL_STATUS.AVAILABLE],
+  [USER_STATUS.PENDING]: STATUS_STYLES[TOOL_STATUS.MAINTENANCE],
   [USER_STATUS.INACTIVE]: STATUS_STYLES[TOOL_STATUS.RETIRED],
   [USER_STATUS.SUSPENDED]: STATUS_STYLES[TOOL_STATUS.OVERDUE],
 }

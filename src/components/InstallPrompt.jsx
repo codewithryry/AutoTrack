@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Download, X } from 'lucide-react'
 import { BrandMark } from './Brand'
 import { useApp } from '../context/AppContext'
+import { isStandalone } from '../utils/pwa'
 
 const DISMISS_KEY = 'stms.install-dismissed'
 
@@ -22,9 +23,7 @@ export default function InstallPrompt() {
   useEffect(() => {
     if (localStorage.getItem(DISMISS_KEY) === '1') return
 
-    const standalone =
-      window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone
-    if (standalone) return
+    if (isStandalone()) return
 
     const onPrompt = (event) => {
       event.preventDefault()

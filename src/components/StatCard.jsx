@@ -2,34 +2,39 @@ import { Link } from 'react-router-dom'
 import { cx } from '../utils/helpers'
 
 /**
- * Dashboard metric tile. `tone` drives the accent so an overdue count reads as
- * a warning at a glance without adding decoration.
+ * Dashboard metric tile.
+ *
+ * `tone` drives the accent so an overdue count still reads as a warning at a
+ * glance — carried by the icon chip and, for the two alarming tones, the figure
+ * itself, rather than by the thick coloured slab this tile used to wear. One
+ * radius, one border weight and one type scale, shared with every other module
+ * on the page.
  */
 
 const TONES = {
   default: {
-    ring: 'border-l-navy-950 dark:border-l-navy-200',
     icon: 'bg-navy-950/8 text-navy-950 dark:bg-white/10 dark:text-white',
+    value: '',
   },
   accent: {
-    ring: 'border-l-amberline-500',
     icon: 'bg-amberline-400/15 text-amberline-700 dark:text-amberline-400',
+    value: '',
   },
   success: {
-    ring: 'border-l-emerald-500',
     icon: 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400',
+    value: '',
   },
   info: {
-    ring: 'border-l-blue-500',
     icon: 'bg-blue-500/12 text-blue-600 dark:text-blue-400',
+    value: '',
   },
   warning: {
-    ring: 'border-l-orange-500',
     icon: 'bg-orange-500/12 text-orange-600 dark:text-orange-400',
+    value: 'text-orange-600 dark:text-orange-400',
   },
   danger: {
-    ring: 'border-l-red-500',
     icon: 'bg-red-500/12 text-red-600 dark:text-red-400',
+    value: 'text-red-600 dark:text-red-400',
   },
 }
 
@@ -41,39 +46,63 @@ export default function StatCard({
   hint,
   to,
   loading = false,
+  variant = 'card',
 }) {
   const style = TONES[tone] ?? TONES.default
   const Wrapper = to ? Link : 'div'
+  // `tile` is the dashboard's compact statistic: no drop shadow, no hover lift,
+  // a lighter hairline and more room at desktop widths. `card` is the original
+  // and remains the default, so the reports page is unaffected.
+  const tile = variant === 'tile'
+  // Zero is the good news on a warning tile, so it stays in the ordinary colour
+  // — only a real count is worth colouring.
+  const alarming = Boolean(style.value) && value !== 0 && value !== '0'
 
   return (
     <Wrapper
       {...(to ? { to } : {})}
       className={cx(
-        'card border-l-4 p-3.5 sm:p-4',
-        style.ring,
-        to && 'transition-all hover:-translate-y-0.5 hover:shadow-lift',
+        tile
+          ? 'tile p-3.5 lg:p-4'
+          : cx('card p-3 sm:p-3.5', to && 'transition-all hover:-translate-y-0.5 hover:shadow-lift'),
       )}
     >
-      <div className="flex items-start justify-between gap-2">
-        <p className="subtle text-[11px] font-bold uppercase leading-tight tracking-wider">
-          {label}
-        </p>
+      <div className="flex items-center gap-2.5">
         {Icon && (
-          <span className={cx('grid h-8 w-8 shrink-0 place-items-center rounded-lg', style.icon)}>
-            <Icon className="h-4 w-4" />
+          <span
+            className={cx(
+              'grid shrink-0 place-items-center rounded-[10px]',
+              tile ? 'h-7 w-7' : 'h-8 w-8',
+              style.icon,
+            )}
+          >
+            <Icon className={cx(tile ? 'h-4 w-4' : 'h-[17px] w-[17px]')} />
           </span>
         )}
+        {/* `break-words` because these labels are set in wide-tracked capitals:
+            two tiles to a 360px row leaves about 100px beside the icon chip, and
+            a single long word ("TRANSACTIONS") would otherwise run out past the
+            card edge rather than wrapping. */}
+        <p className="subtle min-w-0 break-words text-[10.5px] font-bold uppercase leading-tight tracking-[0.08em]">
+          {label}
+        </p>
       </div>
 
       {loading ? (
-        <div className="skeleton mt-2 h-8 w-16" />
+        <div className="skeleton mt-2.5 h-7 w-14" />
       ) : (
-        <p className="mono mt-1.5 text-[28px] font-extrabold leading-none tracking-tight">
+        <p
+          className={cx(
+            'mono font-extrabold leading-none tracking-tight',
+            tile ? 'mt-3 text-[28px] lg:text-[32px]' : 'mt-2.5 text-[26px]',
+            alarming && style.value,
+          )}
+        >
           {value}
         </p>
       )}
 
-      {hint && <p className="subtle mt-1.5 truncate text-xs">{hint}</p>}
+      {hint && <p className="subtle mt-1 truncate text-[11px] leading-snug">{hint}</p>}
     </Wrapper>
   )
 }

@@ -10,16 +10,21 @@ export default defineConfig({
       includeAssets: ['favicon.svg', 'offline.html', 'icons/*.png'],
       manifest: {
         id: '/',
-        name: 'Smart Tool Monitoring System',
+        name: 'ToolTrack AutoLab',
+        // Home-screen labels are truncated around 12 characters.
         short_name: 'ToolTrack',
         description:
-          'Automotive laboratory tool monitoring system. Track, manage and return tools with QR codes.',
+          'ToolTrack AutoLab: QR-Based Automotive Laboratory Tool Monitoring System. ' +
+          'Scan. Borrow. Track. Return.',
         theme_color: '#0B1220',
         background_color: '#0B1220',
         display: 'standalone',
         orientation: 'portrait-primary',
         scope: '/',
-        start_url: '/',
+        // The installed app belongs to laboratory staff and students who already
+        // have accounts, so it opens the dashboard rather than the public
+        // landing page. Signed out, the route guard sends them to /login.
+        start_url: '/dashboard',
         categories: ['productivity', 'utilities', 'education'],
         icons: [
           { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
@@ -65,8 +70,10 @@ export default defineConfig({
         },
       },
     },
-    chunkSizeWarningLimit: 700,
+    // The vendor chunks are cached by the service worker after the first load,
+    // so their size is not worth warning on.
+    chunkSizeWarningLimit: 850,
   },
-  server: { port: 5173, host: true },
+  server: { port: 5173, host: '0.0.0.0' },
   preview: { port: 4173, host: true },
 })

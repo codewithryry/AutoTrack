@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   AlertTriangle,
@@ -25,8 +25,11 @@ import {
   MaintenanceStatusBadge,
   PageHeader,
   SectionCard,
+  Spinner,
   StatusBadge,
+  TextField,
 } from '../components/ui'
+import Walkthrough, { usePageTour } from '../components/Walkthrough'
 import { QRCodePanel } from '../components/QRCodeDisplay'
 import TransactionTable from '../components/TransactionTable'
 import TransactionDetail from '../components/TransactionDetail'
@@ -35,10 +38,61 @@ import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import { useTool, useToolMaintenance, useToolTransactions } from '../hooks'
 import * as toolService from '../services/tools'
-import { PERM } from '../utils/permissions'
+import * as txnService from '../services/transactions'
+import { LocationCaptureField, LocationTrail } from '../components/LocationCapture'
+import { canReturnTransaction, isStaff, isStudent, PERM } from '../utils/permissions'
 import { TOOL_STATUS, SERIAL_CRITICAL_CATEGORIES } from '../utils/constants'
 import { cx } from '../utils/helpers'
 import { daysBetween, dueLabel, formatDate } from '../utils/dates'
+
+/**
+ * First-run walkthrough for one tool's page. A student sees the record and the
+ * borrow or return action and nothing else, so their tour describes only that —
+ * no QR label, no editing, no status controls, which are staff-only and are not
+ * rendered for them at all.
+ */
+const toolDetailTour = (student) =>
+  student
+    ? [
+        {
+          target: 'detail-record',
+          title: 'The tool record',
+          text: 'Status, condition, category and the shelf it lives on — everything you need before collecting it.',
+          icon: ClipboardList,
+        },
+        {
+          target: 'detail-action',
+          title: 'Borrow or hand back',
+          text: 'When the tool is free, Borrow tool appears here. While you are holding it, Return tool takes its place.',
+          icon: ArrowRight,
+        },
+        {
+          target: 'detail-location',
+          title: 'Put it back where it came from',
+          text: 'This is the storage position to return the tool to after use.',
+          icon: MapPin,
+        },
+      ]
+    : [
+        {
+          target: 'detail-record',
+          title: 'The tool record',
+          text: 'Status, condition, serial number, servicing dates and how often the tool has been borrowed.',
+          icon: ClipboardList,
+        },
+        {
+          target: 'detail-edit',
+          title: 'Correct the record',
+          text: 'Fix a detail, change the category or update the serial number. The full activity timeline sits beside it.',
+          icon: Pencil,
+        },
+        {
+          target: 'detail-status',
+          title: 'Take it in or out of service',
+          text: 'Send the tool for maintenance, mark it damaged or lost, or restore it to the borrowable pool.',
+          icon: HardHat,
+        },
+      ]
 
 export default function ToolDetailPage() {
   const { id } = useParams()
@@ -49,6 +103,10 @@ export default function ToolDetailPage() {
   const { tool, loading } = useTool(id)
   const { transactions } = useToolTransactions(id)
   const { records: maintenanceRecords } = useToolMaintenance(id)
+
+  // Once per account on this device, remembered separately from every other page.
+  const tour = usePageTour('tool-detail', user?.id)
+  const tourSteps = useMemo(() => toolDetailTour(isStudent(user)), [user])
 
   const [editing, setEditing] = useState(false)
   const [selectedTxn, setSelectedTxn] = useState(null)
@@ -98,25 +156,29 @@ export default function ToolDetailPage() {
   const requestDelete = () =>
     setConfirm({
       title: `Delete ${tool.name}?`,
-      message: `${tool.id} will be removed from the inventory and its QR code will stop resolving. This cannot be undone.`,
+      message: `${tool.id} will be removed from the inventory and its QR code will stop resolving. Borrowing history is kept for the record.`,
       confirmLabel: 'Delete tool',
-      onConfirm: async ({ force } = {}) => {
+      onConfirm: async () => {
         setBusy(true)
         try {
-          await toolService.remove(tool.id, user, { force })
+          await toolService.remove(tool.id, user)
           toast.success(`${tool.name} was deleted.`)
           navigate('/tools', { replace: true })
         } catch (err) {
           if (err.name === 'ActiveTransactionError') {
+            // The tool is out on loan, so deletion is refused — forcing it
+            // would corrupt the open transaction's history.
             setConfirm((c) => ({
               ...c,
               title: 'This tool is still on loan',
               message: err.message,
-              confirmLabel: 'Delete anyway',
-              force: true,
+              confirmLabel: 'Close',
+              variant: 'primary',
+              onConfirm: () => setConfirm(null),
             }))
           } else {
             toast.error(err.message ?? 'Unable to delete the tool.')
+            setConfirm(null)
           }
         } finally {
           setBusy(false)
@@ -134,21 +196,29 @@ export default function ToolDetailPage() {
         Back to inventory
       </Link>
 
-      <PageHeader title={tool.name} description={`${tool.category} · ${tool.brand || 'Unbranded'}`}>
+      <PageHeader
+        title={tool.name}
+        description={`${tool.category} · ${tool.brand || 'Unbranded'}`}
+      >
         {eligibility.ok && can(PERM.BORROW) && (
-          <Link to={`/borrow?tool=${tool.id}`} className="btn btn-primary">
+          <Link to={`/borrow?tool=${tool.id}`} className="btn btn-primary" data-tour="detail-action">
             <ArrowRight className="h-4 w-4" />
             Borrow tool
           </Link>
         )}
         {activeLoan && can(PERM.RETURN) && (
-          <Link to={`/return?tool=${tool.id}`} className="btn btn-success">
+          <Link to={`/return?tool=${tool.id}`} className="btn btn-success" data-tour="detail-action">
             <Undo2 className="h-4 w-4" />
             Return tool
           </Link>
         )}
         {can(PERM.TOOL_EDIT) && (
-          <button type="button" onClick={() => setEditing(true)} className="btn btn-outline">
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="btn btn-outline"
+            data-tour="detail-edit"
+          >
             <Pencil className="h-4 w-4" />
             Edit tool
           </button>
@@ -187,7 +257,22 @@ export default function ToolDetailPage() {
       <div className="grid gap-4 lg:grid-cols-3">
         {/* ------------------------------ main column ------------------------------ */}
         <div className="space-y-4 lg:col-span-2">
-          <SectionCard title="Tool record">
+          {/* Only while the tool is actually out, and only for whoever may close
+              that loan — the borrower, or staff. `canReturnTransaction` is the
+              existing rule for exactly that, so no new permission appears here. */}
+          {activeLoan && canReturnTransaction(user, activeLoan) && (
+            <ToolLocationCheckpoint
+              loan={activeLoan}
+              actor={user}
+              onRecorded={(updated) => {
+                setSelectedTxn((current) =>
+                  current?.id === updated.id ? updated : current,
+                )
+              }}
+            />
+          )}
+
+          <SectionCard title="Tool record" data-tour="detail-record">
             <div className="mb-4 flex flex-wrap items-center gap-2">
               <StatusBadge status={tool.status} />
               <ConditionBadge condition={tool.condition} />
@@ -267,52 +352,68 @@ export default function ToolDetailPage() {
             />
           </SectionCard>
 
-          <SectionCard
-            title="Maintenance history"
-            description="Service, calibration and repair records"
-            bodyClassName="p-0"
-          >
-            {maintenanceRecords.length === 0 ? (
-              <EmptyState
-                icon={HardHat}
-                title="No maintenance recorded."
-                description="Service records appear here once the tool has been checked or calibrated."
-                compact
-              />
-            ) : (
-              <ul className="divide-y">
-                {maintenanceRecords.map((record) => (
-                  <li key={record.id} className="px-4 py-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="text-sm font-bold">{record.type}</p>
-                        <p className="subtle text-xs">
-                          {formatDate(record.date)} · {record.technician}
-                        </p>
+          {/* Service records are staff data — the data layer refuses them to a
+              student outright, so the card could only ever show them an empty
+              state. It follows the same permission as the Maintenance page. */}
+          {can(PERM.MAINTENANCE_VIEW) && (
+            <SectionCard
+              title="Maintenance history"
+              description="Service, calibration and repair records"
+              bodyClassName="p-0"
+            >
+              {maintenanceRecords.length === 0 ? (
+                <EmptyState
+                  icon={HardHat}
+                  title="No maintenance recorded."
+                  description="Service records appear here once the tool has been checked or calibrated."
+                  compact
+                />
+              ) : (
+                <ul className="divide-y">
+                  {maintenanceRecords.map((record) => (
+                    <li key={record.id} className="px-4 py-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold">{record.type}</p>
+                          <p className="subtle text-xs">
+                            {formatDate(record.date)} · {record.technician}
+                          </p>
+                        </div>
+                        <MaintenanceStatusBadge status={record.status} />
                       </div>
-                      <MaintenanceStatusBadge status={record.status} />
-                    </div>
-                    {record.notes && <p className="muted mt-1.5 text-xs">{record.notes}</p>}
-                    {record.nextDate && (
-                      <p className="subtle mono mt-1 text-[11px]">
-                        Next service {formatDate(record.nextDate)}
-                      </p>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </SectionCard>
+                      {record.notes && <p className="muted mt-1.5 text-xs">{record.notes}</p>}
+                      {record.nextDate && (
+                        <p className="subtle mono mt-1 text-[11px]">
+                          Next service {formatDate(record.nextDate)}
+                        </p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </SectionCard>
+          )}
         </div>
 
         {/* ------------------------------ side column ------------------------------ */}
         <div className="space-y-4">
-          <SectionCard title="QR code" description="Printed label for this tool">
-            <QRCodePanel tool={tool} size={190} />
-          </SectionCard>
+          {/* The QR panel is the label workshop — it downloads and prints the
+              sticker that goes on the shelf. That is crib-desk work, so it is
+              not rendered at all for a student: the panel and both of its
+              actions exist only for staff. A student scans the printed code
+              from the Scan page instead. */}
+          {isStaff(user) && (
+            <SectionCard title="QR code" description="Printed label for this tool">
+              <QRCodePanel tool={tool} size={190} />
+            </SectionCard>
+          )}
 
           {can(PERM.TOOL_STATUS) && (
-            <SectionCard title="Tool status" description="Take the tool in or out of service">
+            <SectionCard
+              title="Tool status"
+              description="Take the tool in or out of service"
+              data-tour="detail-status"
+            >
               <div className="space-y-2">
                 {tool.status !== TOOL_STATUS.MAINTENANCE && (
                   <StatusAction
@@ -387,7 +488,7 @@ export default function ToolDetailPage() {
             </SectionCard>
           )}
 
-          <SectionCard title="Where it lives" description="Laboratory storage">
+          <SectionCard title="Where it lives" description="Laboratory storage" data-tour="detail-location">
             <div className="flex items-start gap-3">
               <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-amberline-400/15">
                 <MapPin className="h-5 w-5 text-amberline-600 dark:text-amberline-400" />
@@ -409,6 +510,8 @@ export default function ToolDetailPage() {
         open={!!selectedTxn}
         onClose={() => setSelectedTxn(null)}
       />
+      <Walkthrough steps={tourSteps} open={tour.open} onClose={tour.close} />
+
       <ConfirmDialog
         open={!!confirm}
         onClose={() => setConfirm(null)}
@@ -416,6 +519,7 @@ export default function ToolDetailPage() {
         title={confirm?.title}
         message={confirm?.message}
         confirmLabel={confirm?.confirmLabel}
+        variant={confirm?.variant}
         loading={busy}
       />
     </>
@@ -462,5 +566,101 @@ function StatusAction({ icon: Icon, label, description, onClick, disabled, tone 
         <span className="subtle block text-xs">{description}</span>
       </span>
     </button>
+  )
+}
+
+/* ------------------------------------------------------------------ *
+ * "Confirm current tool location"
+ *
+ * The only way a point is recorded between collecting a tool and handing it
+ * back, and it happens exactly when the button below is pressed — one reading,
+ * one append, then nothing. There is no timer here, no `watchPosition`, and no
+ * state that outlives the click; closing the page stops nothing because nothing
+ * was running.
+ *
+ * Shown only while the loan is open, and only to whoever may close it. The
+ * checkpoints already recorded are listed underneath so the borrower can see
+ * exactly what has been stored about them.
+ * ------------------------------------------------------------------ */
+function ToolLocationCheckpoint({ loan, actor, onRecorded }) {
+  const toast = useToast()
+  const [reading, setReading] = useState(null)
+  const [note, setNote] = useState('')
+  const [saving, setSaving] = useState(false)
+  // The loan as last written, so a checkpoint appears in the list immediately
+  // rather than waiting for the next refresh of the tool's transactions.
+  const [record, setRecord] = useState(loan)
+
+  const checkpoints = txnService.checkpointsOf(record)
+
+  const save = async () => {
+    if (!reading) return
+    setSaving(true)
+    try {
+      const updated = await txnService.addLocationCheckpoint(
+        { transactionId: record.id, location: reading, note },
+        actor,
+      )
+      setRecord(updated)
+      setReading(null)
+      setNote('')
+      toast.success('Location checkpoint recorded.', {
+        title: `Checkpoint ${txnService.checkpointsOf(updated).length}`,
+      })
+      onRecorded?.(updated)
+    } catch (err) {
+      toast.error(err.message ?? 'The location checkpoint could not be saved.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <SectionCard
+      title="Confirm current tool location"
+      description="Record where this tool is right now, while it is still out"
+    >
+      <p className="muted text-xs leading-relaxed">
+        This is optional and entirely manual. Nothing is captured until you press the button, and
+        each reading is stored on its own with the time it was taken — the app does not follow the
+        tool or you in between.
+      </p>
+
+      <div className="mt-3 space-y-3">
+        <LocationCaptureField
+          value={reading}
+          onChange={setReading}
+          title="Take a reading now"
+          description="Stored as a usage checkpoint on this loan, in addition to where the tool was collected."
+          disabled={saving}
+        />
+
+        {reading && (
+          <>
+            <TextField
+              label="What is it being used for here? (optional)"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="e.g. Engine bay 3, brake bleed practical"
+            />
+            <button
+              type="button"
+              onClick={save}
+              className="btn btn-primary w-full"
+              disabled={saving}
+            >
+              {saving ? <Spinner /> : <MapPin className="h-4 w-4" />}
+              {saving ? 'Saving checkpoint…' : 'Save location checkpoint'}
+            </button>
+          </>
+        )}
+      </div>
+
+      {checkpoints.length > 0 && (
+        <div className="mt-4 border-t pt-4">
+          <LocationTrail transaction={record} />
+        </div>
+      )}
+    </SectionCard>
   )
 }

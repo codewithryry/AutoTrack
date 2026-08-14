@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   AlertTriangle,
@@ -15,6 +15,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import QRScanner from '../components/QRScanner'
+import Walkthrough, { usePageTour } from '../components/Walkthrough'
 import {
   ConditionBadge,
   DetailItem,
@@ -27,7 +28,7 @@ import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import * as toolService from '../services/tools'
 import * as txnService from '../services/transactions'
-import { PERM } from '../utils/permissions'
+import { isStudent, PERM } from '../utils/permissions'
 import { NON_BORROWABLE_REASON } from '../utils/constants'
 import { parseQRPayload } from '../utils/qr'
 import { cx } from '../utils/helpers'
@@ -40,13 +41,79 @@ import { dueLabel, formatDate } from '../utils/dates'
  * makes sense for that status. Borrowing and returning happen on their own
  * pages so the confirmation step is never skipped by a mis-scan.
  */
+/**
+ * First-run walkthrough for the scanner — the primary workflow of the app, and
+ * the one a student meets first at the tool crib. Every step points at an
+ * element that is really on this page; `Walkthrough` drops any step whose target
+ * is absent, so the sequence stays honest.
+ *
+ * A student is shown their own wording: they scan to borrow or hand a tool back,
+ * where staff issue and receive it on someone else's behalf.
+ */
+const scanTour = (student) =>
+  student
+    ? [
+        {
+          title: 'Scan to borrow or hand back',
+          text: 'Every tool carries a QR label. Scanning it pulls up the tool and offers the one action that makes sense — borrow it, or return it.',
+          icon: QrCode,
+        },
+        {
+          target: 'scan-camera',
+          title: 'Point the camera at the label',
+          text: 'Tap Start camera, then hold the label inside the frame. It reads automatically — there is no shutter button.',
+          icon: ScanLine,
+        },
+        {
+          target: 'scan-manual',
+          title: 'No camera? Type the ID',
+          text: 'If the label is scuffed or the camera will not start, type the Tool ID printed on the label here.',
+          icon: Wrench,
+        },
+        {
+          target: 'scan-guide',
+          title: 'What happens next',
+          text: 'You will see the tool, its condition and whether it is free, then a Borrow or Return button. Nothing is recorded until you confirm.',
+          icon: ArrowRight,
+        },
+      ]
+    : [
+        {
+          title: 'Borrow and return with one scan',
+          text: 'Every tool carries a QR label. Scanning it pulls up the live record and offers the one action that makes sense — issue it, or take it back.',
+          icon: QrCode,
+        },
+        {
+          target: 'scan-camera',
+          title: 'Point the camera at the label',
+          text: 'Tap Start camera, then hold the tool’s QR label inside the frame. It reads automatically — there is no shutter button to press.',
+          icon: ScanLine,
+        },
+        {
+          target: 'scan-manual',
+          title: 'No camera? Type the ID',
+          text: 'If the label is damaged or the camera is unavailable, enter the Tool ID printed on the label here instead.',
+          icon: Wrench,
+        },
+        {
+          target: 'scan-guide',
+          title: 'What happens next',
+          text: 'Once a tool is identified you will see its status, condition and current holder, followed by a Borrow or Return button. The inventory updates the moment you confirm.',
+          icon: ArrowRight,
+        },
+      ]
+
 export default function ScanPage() {
-  const { can } = useApp()
+  const { can, user } = useApp()
   const toast = useToast()
   const navigate = useNavigate()
 
   const [result, setResult] = useState(null) // { tool, loan } | { error }
   const [looking, setLooking] = useState(false)
+
+  // Once per account on this device, remembered separately from every other page.
+  const tour = usePageTour('scan', user?.id)
+  const tourSteps = useMemo(() => scanTour(isStudent(user)), [user])
 
   const handleDetected = useCallback(
     async (raw) => {
@@ -68,7 +135,9 @@ export default function ScanPage() {
           toast.error('Tool not found. Please check the QR code.')
           return
         }
-        const loan = await txnService.activeLoanContext(tool.id)
+        // A student only ever sees a loan record that is their own; for anyone
+        // else's the tool is simply reported as unavailable.
+        const loan = await txnService.activeLoanContext(tool.id, user)
         setResult({ tool, loan })
         toast.success(`${tool.name} identified.`, { title: tool.id })
       } catch (err) {
@@ -78,7 +147,7 @@ export default function ScanPage() {
         setLooking(false)
       }
     },
-    [toast],
+    [toast, user],
   )
 
   const reset = () => setResult(null)
@@ -89,6 +158,7 @@ export default function ScanPage() {
         title="Scan a tool"
         description="Point the camera at the QR label to borrow, return or inspect a tool."
         icon={QrCode}
+        hideTitleMobile
       >
         {result && (
           <button type="button" onClick={reset} className="btn btn-outline">
@@ -111,7 +181,11 @@ export default function ScanPage() {
             </div>
           )}
 
-          {!looking && !result && <ScanHint />}
+          {!looking && !result && (
+            <div data-tour="scan-guide">
+              <ScanHint />
+            </div>
+          )}
 
           {!looking && result?.error && (
             <SectionCard title="Scan result">
@@ -149,6 +223,8 @@ export default function ScanPage() {
           )}
         </div>
       </div>
+
+      <Walkthrough steps={tourSteps} open={tour.open} onClose={tour.close} />
     </>
   )
 }

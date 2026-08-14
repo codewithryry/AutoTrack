@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
   Download,
+  Filter,
   Grid3x3,
   List,
   MapPin,
@@ -10,6 +11,7 @@ import {
   Plus,
   Printer,
   QrCode,
+  Search,
   Trash2,
   Pencil,
   Wrench,
@@ -18,10 +20,12 @@ import {
   RotateCcw,
   PackageSearch,
 } from 'lucide-react'
+import Walkthrough, { usePageTour } from '../components/Walkthrough'
 import {
   ConditionBadge,
   ConfirmDialog,
   EmptyState,
+  ErrorState,
   FilterSelect,
   PageHeader,
   SearchInput,
@@ -35,9 +39,9 @@ import ToolForm from '../components/ToolForm'
 import { QRCodeModal } from '../components/QRCodeDisplay'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
-import { useDebounced, useLocalStorage, useTools } from '../hooks'
+import { useDebounced, useLocalStorage, useMediaQuery, useTools } from '../hooks'
 import * as toolService from '../services/tools'
-import { PERM } from '../utils/permissions'
+import { isStaff, isStudent, PERM } from '../utils/permissions'
 import { CATEGORIES, CONDITIONS, LOCATIONS, TOOL_STATUS, TOOL_STATUSES } from '../utils/constants'
 import { cx, downloadCSV } from '../utils/helpers'
 import { formatDate } from '../utils/dates'
@@ -68,11 +72,56 @@ const CSV_COLUMNS = [
   { key: 'nextMaintenanceDate', label: 'Next Maintenance', format: (v) => formatDate(v, '') },
 ]
 
+/**
+ * First-run walkthrough for the inventory. Steps point at controls that really
+ * live on this page; `Walkthrough` drops any step whose target is absent (for
+ * example the Add-tool button on a read-only account), so the tour stays honest.
+ *
+ * The closing step has no target to drop, so it takes the role instead: a
+ * student is never shown the QR, edit or status controls, and their tour must
+ * not describe them.
+ */
+const toolsTour = (isCrib) => [
+  {
+    title: 'Your lab inventory',
+    text: 'Every registered tool lives here with its current status, condition and location, ready to scan or borrow.',
+    icon: Wrench,
+  },
+  {
+    target: 'tools-search',
+    title: 'Search the inventory',
+    text: 'Type a name, tool ID, brand or serial number to find a tool in a flash.',
+    icon: Search,
+  },
+  {
+    target: 'tools-filters',
+    title: 'Narrow the list',
+    text: 'Filter by status, category, condition or location, and sort the results to find what matters.',
+    icon: Filter,
+  },
+  {
+    target: 'tools-add',
+    title: 'Register a new tool',
+    text: 'Add a tool here to generate its QR label, ready for the shelf.',
+    icon: Plus,
+  },
+  {
+    title: 'Open a tool',
+    text: isCrib
+      ? 'Tap any tool for its full record and history. The ⋮ menu edits it, shows its QR code, or updates its status.'
+      : 'Tap any tool for its full record — status, condition, where it is kept, and whether you can borrow it.',
+    icon: isCrib ? MoreVertical : Wrench,
+  },
+]
+
 export default function ToolsPage() {
   const { user, can, settings } = useApp()
   const toast = useToast()
-  const { tools, loading } = useTools()
+  const { tools, loading, error, reload } = useTools()
   const [searchParams, setSearchParams] = useSearchParams()
+
+  // The phone shell — the same breakpoint the layout switches its rail on.
+  const isPwa = useMediaQuery('(max-width: 1023px)')
 
   const [search, setSearch] = useState('')
   const debouncedSearch = useDebounced(search, 200)
@@ -89,6 +138,13 @@ export default function ToolsPage() {
   const [confirm, setConfirm] = useState(null)
   const [busy, setBusy] = useState(false)
   const [printing, setPrinting] = useState(false)
+
+  // A stable array: `Walkthrough` re-resolves its targets whenever `steps`
+  // changes identity, which would restart the tour on every render.
+  const tourSteps = useMemo(() => toolsTour(isStaff(user)), [user])
+
+  // Once per account on this device, remembered separately from every other page.
+  const tour = usePageTour('tools', user?.id)
 
   // Keep the status filter reflected in the URL so dashboard cards can deep-link.
   useEffect(() => {
@@ -161,24 +217,28 @@ export default function ToolsPage() {
       title: `Delete ${tool.name}?`,
       message: `${tool.id} and its QR code will be removed from the inventory. Borrowing history is kept for the record.`,
       confirmLabel: 'Delete tool',
-      onConfirm: async ({ force = false } = {}) => {
+      onConfirm: async () => {
         setBusy(true)
         try {
-          await toolService.remove(tool.id, user, { force })
+          await toolService.remove(tool.id, user)
           toast.success(`${tool.name} was deleted.`)
           setConfirm(null)
         } catch (err) {
           if (err.name === 'ActiveTransactionError') {
-            // Escalate to an explicit second confirmation rather than silently forcing.
+            // The tool is out on loan, so deletion is refused — forcing it
+            // would corrupt the open transaction's history. Explain that here
+            // instead of offering a destructive override.
             setConfirm((c) => ({
               ...c,
               title: 'This tool is still on loan',
               message: err.message,
-              confirmLabel: 'Delete anyway',
-              force: true,
+              confirmLabel: 'Close',
+              variant: 'primary',
+              onConfirm: () => setConfirm(null),
             }))
           } else {
             toast.error(err.message ?? 'Unable to delete the tool.')
+            setConfirm(null)
           }
         } finally {
           setBusy(false)
@@ -191,6 +251,11 @@ export default function ToolsPage() {
     downloadCSV(filtered, CSV_COLUMNS, `tools-${new Date().toISOString().slice(0, 10)}.csv`)
     toast.success(`${filtered.length} tools exported to CSV.`)
   }
+
+  // Export and label printing are crib-desk jobs. A student carrying the PWA has
+  // no use for them, so they leave the phone layout entirely — taking the empty
+  // header row with them — and stay exactly as they were on the desktop shell.
+  const showCribActions = !(isStudent(user) && isPwa)
 
   const printAllLabels = async () => {
     if (!filtered.length) return
@@ -206,31 +271,31 @@ export default function ToolsPage() {
 
   return (
     <>
-      <PageHeader
-        title="Tool inventory"
-        description={`${tools.length} tools registered in ${settings.labName}`}
-        icon={Wrench}
-      >
-        <button
-          type="button"
-          onClick={exportCSV}
-          className="btn btn-outline"
-          disabled={!filtered.length}
-        >
-          <Download className="h-4 w-4" />
-          <span className="hidden sm:inline">Export CSV</span>
-        </button>
-        <button
-          type="button"
-          onClick={printAllLabels}
-          className="btn btn-outline"
-          disabled={!filtered.length || printing}
-        >
-          {printing ? <Spinner /> : <Printer className="h-4 w-4" />}
-          <span className="hidden sm:inline">Print labels</span>
-        </button>
+      <PageHeader hideTitle>
+        {showCribActions && (
+          <button
+            type="button"
+            onClick={exportCSV}
+            className="btn btn-outline"
+            disabled={!filtered.length}
+          >
+            <Download className="h-4 w-4" />
+            <span className="hidden sm:inline">Export CSV</span>
+          </button>
+        )}
+        {showCribActions && (
+          <button
+            type="button"
+            onClick={printAllLabels}
+            className="btn btn-outline"
+            disabled={!filtered.length || printing}
+          >
+            {printing ? <Spinner /> : <Printer className="h-4 w-4" />}
+            <span className="hidden sm:inline">Print labels</span>
+          </button>
+        )}
         {can(PERM.TOOL_CREATE) && (
-          <button type="button" onClick={openCreate} className="btn btn-primary">
+          <button type="button" onClick={openCreate} className="btn btn-primary" data-tour="tools-add">
             <Plus className="h-4 w-4" />
             Add tool
           </button>
@@ -241,12 +306,13 @@ export default function ToolsPage() {
       <div className="card mb-4 p-3">
         <div className="flex flex-col gap-3">
           <div className="flex gap-2">
-            <SearchInput
-              value={search}
-              onChange={setSearch}
-              placeholder="Search by name, ID, brand, serial or location…"
-              className="flex-1"
-            />
+            <div data-tour="tools-search" className="min-w-0 flex-1">
+              <SearchInput
+                value={search}
+                onChange={setSearch}
+                placeholder="Search by name, ID, brand, serial or location…"
+              />
+            </div>
             <div className="hidden shrink-0 items-center gap-1 rounded-lg border p-0.5 sm:flex">
               <button
                 type="button"
@@ -269,7 +335,10 @@ export default function ToolsPage() {
             </div>
           </div>
 
-          <div className="no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 pb-0.5">
+          <div
+            data-tour="tools-filters"
+            className="no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 pb-0.5"
+          >
             <FilterSelect
               label="Status"
               value={status}
@@ -311,7 +380,15 @@ export default function ToolsPage() {
       </div>
 
       {/* ------------------------------ results ------------------------------ */}
-      {loading && !tools.length ? (
+      {error ? (
+        <div className="card">
+          <ErrorState
+            title="The inventory could not be loaded"
+            description={error.message}
+            onRetry={reload}
+          />
+        </div>
+      ) : loading && !tools.length ? (
         <div className="card">
           <SkeletonRows rows={6} columns={5} />
         </div>
@@ -381,8 +458,11 @@ export default function ToolsPage() {
         title={confirm?.title}
         message={confirm?.message}
         confirmLabel={confirm?.confirmLabel}
+        variant={confirm?.variant}
         loading={busy}
       />
+
+      <Walkthrough steps={tourSteps} open={tour.open} onClose={tour.close} />
     </>
   )
 }
@@ -530,14 +610,16 @@ function ActionMenu({ tool, can, onEdit, onQR, onDelete, onStatus, user }) {
             style={{ ...position, width: MENU_WIDTH }}
             role="menu"
           >
-            <MenuItem
-              icon={QrCode}
-              label="View QR code"
-              onClick={() => {
-                close()
-                onQR(tool)
-              }}
-            />
+            {isStaff(user) && (
+              <MenuItem
+                icon={QrCode}
+                label="View QR code"
+                onClick={() => {
+                  close()
+                  onQR(tool)
+                }}
+              />
+            )}
             <MenuItem icon={Wrench} label="Open tool page" to={`/tools/${tool.id}`} />
             {canEdit && (
               <MenuItem
@@ -659,14 +741,18 @@ function ToolCard({ tool, ...actions }) {
         <Link to={`/tools/${tool.id}`} className="btn btn-outline btn-sm flex-1">
           Details
         </Link>
-        <button
-          type="button"
-          onClick={() => actions.onQR(tool)}
-          className="btn btn-outline btn-sm btn-icon shrink-0"
-          aria-label={`QR code for ${tool.name}`}
-        >
-          <QrCode className="h-4 w-4" />
-        </button>
+        {/* The QR panel downloads and prints the shelf label — staff work, and
+            the same rule the tool page applies. */}
+        {isStaff(actions.user) && (
+          <button
+            type="button"
+            onClick={() => actions.onQR(tool)}
+            className="btn btn-outline btn-sm btn-icon shrink-0"
+            aria-label={`QR code for ${tool.name}`}
+          >
+            <QrCode className="h-4 w-4" />
+          </button>
+        )}
       </div>
     </article>
   )

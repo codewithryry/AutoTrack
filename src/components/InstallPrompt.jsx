@@ -73,7 +73,7 @@ export default function InstallPrompt() {
   return (
     <div
       className="fixed left-1/2 z-40 w-[min(28rem,calc(100vw-1.5rem))] -translate-x-1/2
-                 bottom-[calc(5.5rem+env(safe-area-inset-bottom,0px))]
+                 bottom-[calc(6.5rem+env(safe-area-inset-bottom,0px))]
                  lg:bottom-4 lg:left-auto lg:right-4 lg:translate-x-0"
       role="complementary"
     >

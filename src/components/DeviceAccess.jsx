@@ -102,27 +102,49 @@ export function DeviceAccessControl() {
   const [camera, setCamera] = usePermissionState('camera', cameraSupported)
   const [busy, setBusy] = useState(null)
 
-  const askLocation = () => {
+  const askLocation = async () => {
     setBusy('location')
-    navigator.geolocation.getCurrentPosition(
-      () => {
-        setLocation('granted')
-        setBusy(null)
-        toast.success('Location is allowed. Borrow and return records can carry a reading.')
-      },
-      (error) => {
-        setBusy(null)
-        // Code 1 is a refusal; anything else — no fix, a timeout — leaves the
-        // permission exactly as it was rather than reporting it as blocked.
-        if (error?.code === 1) {
-          setLocation('denied')
-          toast.info('Location is blocked. Allow it from your browser’s site settings.')
-        } else {
-          toast.info('No location fix was available. Try again outdoors or nearer a window.')
-        }
-      },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
-    )
+    // One attempt in a promise so the fallback below can retry on the same
+    // click rather than making the person press Enable twice.
+    const getFix = (options) =>
+      new Promise((resolve, reject) =>
+        navigator.geolocation.getCurrentPosition(resolve, reject, options),
+      )
+    try {
+      // High accuracy first; if this device cannot fix that way — common
+      // indoors and on desktops with no GPS — retry with the default so the
+      // permission is granted by a fix this device can actually produce.
+      // Without that, the browser never registers the grant and Location stays
+      // out of the site's permission list while the camera is already there.
+      let position
+      try {
+        position = await getFix({ enableHighAccuracy: true, timeout: 15000, maximumAge: 0 })
+      } catch (first) {
+        // Code 1 is a refusal — retrying cannot help, so surface it directly.
+        if (first?.code === 1) throw first
+        position = await getFix({ enableHighAccuracy: false, timeout: 15000, maximumAge: 0 })
+      }
+      if (!position?.coords) throw { code: 2 }
+      setLocation('granted')
+      toast.success('Location is allowed. Borrow and return records can carry a reading.')
+    } catch (error) {
+      // Code 1 is a refusal; anything else — no fix, a timeout — leaves the
+      // permission exactly as it was rather than reporting it as blocked.
+      if (error?.code === 1) {
+        setLocation('denied')
+        // A block that never reached the address bar's site settings is usually
+        // the device or browser refusing location outright (Location services
+        // switched off), so name that too — the site settings alone will not
+        // have an entry to fix.
+        toast.warning(
+          'Location is blocked. Turn on Location services on this device, allow Location for this site from the address bar’s site settings, then press Enable again.',
+        )
+      } else {
+        toast.info('No location fix was available. Try again outdoors or nearer a window.')
+      }
+    } finally {
+      setBusy(null)
+    }
   }
 
   const askCamera = async () => {

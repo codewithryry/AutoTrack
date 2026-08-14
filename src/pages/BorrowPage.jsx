@@ -8,7 +8,6 @@ import {
   MapPin,
   QrCode,
   Repeat,
-  Search,
   Undo2,
   UserCheck,
   Wrench,
@@ -30,6 +29,7 @@ import {
 } from '../components/ui'
 import Walkthrough, { usePageTour } from '../components/Walkthrough'
 import { LocationCaptureField } from '../components/LocationCapture'
+import Mascot from '../components/Mascot'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import { useDebounced, useTools, useUsers } from '../hooks'
@@ -477,18 +477,13 @@ export default function BorrowPage() {
             </>
           ) : (
             <SectionCard title="Selected tool">
-              <EmptyState
-                icon={Search}
-                title="No tool selected."
-                description="Choose an available tool from the list, or scan its QR code to jump straight here."
-                compact
-                action={
-                  <Link to="/scan" className="btn btn-primary">
-                    <QrCode className="h-4 w-4" />
-                    Scan a tool
-                  </Link>
-                }
-              />
+              <div className="flex flex-col items-center px-4 py-8 text-center">
+                <Mascot state="curious" size={104} className="mb-3" />
+                <p className="text-sm font-bold">No tool selected.</p>
+                <p className="muted mt-1 max-w-sm text-sm">
+                  Pick an available tool from the list to start the issue.
+                </p>
+              </div>
             </SectionCard>
           )}
 

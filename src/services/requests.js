@@ -372,6 +372,13 @@ export async function approve(id, actor, { note = '' } = {}) {
         borrowDate: nowISO(),
         dueDate: reservation?.endsAt ?? saved.neededTo,
         purpose: saved.purpose ?? '',
+        // The point the borrower's own device recorded when they asked for the
+        // tool. Approving *is* the issue, so that collection point is this
+        // loan's collection point — carrying it here is what puts it under
+        // "Borrowed here" without asking anyone to capture a second one. It
+        // keeps the borrower's stamp and its original timestamp rather than
+        // being re-attributed to the approver; see `toStoredLocation`.
+        borrowLocation: saved.collectionLocation ?? null,
       },
       actor,
     )

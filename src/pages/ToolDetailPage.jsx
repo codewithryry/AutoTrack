@@ -44,7 +44,7 @@ import { canReturnTransaction, isStaff, isStudent, PERM } from '../utils/permiss
 import { TOOL_STATUS, SERIAL_CRITICAL_CATEGORIES } from '../utils/constants'
 import { cx } from '../utils/helpers'
 import { formatCoords } from '../utils/geo'
-import { daysBetween, dueLabel, formatDate, formatDateTime } from '../utils/dates'
+import { daysBetween, dueLabel, formatDate, formatDateTime, timeAgo } from '../utils/dates'
 
 /**
  * First-run walkthrough for one tool's page. A student sees the record and the
@@ -731,7 +731,18 @@ function ToolLocationCheckpoint({ loan, actor, onRecorded }) {
         )
         return
       }
-      await save(location, note)
+      // The device's own timestamp for the fix is kept, not replaced with the
+      // moment of saving: a checkpoint means "the tool was here, then", and the
+      // age shown against it has to be the age of the reading.
+      await save(
+        {
+          lat: location.lat,
+          lng: location.lng,
+          accuracy: location.accuracy ?? null,
+          capturedAt: location.capturedAt,
+        },
+        note,
+      )
     } finally {
       setSaving(false)
     }
@@ -742,13 +753,7 @@ function ToolLocationCheckpoint({ loan, actor, onRecorded }) {
     setSaving(true)
     try {
       const updated = await txnService.addLocationCheckpoint(
-        // Coordinates only: the checkpoint is stamped with the moment it is
-        // confirmed, not with the timestamp of the reading it resolved.
-        {
-          transactionId: record.id,
-          location: { lat: location.lat, lng: location.lng, accuracy: location.accuracy ?? null },
-          note: noteText,
-        },
+        { transactionId: record.id, location, note: noteText },
         actor,
       )
       setRecord(updated)
@@ -790,12 +795,25 @@ function ToolLocationCheckpoint({ loan, actor, onRecorded }) {
                 ? `Confirmed by ${known.capturedByName ?? record.userName} while the tool was out`
                 : `Where ${record.userName} collected the tool`}
               {' · '}
-              {formatDateTime(known.capturedAt)}
+              {/* Both, and in this order: how long ago answers "is this still
+                  current?" at a glance, the clock time is what gets written
+                  down. The age is derived from the stored timestamp — nothing
+                  new is recorded to show it. */}
+              {timeAgo(known.capturedAt)} · {formatDateTime(known.capturedAt)}
               {known.note ? ` · “${known.note}”` : ''}
             </p>
             <button
               type="button"
-              onClick={() => save(known, note)}
+              // Coordinates only, deliberately: confirming is an act happening
+              // now, by whoever pressed it, so the new checkpoint is stamped
+              // with this moment rather than inheriting the older reading's
+              // time and capturer.
+              onClick={() =>
+                save(
+                  { lat: known.lat, lng: known.lng, accuracy: known.accuracy ?? null },
+                  note,
+                )
+              }
               className="btn btn-outline btn-sm mt-3 w-full"
               disabled={saving}
             >

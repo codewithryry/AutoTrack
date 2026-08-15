@@ -163,16 +163,26 @@ const MAX_CHECKPOINTS = 100
 export const locationTrackingAvailable = () =>
   db.supportsColumn(COLLECTIONS.transactions, LOCATION_COLUMN)
 
-/** Strip a captured reading down to what is stored, with the actor stamped on. */
+/**
+ * Strip a captured reading down to what is stored, with the actor stamped on.
+ *
+ * A reading that already carries a capturer keeps it. That matters for exactly
+ * one path: a request approved by staff becomes a loan, and the collection point
+ * on it was taken by the *student's* device when they asked, not by the person
+ * approving. Re-stamping it with the approver would make the record say a member
+ * of staff stood where the student did. A fresh reading has no such stamp, so
+ * every other caller is unaffected and still gets `actor`.
+ */
 function toStoredLocation(location, actor, note) {
   if (!location || !Number.isFinite(location.lat) || !Number.isFinite(location.lng)) return null
+  const captured = location.capturedById || location.capturedByName
   return {
     lat: location.lat,
     lng: location.lng,
     accuracy: Number.isFinite(location.accuracy) ? location.accuracy : null,
     capturedAt: location.capturedAt ?? nowISO(),
-    capturedById: actor?.id ?? null,
-    capturedByName: actor?.fullName ?? null,
+    capturedById: captured ? (location.capturedById ?? null) : (actor?.id ?? null),
+    capturedByName: captured ? (location.capturedByName ?? null) : (actor?.fullName ?? null),
     ...(note ? { note: String(note).slice(0, 200) } : {}),
   }
 }

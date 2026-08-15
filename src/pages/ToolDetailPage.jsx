@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   AlertTriangle,
@@ -24,9 +24,7 @@ import {
   MaintenanceStatusBadge,
   SectionCard,
   Skeleton,
-  Spinner,
   StatusBadge,
-  TextField,
 } from '../components/ui'
 import Walkthrough, { usePageTour } from '../components/Walkthrough'
 import { QRCodePanel } from '../components/QRCodeDisplay'
@@ -43,7 +41,7 @@ import { AutoLocationNotice, LocationTrail, useAutoLocation } from '../component
 import { canReturnTransaction, isStaff, isStudent, PERM } from '../utils/permissions'
 import { TOOL_STATUS, SERIAL_CRITICAL_CATEGORIES } from '../utils/constants'
 import { cx } from '../utils/helpers'
-import { formatCoords } from '../utils/geo'
+import { formatCoords, isLocation } from '../utils/geo'
 import { daysBetween, dueLabel, formatDate, formatDateTime, timeAgo } from '../utils/dates'
 
 /**
@@ -328,10 +326,12 @@ export default function ToolDetailPage() {
       <div className="grid gap-4 lg:grid-cols-3">
         {/* ------------------------------ main column ------------------------------ */}
         <div className="space-y-4 lg:col-span-2">
-          {/* Only while the tool is actually out, and only for whoever may close
-              that loan — the borrower, or staff. `canReturnTransaction` is the
-              existing rule for exactly that, so no new permission appears here. */}
-          {activeLoan && canReturnTransaction(user, activeLoan) && (
+          {/* Only while the tool is actually out, and only for the borrower
+              holding it. Staff may still record a point through the service, but
+              the control is not shown to them: this device's position is the
+              borrower's, and an administrator opening the page is not standing
+              where the tool is. */}
+          {activeLoan && activeLoan.userId === user?.id && canReturnTransaction(user, activeLoan) && (
             <ToolLocationCheckpoint
               loan={activeLoan}
               actor={user}
@@ -699,10 +699,18 @@ function StatusAction({ icon: Icon, label, description, onClick, disabled, tone 
  * checkpoints already recorded are listed underneath so the borrower can see
  * exactly what has been stored about them.
  * ------------------------------------------------------------------ */
+/**
+ * How recent a point has to be for opening the page to leave it alone.
+ *
+ * Without this, walking back and forth between the tool and the transaction
+ * would fill the trail with near-identical entries and turn a record of where
+ * the tool was into a record of what the borrower was doing.
+ */
+const RECHECK_MS = 10 * 60 * 1000
+
 function ToolLocationCheckpoint({ loan, actor, onRecorded }) {
   const toast = useToast()
   const { location: reading, failure: locationFailure, ensure: ensureLocation } = useAutoLocation()
-  const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
   // The loan as last written, so a checkpoint appears in the list immediately
   // rather than waiting for the next refresh of the tool's transactions.
@@ -715,40 +723,7 @@ function ToolLocationCheckpoint({ loan, actor, onRecorded }) {
   // or defaulted. Null when the loan has none, which is a state, not a value.
   const known = txnService.lastKnownLocation(record)
 
-  /**
-   * Save a checkpoint from a reading this device has just taken.
-   *
-   * The capture happens here rather than behind a button of its own, so the
-   * point saved is the one the device could see at the moment of saving.
-   */
-  const saveCurrent = async () => {
-    setSaving(true)
-    try {
-      const location = await ensureLocation()
-      if (!location) {
-        toast.error(
-          locationFailure?.message ?? 'No location fix was available, so nothing was recorded.',
-        )
-        return
-      }
-      // The device's own timestamp for the fix is kept, not replaced with the
-      // moment of saving: a checkpoint means "the tool was here, then", and the
-      // age shown against it has to be the age of the reading.
-      await save(
-        {
-          lat: location.lat,
-          lng: location.lng,
-          accuracy: location.accuracy ?? null,
-          capturedAt: location.capturedAt,
-        },
-        note,
-      )
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const save = async (location, noteText = note) => {
+  const save = async (location, noteText = '') => {
     if (!location) return
     setSaving(true)
     try {
@@ -757,7 +732,6 @@ function ToolLocationCheckpoint({ loan, actor, onRecorded }) {
         actor,
       )
       setRecord(updated)
-      setNote('')
       toast.success('Location checkpoint recorded.', {
         title: `Checkpoint ${txnService.checkpointsOf(updated).length}`,
       })
@@ -769,15 +743,48 @@ function ToolLocationCheckpoint({ loan, actor, onRecorded }) {
     }
   }
 
+  /**
+   * The checkpoint records itself.
+   *
+   * The borrower is the one holding the tool, so opening its page while the loan
+   * is open is itself the confirmation — there is nothing they could add by
+   * pressing a button that the device has not already answered.
+   *
+   * Three things keep this from becoming tracking:
+   *
+   *   - it runs once per visit, latched on a ref, never on a timer;
+   *   - it uses only the reading `useAutoLocation` already had, which exists
+   *     solely when the permission was granted beforehand, so opening a page
+   *     never raises a prompt;
+   *   - a point recorded within `RECHECK_MS` is left alone, so returning to the
+   *     page repeatedly writes nothing.
+   */
+  const autoSaved = useRef(false)
+  useEffect(() => {
+    if (autoSaved.current || !isLocation(reading)) return
+    const last = known?.capturedAt ? new Date(known.capturedAt).getTime() : 0
+    if (Date.now() - last < RECHECK_MS) return
+    autoSaved.current = true
+    void save({
+      lat: reading.lat,
+      lng: reading.lng,
+      accuracy: reading.accuracy ?? null,
+      // The device's own timestamp, so the age shown is the age of the fix.
+      capturedAt: reading.capturedAt,
+    }, '')
+    // `save` and `known` are read as they stand on the one run this can have.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reading])
+
   return (
     <SectionCard
       title="Confirm current tool location"
       description="Record where this tool is right now, while it is still out"
     >
       <p className="muted text-xs leading-relaxed">
-        This is optional and entirely manual. Nothing is captured until you press the button, and
-        each reading is stored on its own with the time it was taken — the app does not follow the
-        tool or you in between.
+        One reading is recorded when you open this page while the tool is out with you, and each is
+        stored on its own with the time it was taken — the app does not follow the tool or you in
+        between.
       </p>
 
       {/* The tool's own last recorded whereabouts on this loan, resolved from
@@ -802,52 +809,16 @@ function ToolLocationCheckpoint({ loan, actor, onRecorded }) {
               {timeAgo(known.capturedAt)} · {formatDateTime(known.capturedAt)}
               {known.note ? ` · “${known.note}”` : ''}
             </p>
-            <button
-              type="button"
-              // Coordinates only, deliberately: confirming is an act happening
-              // now, by whoever pressed it, so the new checkpoint is stamped
-              // with this moment rather than inheriting the older reading's
-              // time and capturer.
-              onClick={() =>
-                save(
-                  { lat: known.lat, lng: known.lng, accuracy: known.accuracy ?? null },
-                  note,
-                )
-              }
-              className="btn btn-outline btn-sm mt-3 w-full"
-              disabled={saving}
-            >
-              {saving ? <Spinner /> : <MapPin className="h-4 w-4" />}
-              Confirm the tool is still here
-            </button>
           </>
         ) : (
           <p className="muted mt-1.5 text-xs leading-relaxed">
-            Nothing has been recorded for this loan yet. Capturing a location is optional, so a loan
-            where none was taken — or where permission was refused — simply has none. Take a reading
-            below to record the first one.
+            Nothing has been recorded for this loan yet. A reading is only taken where the location
+            permission has already been allowed, so a loan where it was refused simply has none.
           </p>
         )}
       </div>
 
-      <div className="mt-3 space-y-3">
-        <TextField
-          label="What is it being used for here? (optional)"
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          placeholder="e.g. Engine bay 3, brake bleed practical"
-        />
-        <button
-          type="button"
-          onClick={saveCurrent}
-          className="btn btn-primary w-full"
-          disabled={saving}
-        >
-          {saving ? <Spinner /> : <MapPin className="h-4 w-4" />}
-          {saving ? 'Saving checkpoint…' : 'Save location checkpoint'}
-        </button>
-        <AutoLocationNotice location={reading} failure={locationFailure} />
-      </div>
+      <AutoLocationNotice location={reading} failure={locationFailure} className="mt-3" />
 
       {checkpoints.length > 0 && (
         <div className="mt-4 border-t pt-4">

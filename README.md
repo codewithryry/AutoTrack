@@ -535,6 +535,10 @@ the viewport on focus.
 - **A student could mark an available tool as borrowed without creating a loan.** The policy and
   its trigger bound them to that one transition; they cannot reach any other status or field.
   Closing the gap entirely means moving borrowing into a database function.
+- **`glob@11` is installed deprecated, and cannot be fixed here.** The chain is
+  `vite-plugin-pwa → workbox-build → glob@^11.0.1`. `workbox-build@7.4.1` is the latest release and
+  still pins `^11`, so no version of `vite-plugin-pwa` avoids it. It is a build-time dependency only
+  and never ships to the browser; it clears when Workbox moves to `glob@13`.
 - **The theme is per-device**, stored in `localStorage` rather than the shared settings document, so
   one person choosing dark mode does not follow everyone onto every laboratory PC.
 - **Sign-up is open by default.** Anyone with an email address can create a Student account unless

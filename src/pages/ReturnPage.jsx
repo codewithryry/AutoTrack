@@ -61,7 +61,10 @@ export default function ReturnPage() {
   const { transactions, loading, error, reload } = useTransactions()
   const preselectedTool = searchParams.get('tool')
 
-  const [selectedId, setSelectedId] = useState('')
+  // A list, because a student may hand several tools in at once. Staff still
+  // work one loan at a time — the toggle below keeps it to one for them, so the
+  // counter's flow is exactly what it was.
+  const [selectedIds, setSelectedIds] = useState([])
   const [search, setSearch] = useState('')
   const debouncedSearch = useDebounced(search, 200)
 
@@ -97,19 +100,47 @@ export default function ReturnPage() {
   useEffect(() => {
     if (!preselectedTool || !openLoans.length) return
     const match = openLoans.find((t) => t.toolId === preselectedTool)
-    if (match) setSelectedId(match.id)
+    if (match) setSelectedIds([match.id])
   }, [preselectedTool, openLoans])
-
-  const selected = openLoans.find((t) => t.id === selectedId) ?? null
 
   // A borrower who does not work the counter can only ask for the return; staff
   // confirm it. `BORROW_FOR_OTHERS` is the existing "works the crib" permission.
   const asksOnly = !can(PERM.BORROW_FOR_OTHERS)
+
+  const selectedLoans = useMemo(
+    () => openLoans.filter((t) => selectedIds.includes(t.id)),
+    [openLoans, selectedIds],
+  )
+  // The single loan the record panel describes. With several ticked the panel
+  // lists them instead, but every other read of `selected` — the one-tool
+  // wording, the overdue note — is unchanged.
+  const selected = selectedLoans[0] ?? null
   const alreadyAsked = txnService.returnRequested(selected)
+
+  /**
+   * Ticking a tool.
+   *
+   * Staff replace their selection; a borrower adds to theirs. A loan already
+   * waiting on the counter cannot be ticked by the borrower at all — the
+   * service refuses a second request for it, so offering it would only produce
+   * an error they cannot act on.
+   */
+  const toggle = (txn) => {
+    if (!asksOnly) {
+      setSelectedIds([txn.id])
+      return
+    }
+    if (txnService.returnRequested(txn)) return
+    setSelectedIds((current) =>
+      current.includes(txn.id)
+        ? current.filter((id) => id !== txn.id)
+        : [...current, txn.id],
+    )
+  }
 
   const submit = async (event) => {
     event.preventDefault()
-    if (!selected) {
+    if (!selectedLoans.length) {
       toast.error('Select the tool being returned.')
       return
     }
@@ -124,38 +155,68 @@ export default function ReturnPage() {
       const captured = await ensureLocation()
 
       if (asksOnly) {
-        await txnService.requestReturn(
-          { transactionId: selected.id, condition, notes },
-          user,
-        )
-        // `requestReturn` opens no location column of its own — the loan is
-        // still open at this point, and the reading belongs on it as one more
-        // point taken while the tool was out. So it goes through the existing
-        // checkpoint API, unchanged, and shows up in the trail staff already
-        // read. Best effort: the request itself has already succeeded, and a
-        // refused or failed reading must not undo it.
-        if (captured) {
+        // One request per tool, each through the same `requestReturn` a single
+        // hand-in has always used. Nothing groups them in the database — there
+        // is no batch column on a return request — and that is exactly what
+        // keeps the counter's queue individual: staff see one row per tool and
+        // confirm each on its own.
+        //
+        // Each is attempted independently so one refusal (a loan somebody else
+        // closed in the meantime) does not throw away the rest.
+        const done = []
+        const failed = []
+        for (const loan of selectedLoans) {
           try {
-            await txnService.addLocationCheckpoint(
-              {
-                transactionId: selected.id,
-                location: captured,
-                note: 'Return requested here',
-              },
+            await txnService.requestReturn(
+              { transactionId: loan.id, condition, notes },
               user,
             )
-          } catch {
-            // Not surfaced: the return request stands either way, and the
-            // location was never the point of this action.
+            done.push(loan)
+            // `requestReturn` opens no location column of its own — the loan is
+            // still open at this point, and the reading belongs on it as one more
+            // point taken while the tool was out. So it goes through the existing
+            // checkpoint API, unchanged, and shows up in the trail staff already
+            // read. Best effort: the request itself has already succeeded, and a
+            // refused or failed reading must not undo it.
+            if (captured) {
+              try {
+                await txnService.addLocationCheckpoint(
+                  {
+                    transactionId: loan.id,
+                    location: captured,
+                    note: 'Return requested here',
+                  },
+                  user,
+                )
+              } catch {
+                // Not surfaced: the return request stands either way, and the
+                // location was never the point of this action.
+              }
+            }
+          } catch (err) {
+            failed.push({ loan, message: err.message })
           }
         }
-        toast.success(
-          `Staff have been asked to receive ${selected.toolName}. Hand it in at the crib.`,
-          { title: 'Return requested' },
-        )
-        setSelectedId('')
-        setNotes('')
-        setCondition(CONDITION.GOOD)
+
+        if (done.length) {
+          toast.success(
+            done.length === 1
+              ? `Staff have been asked to receive ${done[0].toolName}. Hand it in at the crib.`
+              : `Staff have been asked to receive ${done.length} tools. Hand them in at the crib.`,
+            { title: done.length === 1 ? 'Return requested' : 'Return requests sent' },
+          )
+        }
+        // Named rather than counted: which tool did not go through is the only
+        // part the borrower can do anything about.
+        for (const { loan, message } of failed) {
+          toast.error(`${loan.toolName}: ${message}`)
+        }
+
+        setSelectedIds(failed.map(({ loan }) => loan.id))
+        if (done.length) {
+          setNotes('')
+          setCondition(CONDITION.GOOD)
+        }
         return
       }
 
@@ -177,7 +238,7 @@ export default function ReturnPage() {
         toast.success(`Tool successfully returned. ${where}`, { title: selected.toolName })
       }
 
-      setSelectedId('')
+      setSelectedIds([])
       setNotes('')
       setCondition(CONDITION.GOOD)
       navigate(`/tools/${selected.toolId}`)
@@ -207,8 +268,12 @@ export default function ReturnPage() {
       <div className="grid gap-4 lg:grid-cols-[1fr_400px]">
         {/* ------------------------- open loans ------------------------- */}
         <SectionCard
-          title="1 · Select the tool being returned"
-          description={`${openLoans.length} tool${openLoans.length === 1 ? '' : 's'} currently out`}
+          title={asksOnly ? '1 · Select the tools being returned' : '1 · Select the tool being returned'}
+          description={
+            asksOnly && selectedIds.length > 1
+              ? `${selectedIds.length} of ${openLoans.length} selected`
+              : `${openLoans.length} tool${openLoans.length === 1 ? '' : 's'} currently out`
+          }
           bodyClassName="p-0"
         >
           <div className="border-b p-3">
@@ -241,18 +306,24 @@ export default function ReturnPage() {
           ) : (
             <ul className="max-h-[520px] divide-y overflow-y-auto">
               {visibleLoans.map((txn) => {
-                const active = txn.id === selectedId
+                const active = selectedIds.includes(txn.id)
                 const overdue = txn.status === TXN_STATUS.OVERDUE
+                // Already waiting on the counter, so a borrower cannot ask
+                // again — the service refuses it. Staff still select it, since
+                // confirming it is precisely their job.
+                const locked = asksOnly && txnService.returnRequested(txn)
                 return (
                   <li key={txn.id}>
                     <button
                       type="button"
-                      onClick={() => setSelectedId(txn.id)}
+                      onClick={() => toggle(txn)}
+                      disabled={locked}
                       className={cx(
                         'flex w-full items-center gap-3 px-4 py-3 text-left transition-colors',
+                        locked && 'cursor-not-allowed opacity-60',
                         active
                           ? 'bg-amberline-400/10'
-                          : 'hover:bg-black/[0.03] dark:hover:bg-white/5',
+                          : !locked && 'hover:bg-black/[0.03] dark:hover:bg-white/5',
                       )}
                       aria-pressed={active}
                     >
@@ -297,6 +368,30 @@ export default function ReturnPage() {
         <div className="space-y-4">
           {selected ? (
             <>
+              {/* Several ticked: the panel names them rather than describing one
+                  loan in detail. Each still becomes its own request, and staff
+                  still confirm them one at a time. */}
+              {selectedLoans.length > 1 ? (
+                <SectionCard
+                  title={`${selectedLoans.length} tools selected`}
+                  description="Each is sent as its own return request"
+                  bodyClassName="p-0"
+                >
+                  <ul className="divide-y">
+                    {selectedLoans.map((txn) => (
+                      <li key={txn.id} className="flex items-center gap-3 px-4 py-2.5">
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-bold">{txn.toolName}</span>
+                          <span className="subtle mono block truncate text-[11px]">
+                            {txn.toolId}
+                          </span>
+                        </span>
+                        <TxnStatusBadge status={txn.status} />
+                      </li>
+                    ))}
+                  </ul>
+                </SectionCard>
+              ) : (
               <SectionCard title="Loan record">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -340,10 +435,11 @@ export default function ReturnPage() {
                   </div>
                 )}
               </SectionCard>
+              )}
 
               {/* Already handed in and waiting on the counter — stated on the
                   record so neither the borrower nor staff ask twice. */}
-              {alreadyAsked && (
+              {alreadyAsked && selectedLoans.length === 1 && (
                 <div className="flex items-start gap-2.5 rounded-lg border border-blue-200 bg-blue-50 px-3.5 py-2.5 dark:border-blue-500/30 dark:bg-blue-500/10">
                   <ClipboardCheck className="mt-0.5 h-4 w-4 shrink-0 text-blue-600 dark:text-blue-300" />
                   <p className="text-xs font-medium leading-snug text-blue-800 dark:text-blue-200">
@@ -451,9 +547,11 @@ export default function ReturnPage() {
                         ? 'Sending request…'
                         : 'Processing return…'
                       : asksOnly
-                        ? alreadyAsked
+                        ? alreadyAsked && selectedLoans.length === 1
                           ? 'Return already requested'
-                          : 'Request return'
+                          : selectedLoans.length > 1
+                            ? `Request return for ${selectedLoans.length} tools`
+                            : 'Request return'
                         : 'Confirm return'}
                   </button>
 

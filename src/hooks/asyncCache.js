@@ -13,6 +13,14 @@ export function writeCache(key, value) {
   if (key) cache.set(key, value)
 }
 
+/**
+ * Forget one cached result — for a record that has just been deleted, so it is
+ * not served from memory the next time its key is mounted.
+ */
+export const dropCache = (key) => {
+  if (key) cache.delete(key)
+}
+
 /** Forgets every cached result. Called when the signed-in account changes. */
 export function clearAsyncCache() {
   cache.clear()

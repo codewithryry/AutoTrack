@@ -215,10 +215,11 @@ export default function SettingsPage() {
     setConfirm({
       title: 'Clear the laboratory records?',
       message:
-        'Every tool, transaction, notification, maintenance and activity record is permanently ' +
-        'deleted — for every user. User profiles other than your own are removed ' +
-        'too, along with their sign-in credentials.',
+        'Every tool, loan, request, hold, message, conversation, maintenance record, alert and ' +
+        'activity entry is permanently deleted, for every user, along with the laboratory ' +
+        'settings. Accounts and their profile pictures are not touched. This cannot be undone.',
       confirmLabel: 'Delete everything',
+      confirmPhrase: 'DELETE',
       onConfirm: async () => {
         setBusy(true)
         try {
@@ -238,9 +239,12 @@ export default function SettingsPage() {
     setConfirm({
       title: 'Reset the application?',
       message:
-        'Laboratory records are cleared, settings return to their defaults and the demo data is ' +
-        'reloaded. Accounts are not affected. The page will reload afterwards.',
+        'Every stored record is cleared — tools, loans, requests, holds, messages, maintenance, ' +
+        'alerts and the activity log — settings return to their defaults and the demo data is ' +
+        'reloaded. Accounts and their profile pictures are not affected. The page will reload ' +
+        'afterwards, and this cannot be undone.',
       confirmLabel: 'Reset application',
+      confirmPhrase: 'RESET',
       onConfirm: async () => {
         setBusy(true)
         try {
@@ -299,7 +303,7 @@ export default function SettingsPage() {
   const laboratorySection = (
     <form onSubmit={submit}>
       <SectionCard
-        title="Organisation"
+        title="Organization"
         description="Shown across the app and on printed QR labels"
         action={
           canEdit ? (
@@ -525,7 +529,10 @@ export default function SettingsPage() {
           <DataAction
             icon={Trash2}
             title="Clear database"
-            description="Permanently delete every record on this device."
+            // The scope stated up front, because it is not this device: the
+            // records go for the whole laboratory, which is what the
+            // confirmation has always said and what `db.clearAll()` does.
+            description="Permanently delete every laboratory record, for every user."
             onClick={clearDatabase}
             disabled={busy}
             danger
@@ -541,7 +548,7 @@ export default function SettingsPage() {
         />
       </SectionCard>
 
-      <SectionCard title="Stored collections" description="Records in this device's database">
+      <SectionCard title="Stored collections" description="Records in the laboratory database">
         <dl className="space-y-2.5">
           {counts
             ? Object.entries(counts).map(([name, count]) => (
@@ -561,9 +568,9 @@ export default function SettingsPage() {
         >
           <Database className="mt-0.5 h-4 w-4 shrink-0 opacity-60" />
           <p className="subtle text-xs leading-relaxed">
-            Records are stored on this device. A local cache keeps them readable offline, and changes
-            made without a connection sync as soon as one returns. Access is scoped by the data
-            layer, not by this interface alone.
+            These are the laboratory's records, counted as this account may read them. A local cache
+            keeps them readable offline, and changes made without a connection sync as soon as one
+            returns. Access is scoped by the data layer, not by this interface alone.
           </p>
         </div>
       </SectionCard>
@@ -601,8 +608,10 @@ export default function SettingsPage() {
     },
   ].filter(Boolean)
 
-  // One category means there is nothing to choose between, so it starts open.
-  const openSlug = open === undefined ? (categories.length === 1 ? categories[0]?.slug : null) : open
+  // The page opens on its first category — Device and app for every role — so
+  // its controls are readable straight away rather than behind a row that looks
+  // inert until it is clicked. Collapsing it still works: that stores `null`.
+  const openSlug = open === undefined ? (categories[0]?.slug ?? null) : open
 
   return (
     <>
@@ -631,6 +640,7 @@ export default function SettingsPage() {
         title={confirm?.title}
         message={confirm?.message}
         confirmLabel={confirm?.confirmLabel}
+        confirmPhrase={confirm?.confirmPhrase}
         loading={busy}
       />
     </>

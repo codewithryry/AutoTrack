@@ -101,5 +101,55 @@ export function useAsyncData(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run, revision, ...deps])
 
+  /* ------------------------------------------------------------------ *
+   * Background revalidation
+   *
+   * Realtime is the first way a screen learns that something moved, and it
+   * covers the tables the app publishes. This is the safety net under it: a
+   * quiet re-read while the tab is actually being looked at, and one the moment
+   * it is looked at again after being in the background — which is exactly when
+   * a phone has been asleep and the socket has been dropped.
+   *
+   * It re-runs the same loader, so nothing about permissions or scoping
+   * changes, and it goes through `run()` above: with data already on screen the
+   * loading flag is never raised, so the page never blanks and no filter,
+   * search, selection or form state is touched. Only the resolved data changes.
+   * ------------------------------------------------------------------ */
+  const lastRunRef = useRef(0)
+  useEffect(() => {
+    if (!enabled) return
+    const stamp = () => {
+      lastRunRef.current = performance.now()
+    }
+    stamp()
+
+    // Never twice inside this window, however many signals arrive at once.
+    const MIN_GAP = 15_000
+    const INTERVAL = 60_000
+
+    const revalidate = () => {
+      if (document.visibilityState === 'hidden') return
+      if (performance.now() - lastRunRef.current < MIN_GAP) return
+      stamp()
+      run()
+    }
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') revalidate()
+    }
+
+    const timer = setInterval(revalidate, INTERVAL)
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', revalidate)
+    window.addEventListener('online', revalidate)
+
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', revalidate)
+      window.removeEventListener('online', revalidate)
+    }
+  }, [run, enabled])
+
   return { data, loading, error, reload: run, setData }
 }

@@ -25,6 +25,11 @@ mkdirSync(cache, { recursive: true })
 const SUITES = [
   { name: 'domain logic', entry: 'scripts/verify-logic.mjs', out: 'verify-logic.mjs' },
   { name: 'access control', entry: 'scripts/verify-guards.mjs', out: 'verify-guards.mjs' },
+  {
+    name: 'offline-first',
+    entry: 'scripts/verify-offline.mjs',
+    out: 'verify-offline.mjs',
+  },
 ]
 
 let failed = false

@@ -21,6 +21,7 @@ import { Spinner } from '../components/ui'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import { requestPasswordReset } from '../services/users'
+import { APP_VERSION } from '../utils/constants'
 import { cx } from '../utils/helpers'
 
 /**
@@ -177,7 +178,7 @@ export default function LoginPage() {
         // middle of it. From `sm` the centred desktop layout is unchanged.
         className="flex min-w-0 flex-col justify-start px-5 sm:justify-center sm:px-10
                    pb-[calc(env(safe-area-inset-bottom,0px)+2.5rem)]
-                   pt-[calc(env(safe-area-inset-top,0px)+2.5rem)] sm:py-10"
+                   pt-[calc(env(safe-area-inset-top,0px)+3.6rem)] sm:py-10"
       >
         <div className="mx-auto w-full max-w-sm">
 
@@ -339,9 +340,15 @@ export default function LoginPage() {
           {/* Kept with the form column so it centres under it at every width and
               stays clear of the phone's home indicator via the section's own
               safe-area padding. */}
-          <p className="subtle mt-8 text-center text-[11px] font-semibold">
-            Powered by Student BTVTED
-          </p>
+          <div className="mt-20 text-center">
+            <p className="subtle text-[11px] font-semibold">Powered by Lorem Ipsum</p>
+            {/* One quiet line under it: what the app is and which build this is.
+                Smaller and dimmer than the line above so it fills the space
+                without drawing the eye away from the form. */}
+            <p className="subtle mt-1 text-[10px] leading-relaxed opacity-70">
+              Smart Tool Monitoring System · Version {APP_VERSION}
+            </p>
+          </div>
         </div>
       </section>
     </div>

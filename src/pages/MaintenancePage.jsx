@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
   CalendarClock,
-  CheckCircle2,
   HardHat,
+  CheckCircle2,
   Plus,
   Wrench,
   XCircle,
@@ -154,16 +154,20 @@ export default function MaintenancePage() {
             <div className="space-y-3">
               {/* Same full-width search box the Tools and Transactions pages
                   open their filter card with. */}
-              <SearchInput
-                value={search}
-                onChange={setSearch}
-                placeholder="Search by tool, technician or notes…"
-              />
-              {/* The same two-tier pattern the Tools and Transactions pages use:
-                  rounded filter chips on a phone, the inline dropdowns from `sm`
+              {/* The filters sit at the end of the search row on a phone, as
+                  one square control; the inline dropdowns take over from `sm`
                   up. Same values, same options, same filtering. */}
-              <div className="sm:hidden">
-                <MobileFilterBar
+              <div className="flex items-center gap-2">
+                <div className="min-w-0 flex-1">
+                  <SearchInput
+                    value={search}
+                    onChange={setSearch}
+                    placeholder="Search by tool, technician or notes…"
+                  />
+                </div>
+                <div className="sm:hidden">
+                  <MobileFilterBar
+                    iconOnly
                   filters={[
                     {
                       key: 'status',
@@ -187,6 +191,7 @@ export default function MaintenancePage() {
                     setType('all')
                   }}
                 />
+              </div>
               </div>
 
               <div className="no-scrollbar -mx-1 hidden gap-2 overflow-x-auto px-1 pb-0.5 sm:flex">
@@ -221,21 +226,12 @@ export default function MaintenancePage() {
               <SkeletonRows rows={5} columns={4} />
             ) : filtered.length === 0 ? (
               <EmptyState
+                // No call to action here: scheduling is the raised "+" in the
+                // bottom bar on a phone and the button above this card on the
+                // desktop, so the empty state stays the assistant and a line.
                 icon={HardHat}
                 title="No maintenance records."
                 description="Schedule a service job to start tracking calibration and repairs."
-                action={
-                  canManage ? (
-                    <button
-                      type="button"
-                      onClick={() => openScheduler()}
-                      className="btn btn-primary"
-                    >
-                      <Plus className="h-4 w-4" />
-                      Schedule maintenance
-                    </button>
-                  ) : null
-                }
               />
             ) : (
               <>

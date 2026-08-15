@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { assistantLine } from '../services/assistant'
 import { cx } from '../utils/helpers'
+import { ROLE } from '../utils/constants'
 
 /* ------------------------------------------------------------------ *
  * Volt — the laboratory assistant
@@ -191,6 +192,38 @@ export const MASCOT_STATES = {
     glow: VIOLET,
     prop: 'question',
     body: 'tilt',
+    leftArm: 'rest',
+  },
+  // The three tap reactions. Same figure, same parts — only the face, the idle
+  // motion and the glow change, exactly like every row above.
+  playful: {
+    label: 'Playing along',
+    message: 'That tickles.',
+    eyes: 'wink',
+    mouth: 'grin',
+    glow: CYAN,
+    prop: null,
+    body: 'tilt',
+    leftArm: 'wave',
+  },
+  surprised: {
+    label: 'Startled',
+    message: 'Oh!',
+    eyes: 'wide',
+    mouth: 'open-frown',
+    glow: AMBER,
+    prop: null,
+    body: 'bob-fast',
+    leftArm: 'point',
+  },
+  annoyed: {
+    label: 'Losing patience',
+    message: 'Alright, that is enough.',
+    eyes: 'worried',
+    mouth: 'frown',
+    glow: RED,
+    prop: null,
+    body: 'shake',
     leftArm: 'rest',
   },
   sleeping: {
@@ -763,15 +796,40 @@ export function deriveMascotState({
   maintenance = 0,
   activeLoans = 0,
   unread = 0,
+  // The queues each role actually works. A dashboard passes whichever of these
+  // it has; an omitted one is zero and simply never wins.
+  returnRequests = 0,
+  pendingRequests = 0,
+  approvals = 0,
+  availableTools = null,
+  // A student's own asks still with the crib, anybody's unread messages, and
+  // the tools that are out of service — each one something the face can report
+  // when there is nothing more urgent above it.
+  openRequests = 0,
+  messages = 0,
+  damaged = 0,
 } = {}) {
   if (error) return 'error'
   if (!online) return 'offline'
   if (loading) return 'sleeping'
+  // Something is late — the one thing that outranks every queue.
   if (overdue > 0) return 'overdue'
+  // The counter's own work, in the order it is done: tools handed in and
+  // waiting to be received, then asks waiting on a decision.
+  if (returnRequests > 0) return 'returning'
+  if (pendingRequests > 0) return 'checking'
+  // Accounts and profile changes waiting on an administrator.
+  if (approvals > 0) return 'notification'
   if (maintenance > 0) return 'maintenance'
-  if (dueSoon > 0) return 'notification'
+  if (dueSoon > 0) return 'tuning'
+  // A student's own asks waiting on a decision.
+  if (openRequests > 0) return 'checking'
+  if (damaged > 0) return 'inspecting'
+  if (messages > 0) return 'notification'
   if (unread > 0) return 'notification'
   if (activeLoans > 0) return 'borrowing'
+  // A shelf with nothing on it is worth a puzzled look rather than a grin.
+  if (availableTools === 0) return 'confused'
   return 'happy'
 }
 
@@ -913,6 +971,143 @@ export function mascotContextFor(pathname = '') {
 }
 
 /**
+ * The dashboard greeting, by role.
+ *
+ * The same written lines Cohere rewrites, chosen so the first thing the
+ * assistant says is about what that role can actually do on this screen — the
+ * administrator's laboratory-wide view, the instructor's tool crib or the
+ * student's own loans. A role that does not match any of the three gets the
+ * generic dashboard lines, so the mascot always has something to say.
+ */
+const DASHBOARD_LINES = {
+  [ROLE.ADMIN]: [
+    'The laboratory is running to schedule — nothing needs your attention right now.',
+    'Tools, accounts and the settings that govern the lab are managed from the rail.',
+    'Requests is both queues in one place: asks to decide, and returns to confirm.',
+    'Reports has the borrowing figures, and exports them as a CSV.',
+    'Every account, role and pending approval lives on the Users page.',
+    'Inventory is the whole shelf — status, condition and where each tool is kept.',
+  ],
+  [ROLE.INSTRUCTOR]: [
+    'The crib is ready — issue and receive tools straight from Scan.',
+    'Overdue tools and the service log are one tap away on the rail.',
+    'Approving a request issues the tool there and then; nothing else to confirm.',
+    'A tool handed in appears under Return requests until you confirm it.',
+    'Maintenance takes a tool off the shelf until the job is marked complete.',
+    'Scanning a label pulls up the record and the one action that fits it.',
+  ],
+  [ROLE.STUDENT]: [
+    'Everything you have out, and what is due back, is on this screen.',
+    'Scan a tool at the crib to borrow it or hand it back.',
+    'Ask for several tools at once — they travel as one request.',
+    'Staff approving your request issues the tool to you straight away.',
+    'Returning starts here: ask, then hand the tool in at the crib.',
+    'Transactions keeps every borrowing you have ever had.',
+  ],
+}
+
+const DASHBOARD_DEFAULT_LINES = [
+  'Everything you have out, and what is due back, is on this screen.',
+  'Scan to borrow is the quickest way to check a tool out.',
+]
+
+/** The greeting lines for one role, falling back to the shared ones. */
+export function dashboardLinesFor(role) {
+  return DASHBOARD_LINES[role] ?? DASHBOARD_DEFAULT_LINES
+}
+
+/**
+ * What the assistant actually says on a dashboard.
+ *
+ * The role decides the vocabulary; the signals decide the subject. A greeting
+ * that reads the same whether three tools are overdue or none is a greeting
+ * nobody needs, so the first line is about the state the face is already
+ * reporting — the counts come from the dashboard's own data, so it is right
+ * offline and costs nothing to say.
+ *
+ * The role's own lines follow it, which is what the assistant falls back to
+ * when there is nothing in particular to report and what a second tap reaches.
+ */
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`
+
+export function dashboardLinesForState(role, state, signals = {}) {
+  const {
+    overdue = 0,
+    dueSoon = 0,
+    maintenance = 0,
+    activeLoans = 0,
+    unread = 0,
+    returnRequests = 0,
+    pendingRequests = 0,
+    approvals = 0,
+    openRequests = 0,
+    messages = 0,
+    damaged = 0,
+  } = signals
+  const student = role === ROLE.STUDENT
+  const base = dashboardLinesFor(role)
+
+  // A second phrasing for the states seen most often, picked by the count so it
+  // varies between screens without ever being random — the same dashboard reads
+  // the same way twice in a row.
+  const alt = (n, a, b) => (n % 2 === 0 ? a : b)
+
+  const lead = {
+    overdue: student
+      ? `${plural(overdue, 'tool is', 'tools are')} past the return date — hand ${
+          overdue === 1 ? 'it' : 'them'
+        } back before borrowing anything else.`
+      : `${plural(overdue, 'tool is', 'tools are')} overdue. Open Transactions to see who is holding ${
+          overdue === 1 ? 'it' : 'them'
+        }.`,
+    returning: `${plural(returnRequests, 'tool is', 'tools are')} handed in and waiting for you to confirm the return, on Requests.`,
+    checking: student
+      ? `${plural(openRequests, 'request of yours is', 'requests of yours are')} with the crib. You will be told the moment ${
+          openRequests === 1 ? 'it is' : 'they are'
+        } decided.`
+      : `${plural(pendingRequests, 'request is', 'requests are')} waiting on your decision. Approving one issues the tool straight away.`,
+    notification: approvals
+      ? `${plural(approvals, 'account or profile change is', 'accounts and profile changes are')} waiting for approval on Users.`
+      : messages
+        ? `You have ${plural(messages, 'unread message', 'unread messages')} waiting in Messages.`
+        : `You have ${plural(unread, 'unread alert', 'unread alerts')} in the notification centre.`,
+    maintenance: `${plural(maintenance, 'tool is', 'tools are')} in for servicing, so ${
+      maintenance === 1 ? 'it is' : 'they are'
+    } out of circulation for now.`,
+    tuning: student
+      ? `${plural(dueSoon, 'tool is', 'tools are')} due back shortly — return ${
+          dueSoon === 1 ? 'it' : 'them'
+        } on time to keep your record clear.`
+      : `${plural(dueSoon, 'tool is', 'tools are')} due back shortly. Nothing is late yet.`,
+    borrowing: student
+      ? alt(
+          activeLoans,
+          `You are holding ${plural(activeLoans, 'tool', 'tools')} right now. Return is on each row of your records.`,
+          `${plural(activeLoans, 'tool is', 'tools are')} in your hands. Hand ${
+            activeLoans === 1 ? 'it' : 'them'
+          } back before the due date to stay clear.`,
+        )
+      : alt(
+          activeLoans,
+          `${plural(activeLoans, 'tool is', 'tools are')} out with borrowers at the moment.`,
+          `${plural(activeLoans, 'tool', 'tools')} away from the shelf right now — Transactions says who has what.`,
+        ),
+    inspecting: `${plural(damaged, 'tool is', 'tools are')} out of service — damaged or reported lost, so ${
+      damaged === 1 ? 'it is' : 'they are'
+    } off the shelf.`,
+    confused: 'Nothing is on the shelf right now — every tool is out, in for service or retired.',
+    happy: student
+      ? 'Nothing out at the moment. Search the inventory and ask for what you need.'
+      : 'Nothing needs a decision right now — the queues are clear.',
+    sleeping: 'Reading the latest records…',
+    offline: 'Working from the copy saved on this device.',
+    error: 'The dashboard could not be loaded. Try again once the connection settles.',
+  }[state]
+
+  return lead ? [lead, ...base] : base
+}
+
+/**
  * The figure as an assistant: drawn alone — no card, no border, no fill — sized
  * by the caller, and answering a tap with one short line about the screen it is
  * standing on.
@@ -934,7 +1129,58 @@ export function mascotContextFor(pathname = '') {
  * over every card on the page, cannot be clipped by one, and never takes part in
  * layout — nothing moves or resizes when the mascot speaks.
  */
-function TalkingMascot({ state, lines, offline, size, className, label }) {
+/**
+ * How the figure answers being tapped, in order.
+ *
+ * The first tap is the friendly one and still says the page's own written line
+ * (the one the text service rewrites) — nothing about the existing message
+ * system changes. Every tap after it adds a reaction on top: a playful one, a
+ * startled one, and then, once somebody is plainly just poking it, an annoyed
+ * one that stays until they stop. `line: null` means "say what you were going to
+ * say anyway"; anything else is the reaction speaking for itself.
+ */
+const TAP_REACTIONS = [
+  { state: null, line: null },
+  { state: 'playful', line: 'Ha — that tickles. Ask me something.' },
+  { state: 'success', line: 'Still here. Tap a card and I will follow you to it.' },
+  { state: 'surprised', line: 'Oh! You startled me.' },
+  { state: 'playful', line: 'We could do this all day, but the tools will not sign themselves out.' },
+  { state: 'annoyed', line: 'Alright, that is enough poking.' },
+  { state: 'annoyed', line: 'I have work to do, you know.' },
+]
+
+/**
+ * The bubble holds one short remark, not a paragraph: anything longer is cut at
+ * the last whole word inside 60 characters. It keeps every line the same shape
+ * whether it came from the written table or from the text service.
+ */
+const BUBBLE_LIMIT = 60
+
+function shorten(text) {
+  if (!text || text.length <= BUBBLE_LIMIT) return text
+  const cut = text.slice(0, BUBBLE_LIMIT)
+  const space = cut.lastIndexOf(' ')
+  return `${(space > 20 ? cut.slice(0, space) : cut).replace(/[,;:.\s]+$/, '')}…`
+}
+
+/** How long a reaction holds, and how long a tap is ignored for after one. */
+const REACTION_HOLD = 2600
+const TAP_COOLDOWN = 420
+
+function TalkingMascot({
+  state,
+  lines,
+  offline,
+  size,
+  className,
+  label,
+  role,
+  autoSpeak = false,
+  // `inline` swaps the portalled, fixed bubble for one that sits in the flow
+  // beside the figure. The dashboard greeting uses it so the mascot and what it
+  // says read as one element and the hero can give them the room they need.
+  inline = false,
+}) {
   const [turn, setTurn] = useState(-1) // -1 = nothing said yet
   const [pop, setPop] = useState(false)
   const timers = useRef([])
@@ -957,7 +1203,21 @@ function TalkingMascot({ state, lines, offline, size, className, label }) {
   // network and reads identically when there is none.
   const [generated, setGenerated] = useState(null)
 
-  const say = () => {
+  // How many times it has been tapped in this run, and the reaction that is
+  // playing because of it. The count only ever goes up while somebody keeps
+  // tapping — it resets once a reaction has been allowed to finish.
+  const [reaction, setReaction] = useState(null)
+  const taps = useRef(0)
+  const lastTap = useRef(0)
+
+  const say = (fromTap = false) => {
+    // A tap that lands in the middle of the previous one's animation is ignored
+    // rather than cutting it short, so hammering the figure cannot leave it
+    // half-way through a pose.
+    const now = performance.now()
+    if (fromTap && now - lastTap.current < TAP_COOLDOWN) return
+    lastTap.current = now
+
     timers.current.forEach(clearTimeout)
     timers.current = []
     setGenerated(null)
@@ -967,9 +1227,31 @@ function TalkingMascot({ state, lines, offline, size, className, label }) {
     timers.current.push(setTimeout(() => setPop(false), 500))
     timers.current.push(setTimeout(() => setTurn(-1), 6000)) // the bubble lets itself out
 
+    // The reaction for this tap. Repeated taps walk down the table and stop on
+    // the last (annoyed) one rather than looping back round to cheerful.
+    let reacting = null
+    if (fromTap) {
+      taps.current += 1
+      reacting = TAP_REACTIONS[Math.min(taps.current - 1, TAP_REACTIONS.length - 1)]
+      setReaction(reacting)
+      timers.current.push(
+        setTimeout(() => {
+          setReaction(null)
+          taps.current = 0 // it has calmed down; the next tap starts over friendly
+        }, REACTION_HOLD),
+      )
+    } else {
+      setReaction(null)
+      taps.current = 0
+    }
+
+    // A reaction with its own words says them; everything else falls through to
+    // the page's written line and the text service, exactly as before.
+    if (reacting?.line) return
+
     const written = lines[next % lines.length]
     if (!written || offline) return
-    assistantLine(written, { page: label, offline }).then((text) => {
+    assistantLine(written, { page: label, role, offline }).then((text) => {
       // Only if this is still the line on screen: a second tap has its own.
       if (text !== written) setGenerated({ for: written, text })
     })
@@ -980,6 +1262,21 @@ function TalkingMascot({ state, lines, offline, size, className, label }) {
     setDismissed(false)
   }, [offline])
 
+  // The dashboard's greeting speaks on its own. It waits a beat so the hero is
+  // painted before the bubble lands, says the first role-appropriate line (the
+  // one Cohere rewrites), and never repeats while this instance is mounted.
+  // Offline is skipped — the offline notice already speaks for itself.
+  const autoSpoke = useRef(false)
+  useEffect(() => {
+    if (!autoSpeak || autoSpoke.current || offline) return
+    const timer = setTimeout(() => {
+      if (autoSpoke.current) return
+      autoSpoke.current = true
+      say()
+    }, 900)
+    return () => clearTimeout(timer)
+  }, [autoSpeak, offline, say])
+
   const written = turn >= 0 ? lines[turn % lines.length] : null
   // The generated wording replaces the written one only while that same line is
   // the one being said; anything else falls back to what is in the source.
@@ -987,12 +1284,16 @@ function TalkingMascot({ state, lines, offline, size, className, label }) {
   // The connection outranks a tapped line: a stored copy is the more important
   // thing to know, and it is also the reason the rest of the screen may be stale.
   // The offline notice is never generated — it has to be right with no network.
-  const line = offline && !dismissed ? OFFLINE_LINE : spoken
+  const line =
+    offline && !dismissed ? OFFLINE_LINE : turn >= 0 && reaction?.line ? reaction.line : spoken
 
   // A reporting face keeps its own expression while it talks — a cheerful wave
-  // over an overdue tool would misreport the situation.
+  // over an overdue tool would misreport the situation. A tap reaction is the
+  // one thing allowed over that, and only while it is playing.
   const calm = state === 'happy' || state === 'idle' || state === 'inspecting'
-  const shown = offline ? 'offline' : turn >= 0 && calm ? 'happy' : state
+  const shown = offline
+    ? 'offline'
+    : (reaction?.state ?? (turn >= 0 && calm ? 'happy' : state))
 
   return (
     // `items-end` is what keeps the figure standing on the bottom of whatever box
@@ -1002,22 +1303,60 @@ function TalkingMascot({ state, lines, offline, size, className, label }) {
     // needs (`h-full w-auto`) — so a caller sizes the mascot per breakpoint
     // without the figure ever stretching or being clipped.
     <div
-      className={cx('flex shrink-0 items-end justify-end leading-none', className)}
+      className={cx(
+        'flex items-end justify-end leading-none',
+        // Where the bubble lands follows the room there is for it: stacked above
+        // the figure while the card is narrow, alongside it once there is width
+        // to spare. Nothing is pinned to a fixed spot.
+        // The bubble stacks above the figure and stays aligned to it, so it can
+        // never reach across the card into the heading, the subtitle or the
+        // buttons — it only ever occupies the space over the mascot itself.
+        // No gap: the bubble is pulled down onto the figure's headroom below, so
+        // it sits just over the helmet like a thought rather than floating above
+        // the whole figure.
+        inline ? 'min-w-0 flex-col items-end' : 'shrink-0',
+        className,
+      )}
       data-mascot-state={shown}
     >
+      {inline && line && (
+        <InlineBubble
+          // Pulled down into the empty band above the helmet — the figure is
+          // drawn with headroom at the top of its box — and offset from the
+          // right so the caret lands over the head rather than the shoulder.
+          className="-mb-4 mr-4 sm:-mb-5 sm:mr-6"
+          text={line}
+          onDismiss={() => {
+            if (offline && !dismissed) setDismissed(true)
+            setTurn(-1)
+          }}
+        />
+      )}
       <button
         ref={anchor}
         type="button"
-        onClick={say}
+        onClick={() => say(true)}
         aria-label={label}
-        className="block h-full rounded-full border-0 bg-transparent p-0 outline-offset-4
-                   transition-transform active:scale-95 motion-reduce:transition-none"
+        className={cx(
+          'block shrink-0 rounded-full border-0 bg-transparent p-0 outline-offset-4',
+          inline && 'self-end md:order-1',
+          'transition-transform active:scale-95 motion-reduce:transition-none',
+          // Inline, the figure is sized by `size` alone so it keeps its full
+          // height whether the bubble sits above it or beside it.
+          !inline && 'h-full',
+        )}
       >
-        <span className={cx('block h-full', pop && 'animate-mascot-pop motion-reduce:animate-none')}>
-          <Mascot state={shown} size={size} className="h-full w-auto" />
+        <span
+          className={cx(
+            'block',
+            !inline && 'h-full',
+            pop && 'animate-mascot-pop motion-reduce:animate-none',
+          )}
+        >
+          <Mascot state={shown} size={size} className={inline ? '' : 'h-full w-auto'} />
         </span>
       </button>
-      {line && (
+      {!inline && line && (
         <SpeechBubble
           anchor={anchor}
           text={line}
@@ -1038,9 +1377,28 @@ function TalkingMascot({ state, lines, offline, size, className, label }) {
  * whichever dashboard figure needs attention first — overdue tools, a lost
  * connection, a page still loading — rather than a fixed pose.
  */
-export function MascotGreeter({ signals, className, size = 132 }) {
-  const state = useMemo(() => deriveMascotState(signals), [signals])
-  const lines = useMemo(() => mascotContextFor('/dashboard').lines, [])
+export function MascotGreeter({
+  signals,
+  role,
+  autoSpeak = false,
+  className,
+  size = 132,
+  inline = true,
+  // The one line the greeting opens with, said while the figure points at the
+  // button it is about. Optional — without it the greeting behaves as before.
+  intro,
+}) {
+  const derived = useMemo(() => deriveMascotState(signals), [signals])
+  // What it says follows what it is reporting, with the role's own lines behind
+  // it for a second tap. An intro leads, so the first thing the assistant does
+  // is explain the card's one control.
+  const lines = useMemo(() => {
+    const spoken = dashboardLinesForState(role, derived, signals)
+    return intro ? [intro, ...spoken] : spoken
+  }, [role, derived, signals, intro])
+  // Pointing while the intro is the line being said — the pose that makes the
+  // explanation read as being about the button beside it.
+  const state = intro && derived === 'happy' ? 'inspecting' : derived
 
   return (
     <TalkingMascot
@@ -1049,8 +1407,13 @@ export function MascotGreeter({ signals, className, size = 132 }) {
       // `online` defaults to true here exactly as it does in `deriveMascotState`,
       // so an omitted signal never reads as "offline".
       offline={signals?.online === false}
+      // A screen still loading has nothing to report yet, so the greeting waits
+      // until the data lands.
+      autoSpeak={autoSpeak && signals?.loading !== true}
+      role={role}
       size={size}
       className={className}
+      inline={inline}
       label="What can I help with?"
     />
   )
@@ -1082,6 +1445,46 @@ export function PageMascot({ pathname, online = true, className, size = 40 }) {
 }
 
 /**
+ * The reply as part of the greeting itself.
+ *
+ * It sits in the flow immediately beside the figure — no portal, no fixed
+ * position — so the two read as one element and can never be laid over the
+ * greeting text: the hero's own flexbox keeps them apart. The width is a range
+ * rather than a fixed number, so a long line wraps inside the bubble and the
+ * card grows a little instead of the text spilling out of it.
+ */
+function InlineBubble({ text, onDismiss, className }) {
+  return (
+    <div
+      role="status"
+      onClick={onDismiss}
+      className={cx(
+        'animate-slide-up relative min-w-0 max-w-[13rem] cursor-pointer select-none sm:max-w-[16rem]',
+        className,
+      )}
+    >
+      <div
+        // Two lines and no more, whatever the role or how long the line runs:
+        // the bubble keeps the same footprint on every dashboard and can never
+        // grow into the greeting above it. The full wording stays in the title
+        // attribute for anything cut off.
+        className="line-clamp-2 max-h-[calc(2*1.35em+1rem)] rounded-xl border px-3 py-2 text-left text-[12px] font-semibold leading-[1.35] shadow-lift"
+        style={{ background: 'rgb(var(--surface))' }}
+        title={text}
+      >
+        {shorten(text)}
+      </div>
+      {/* The caret points down at the head standing under the bubble. */}
+      <div
+        aria-hidden
+        className="absolute -bottom-1 right-6 h-2.5 w-2.5 rotate-45 border-b border-r"
+        style={{ background: 'rgb(var(--surface))' }}
+      />
+    </div>
+  )
+}
+
+/**
  * The reply, rendered into `document.body` through a portal and positioned
  * `fixed` against the mascot's own box.
  *
@@ -1098,6 +1501,10 @@ function SpeechBubble({ anchor, text, onDismiss }) {
   // offline notice, and any other menu the shell opens. The bubble steps out of
   // its way rather than being painted over it or under it.
   const [menu, setMenu] = useState(null)
+  // A modal panel — the shell's navigation drawer, and any dialog — owns the
+  // screen while it is open. The bubble cannot step aside from something that
+  // covers everything, so it simply stays out of the way until it closes.
+  const [blocked, setBlocked] = useState(false)
 
   useEffect(() => {
     // Rectangles are stored as plain numbers and only when they have actually
@@ -1126,6 +1533,8 @@ function SpeechBubble({ anchor, text, onDismiss }) {
       // read from whatever menu is in the document right now.
       const openMenu = rect(document.querySelector('[role="menu"]'))
       setMenu((prev) => (same(prev, openMenu) ? prev : openMenu))
+      const modal = !!document.querySelector('[role="dialog"][aria-modal="true"]')
+      setBlocked((prev) => (prev === modal ? prev : modal))
     }
     place()
     // Following the anchor keeps the caret on the mascot while the dashboard
@@ -1144,18 +1553,30 @@ function SpeechBubble({ anchor, text, onDismiss }) {
     }
   }, [anchor])
 
-  if (!box) return null
+  if (!box || blocked) return null
 
   const GAP = 10
+  // The shell's sticky top bar owns the first 56px of the window, plus whatever
+  // the status bar inset adds. A bubble placed above a mascot that starts high
+  // on the page would sit over the account pill and the page title, so that
+  // band is treated as unavailable and the bubble goes under the figure's chin
+  // instead — which is where it reads as speech anyway.
+  const TOP_BAR = 72
+  // Two lines at this width, plus the caret.
+  const BUBBLE = 64
   // Deliberately narrow, and narrower again on a small phone: the bubble is one
   // short line of help over a page of real content, so it takes the smallest
   // footprint that stays readable.
   const width = Math.min(window.innerWidth < 380 ? 196 : 224, window.innerWidth - 24)
   // Right-aligned to the mascot, then clamped so it can never leave the screen.
   let right = Math.max(12, Math.min(window.innerWidth - box.right, window.innerWidth - width - 12))
-  // Above the mascot by default; below it if there is no room up there.
-  let below = box.top < 96
-  let top = below ? box.bottom + GAP : undefined
+  // Above the head when there is genuinely room between it and the top bar;
+  // just under the head otherwise.
+  let below = box.top - GAP - BUBBLE < TOP_BAR
+  // Under the *head* rather than under the whole figure: the mascot is drawn as
+  // a tall standing character, and hanging the bubble off its feet put the line
+  // halfway down the page, away from the face saying it.
+  let top = below ? Math.max(TOP_BAR + 8, box.top + Math.min(56, (box.bottom - box.top) * 0.42)) : undefined
   let bottom = below ? undefined : window.innerHeight - box.top + GAP
   let caretHidden = false
 
@@ -1188,10 +1609,12 @@ function SpeechBubble({ anchor, text, onDismiss }) {
       className="animate-slide-up cursor-pointer select-none"
     >
       <div
-        className="rounded-xl border px-3 py-2 text-left text-[12px] font-semibold leading-[1.35] shadow-lift"
+        // Two lines here too, so every bubble in the app has the same footprint.
+        className="line-clamp-2 rounded-xl border px-3 py-2 text-left text-[12px] font-semibold leading-[1.35] shadow-lift"
         style={{ background: 'rgb(var(--surface))' }}
+        title={text}
       >
-        {text}
+        {shorten(text)}
       </div>
       {/* The caret points back at the mascot — dropped when the bubble has been
           moved clear of an open menu and no longer sits over it. */}

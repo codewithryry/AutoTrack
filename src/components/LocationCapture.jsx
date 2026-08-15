@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Check,
@@ -47,8 +47,23 @@ import { formatDateTime } from '../utils/dates'
  * @param {string} props.title
  * @param {string} props.description      what this particular point will mean
  * @param {boolean} [props.disabled]
+ * @param {boolean} [props.auto]  take the one reading on mount instead of
+ *   waiting to be asked. Opt-in and once — the borrow flow uses it so a student
+ *   borrowing a tool does not have to press for the collection point.
  */
-export function LocationCaptureField({ value, onChange, title, description, disabled = false }) {
+export function LocationCaptureField({
+  value,
+  onChange,
+  title,
+  description,
+  disabled = false,
+  auto = false,
+  // A one-line reading of the same control, for a form where this is a small
+  // optional extra rather than the subject of the screen: the standing
+  // explanation is dropped and only what actually happened is said. Nothing
+  // about the capture, the storage or the failure handling changes.
+  compact = false,
+}) {
   const [status, setStatus] = useState('idle') // idle | capturing | failed
   const [failure, setFailure] = useState(null)
   const [permission, setPermission] = useState('unknown')
@@ -78,12 +93,24 @@ export function LocationCaptureField({ value, onChange, title, description, disa
     }
   }, [onChange])
 
+  // The automatic reading: the same single `capture()` the button runs, fired
+  // once when the field appears. Latched on a ref rather than on state so a
+  // refusal — which lands as `null`, the same as never having asked — is not
+  // retried on every render, and so React's double-invoked effects in
+  // development still only ask the device once.
+  const asked = useRef(false)
+  useEffect(() => {
+    if (!auto || disabled || asked.current || isLocation(value)) return
+    asked.current = true
+    void capture()
+  }, [auto, disabled, value, capture])
+
   const unsupported = permission === 'unsupported'
   const blocked = permission === 'denied' || failure?.reason === GEO_ERROR.DENIED
 
   return (
     <div
-      className="rounded-xl border p-3.5"
+      className={cx('rounded-xl border', compact ? 'p-3' : 'p-3.5')}
       style={{ background: 'rgb(var(--surface-2))' }}
     >
       <div className="flex items-start gap-2.5">
@@ -107,7 +134,9 @@ export function LocationCaptureField({ value, onChange, title, description, disa
         </span>
         <div className="min-w-0 flex-1">
           <p className="text-sm font-bold leading-tight">{title}</p>
-          <p className="subtle mt-0.5 text-xs leading-relaxed">{description}</p>
+          {description && (
+            <p className="subtle mt-0.5 text-xs leading-relaxed">{description}</p>
+          )}
         </div>
       </div>
 
@@ -118,7 +147,7 @@ export function LocationCaptureField({ value, onChange, title, description, disa
           <p className="subtle mt-1 text-[11px]">
             {formatDateTime(value.capturedAt)} · {formatAccuracy(value)}
           </p>
-          {isApproximate(value) && (
+          {isApproximate(value) && !compact && (
             <p className="mt-1.5 flex items-start gap-1.5 text-[11px] font-medium leading-snug text-orange-600 dark:text-orange-400">
               <AlertTriangle className="mt-px h-3 w-3 shrink-0" />
               This fix is approximate. It will be stored with its accuracy so nobody reads it as an
@@ -176,6 +205,7 @@ export function LocationCaptureField({ value, onChange, title, description, disa
                   ? 'Use my current location'
                   : 'Allow location and record it'}
           </button>
+          {(!compact || unsupported || blocked) && (
           <p className="subtle mt-2 text-[11px] leading-relaxed">
             {unsupported
               ? 'This device cannot report a location. The record will show that none was captured.'
@@ -183,6 +213,7 @@ export function LocationCaptureField({ value, onChange, title, description, disa
                 ? 'Location is blocked for this site. You can continue — the record will show that no location was captured.'
                 : 'Optional. One reading is taken when you press this, and nothing is tracked before or after it. Leave it and the record will say no location was captured.'}
           </p>
+          )}
         </div>
       )}
     </div>

@@ -19,7 +19,7 @@ export const APP_TITLE =
  * Shown on the loading screen. Kept in step with `package.json`; `npm run
  * verify` fails if the two drift apart.
  */
-export const APP_VERSION = '0.1.2'
+export const APP_VERSION = '0.2.1'
 export const APP_TAGLINE = 'Scan. Borrow. Track. Return.'
 
 /* ------------------------------------------------------------------ *
@@ -135,6 +135,70 @@ export const USER_STATUS = {
 }
 export const USER_STATUSES = Object.values(USER_STATUS)
 
+/**
+ * A request is what happens before a loan: a student asks for a tool for a
+ * window of time, and staff decide. It never issues anything itself — an
+ * approval creates a reservation, and the tool still goes out through the
+ * borrow desk or the scanner exactly as it always has.
+ */
+export const REQUEST_STATUS = {
+  PENDING: 'Pending',
+  APPROVED: 'Approved',
+  REJECTED: 'Rejected',
+  CANCELLED: 'Cancelled',
+  EXPIRED: 'Expired',
+}
+export const REQUEST_STATUSES = Object.values(REQUEST_STATUS)
+
+/** The statuses a request can still be acted on from. */
+export const OPEN_REQUEST_STATUSES = [REQUEST_STATUS.PENDING, REQUEST_STATUS.APPROVED]
+
+/** The hold an approved request creates, until it becomes a loan or lapses. */
+export const RESERVATION_STATUS = {
+  RESERVED: 'Reserved',
+  FULFILLED: 'Fulfilled',
+  CANCELLED: 'Cancelled',
+  EXPIRED: 'Expired',
+}
+export const RESERVATION_STATUSES = Object.values(RESERVATION_STATUS)
+
+/** A 1-to-1 thread, or the thread attached to one request. */
+export const CONVERSATION_KIND = {
+  DIRECT: 'direct',
+  REQUEST: 'request',
+  // The two standing rooms: one everybody is in, one the crib keeps to itself.
+  // Nobody joins or leaves them — membership is the role, which is why they
+  // have no participant rows (see migration 0016).
+  GENERAL: 'general',
+  STAFF: 'staff',
+}
+
+/** The rooms that exist for everyone, by the fixed ids `0016` seeds. */
+export const BROADCAST_CONVERSATIONS = {
+  [CONVERSATION_KIND.GENERAL]: 'CNV-GENERAL',
+  [CONVERSATION_KIND.STAFF]: 'CNV-STAFF',
+}
+
+/**
+ * How recently an account must have been seen to read as online, for the
+ * accounts Realtime Presence is not currently reporting.
+ */
+export const PRESENCE_WINDOW_MS = 2 * 60 * 1000
+
+/**
+ * How long a student's or instructor's session may stand idle.
+ *
+ * These accounts are used on shared laboratory machines and on phones left on a
+ * bench, so a session nobody is using is closed rather than left open. Idle
+ * means no input from the person: a background sync, a poll or a record
+ * arriving from another machine is not activity and does not hold it open.
+ *
+ * An administrator's session is deliberately not covered — that workflow is
+ * unchanged.
+ */
+export const SESSION_IDLE_LIMIT_MINUTES = 30
+export const SESSION_IDLE_LIMIT_MS = SESSION_IDLE_LIMIT_MINUTES * 60 * 1000
+
 export const COURSES = [
   'BS Automotive Engineering Technology',
   'Diploma in Automotive Technology',
@@ -172,6 +236,8 @@ export const NOTIF_TYPE = {
   DAMAGED: 'damaged',
   MAINTENANCE: 'maintenance',
   SYSTEM: 'system',
+  REQUEST: 'request',
+  MESSAGE: 'message',
 }
 
 /* ------------------------------------------------------------------ *
@@ -265,6 +331,26 @@ export const ROLE_STYLES = {
     'bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-500/10 dark:text-violet-300 dark:border-violet-500/30',
   [ROLE.STUDENT]:
     'bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-500/10 dark:text-sky-300 dark:border-sky-500/30',
+}
+
+/**
+ * A request and its hold read with the same colours the rest of the system
+ * already uses: waiting is orange, settled is green, refused is red, and a
+ * withdrawn or lapsed record is grey.
+ */
+export const REQUEST_STATUS_STYLES = {
+  [REQUEST_STATUS.PENDING]: STATUS_STYLES[TOOL_STATUS.MAINTENANCE],
+  [REQUEST_STATUS.APPROVED]: STATUS_STYLES[TOOL_STATUS.AVAILABLE],
+  [REQUEST_STATUS.REJECTED]: STATUS_STYLES[TOOL_STATUS.OVERDUE],
+  [REQUEST_STATUS.CANCELLED]: STATUS_STYLES[TOOL_STATUS.RETIRED],
+  [REQUEST_STATUS.EXPIRED]: STATUS_STYLES[TOOL_STATUS.LOST],
+}
+
+export const RESERVATION_STATUS_STYLES = {
+  [RESERVATION_STATUS.RESERVED]: STATUS_STYLES[TOOL_STATUS.BORROWED],
+  [RESERVATION_STATUS.FULFILLED]: STATUS_STYLES[TOOL_STATUS.AVAILABLE],
+  [RESERVATION_STATUS.CANCELLED]: STATUS_STYLES[TOOL_STATUS.RETIRED],
+  [RESERVATION_STATUS.EXPIRED]: STATUS_STYLES[TOOL_STATUS.LOST],
 }
 
 export const USER_STATUS_STYLES = {

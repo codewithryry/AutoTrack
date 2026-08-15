@@ -32,7 +32,7 @@ const cache = new Map()
  * Never rejects: every failure — offline, no endpoint, no key, a slow or broken
  * service, an unusable reply — resolves to the line that was passed in.
  */
-export async function assistantLine(line, { page, offline = false } = {}) {
+export async function assistantLine(line, { page, role, offline = false } = {}) {
   if (!line) return line
   if (offline || unavailable) return line
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return line
@@ -46,7 +46,7 @@ export async function assistantLine(line, { page, offline = false } = {}) {
     const response = await fetch(ENDPOINT, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ line, page }),
+      body: JSON.stringify({ line, page, role }),
       signal: controller.signal,
     })
     if (response.status === 503 || response.status === 404) {

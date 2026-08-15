@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, Clock, ShieldCheck, XCircle } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Camera, CheckCircle2, Clock, ShieldCheck, Trash2, XCircle } from 'lucide-react'
 import { SectionCard, SelectField, Spinner, TextField } from '../components/ui'
 import { DeleteAccountControl } from '../components/AccountSettings'
 import Walkthrough, { usePageTour } from '../components/Walkthrough'
+import Avatar from '../components/Avatar'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import * as userService from '../services/users'
+import * as storage from '../services/storage'
 import { ValidationError } from '../services/tools'
 import { ROLE, YEAR_LEVELS } from '../utils/constants'
 import { cx } from '../utils/helpers'
@@ -60,7 +62,7 @@ const FIELD_LABELS = {
  */
 const INSTRUCTOR_CAPABILITIES = [
   'View the inventory, edit tool records and change a tool’s status.',
-  'Scan a tool label to see its status, its borrower and the loan behind it.',
+  'Scan a tool label to see its status, its borrower and the borrowing behind it.',
   'Issue tools to yourself or to any student, and receive anyone’s return.',
   'See every transaction in the laboratory, extend a due date, or report a tool lost.',
   'Schedule, update and complete maintenance on laboratory equipment.',
@@ -152,6 +154,45 @@ export default function ProfilePage() {
   // queue, so the student-only fields and the review card are dropped for both.
   const isStaffAccount = isInstructor || isAdmin
   const reviewStatus = user?.profileReviewStatus ?? userService.PROFILE_REVIEW.APPROVED
+
+  // The profile picture. Its own small piece of state: it is written straight
+  // to the account rather than submitted with the form below it.
+  const fileRef = useRef(null)
+  const [photoBusy, setPhotoBusy] = useState(false)
+  const [photoError, setPhotoError] = useState(null)
+
+  // What to draw: the approved picture, or the one waiting on approval — its
+  // owner sees what they submitted rather than a stale tile.
+  const photoShown = userService.effectiveAvatar(user)
+  const photoPending =
+    !!user?.pendingProfile && 'avatarUrl' in (user.pendingProfile ?? {})
+
+  const savePhoto = async (file) => {
+    setPhotoBusy(true)
+    setPhotoError(null)
+    const previous = user?.avatarUrl ?? null
+    try {
+      const url = file ? await storage.uploadAvatar(file, user.id) : null
+      const { review } = await userService.setAvatar(user.id, url, user)
+      // The old object is dropped only once nothing points at it any more — and
+      // never while a submitted picture is still waiting to be approved.
+      if (!review && previous && previous !== url) await storage.removeAvatar(previous)
+      await refreshUser?.()
+      toast.success(
+        review
+          ? 'Your picture was sent to an administrator for approval.'
+          : file
+            ? 'Your profile picture was updated.'
+            : 'Your profile picture was removed.',
+      )
+    } catch (err) {
+      const message = err?.errors?.avatarUrl ?? err?.message ?? 'The picture could not be saved.'
+      setPhotoError(message)
+      toast.error(message)
+    } finally {
+      setPhotoBusy(false)
+    }
+  }
   const pending = user?.pendingProfile ?? null
 
   // The form starts from the approved profile, patched with anything already
@@ -207,23 +248,89 @@ export default function ProfilePage() {
 
   return (
     <>
-      {/* A submission in review is the first thing on the page: it explains why
-          the form below is showing what it is showing. Nothing else about the
-          review flow changes. */}
-      {isPending && (
-        <div className={`mb-4 rounded-xl border px-4 py-3.5 ${badge.className}`}>
+      {/* The approval status is the first thing on the page, whatever it says:
+          it explains why the form below is showing what it is showing. The
+          states themselves are unchanged — only where they are shown. */}
+      {!isStaffAccount && (
+        <div
+          data-tour="account-approval"
+          className={`mb-4 rounded-xl border px-4 py-3.5 ${badge.className}`}
+        >
           <p className="text-sm font-bold">{badge.label}</p>
           <p className="mt-1 text-xs leading-relaxed">
-            An administrator is reviewing your changes. Your account works normally in the
-            meantime, and your current details stay in place until they are approved.
+            {isPending
+              ? 'An administrator is reviewing your changes. Your account works normally in the meantime, and your current details stay in place until they are approved.'
+              : reviewStatus === userService.PROFILE_REVIEW.REJECTED
+                ? user?.profileReviewNote ||
+                  'Your last changes were not approved. Your previous details are unchanged.'
+                : 'Your profile is up to date. Edit it below to submit a change.'}
           </p>
-          {user?.profileSubmittedAt && (
-            <p className="mt-2 text-[11px] font-semibold opacity-80">
-              Submitted {formatDate(user.profileSubmittedAt)}
-            </p>
-          )}
+          {isPending
+            ? user?.profileSubmittedAt && (
+                <p className="mt-2 text-[11px] font-semibold opacity-80">
+                  Submitted {formatDate(user.profileSubmittedAt)}
+                </p>
+              )
+            : user?.profileReviewedAt && (
+                <p className="mt-2 text-[11px] font-semibold opacity-80">
+                  Reviewed {formatDate(user.profileReviewedAt)}
+                </p>
+              )}
         </div>
       )}
+
+      {/* The account's own picture. It is not part of the approval queue — a
+          photograph is not a record an administrator signs off — so it saves
+          straight away, and an account without one keeps the initials tile. */}
+      <SectionCard className="mb-4" title="Profile picture">
+        <div className="flex items-center gap-4">
+          <Avatar
+            name={user?.fullName}
+            url={photoShown}
+            className="h-16 w-16 text-lg ring-1 ring-black/5 dark:ring-white/10"
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                className="btn btn-outline btn-sm"
+                disabled={photoBusy}
+              >
+                {photoBusy ? <Spinner /> : <Camera className="h-4 w-4" />}
+                {photoShown ? 'Change photo' : 'Add a photo'}
+              </button>
+              {photoShown && (
+                <button
+                  type="button"
+                  onClick={() => savePhoto(null)}
+                  className="btn btn-ghost btn-sm text-red-600 dark:text-red-400"
+                  disabled={photoBusy}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Remove
+                </button>
+              )}
+            </div>
+            {(photoError || photoPending) && (
+              <p className={cx('mt-1.5 text-xs', photoError ? 'text-red-500' : 'subtle')}>
+                {photoError ?? 'Waiting for an administrator to approve this picture.'}
+              </p>
+            )}
+          </div>
+          <input
+            ref={fileRef}
+            type="file"
+            accept={storage.IMAGE_ACCEPT}
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0]
+              event.target.value = ''
+              if (file) savePhoto(file)
+            }}
+          />
+        </div>
+      </SectionCard>
 
       <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
         {/* The form is one submission split across two grouped cards, so the
@@ -325,29 +432,6 @@ export default function ProfilePage() {
         </form>
 
         <div className="space-y-4">
-          {/* While a change is in review the banner at the top of the page says
-              this already, so the card only carries the settled states. It is
-              dropped for an instructor: their fields are read-only, so "Edit it
-              above to submit a change" describes something they cannot do. */}
-          {!isPending && !isStaffAccount && (
-            <SectionCard title="Approval status" data-tour="account-approval">
-              <div className={`rounded-lg border px-3.5 py-3 ${badge.className}`}>
-                <p className="text-sm font-bold">{badge.label}</p>
-                <p className="mt-1 text-xs leading-relaxed">
-                  {reviewStatus === userService.PROFILE_REVIEW.REJECTED
-                    ? user?.profileReviewNote ||
-                      'Your last changes were not approved. Your previous details are unchanged.'
-                    : 'Your profile is up to date. Edit it above to submit a change.'}
-                </p>
-                {user?.profileReviewedAt && (
-                  <p className="mt-1.5 text-[11px] opacity-80">
-                    Reviewed {formatDate(user.profileReviewedAt)}
-                  </p>
-                )}
-              </div>
-            </SectionCard>
-          )}
-
           {pending && (
             <SectionCard title="Waiting for approval" description="What you asked to change">
               <dl className="space-y-2.5">

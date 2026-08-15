@@ -15,6 +15,8 @@ import {
 } from 'lucide-react'
 import { AppearanceToggleButton } from '../components/AccountSettings'
 import { BrandLockup } from '../components/Brand'
+import ErrorBoundary from '../components/ErrorBoundary'
+import Avatar from '../components/Avatar'
 import {
   ACCOUNT_NAV,
   accountNavLabel,
@@ -25,13 +27,21 @@ import {
   instructorRailItems,
   mobileNavForRole,
   NAV_ITEMS,
+  studentRailItems,
   visibleNavItems,
 } from '../components/navigation'
 import { useApp } from '../context/AppContext'
 import { TOAST_VARIANTS, useToastFeed } from '../context/ToastContext'
-import { useNotifications } from '../hooks'
-import { cx, initials } from '../utils/helpers'
-import { APP_TAGLINE, ROLE } from '../utils/constants'
+import {
+  useInbox,
+  useNotifications,
+  usePresence,
+  useRequests,
+  useTransactions,
+} from '../hooks'
+import { cx } from '../utils/helpers'
+import * as txnService from '../services/transactions'
+import { ACTIVE_TXN_STATUSES, APP_TAGLINE, REQUEST_STATUS, ROLE } from '../utils/constants'
 import { PERM } from '../utils/permissions'
 
 /**
@@ -67,6 +77,22 @@ export function useStandalonePage() {
 export default function AppLayout() {
   const { user, logout, can, online, settings } = useApp()
   const { unread } = useNotifications()
+  // Messages are reached from the bar at every width and for every role: a
+  // conversation is not a place laboratory work happens, so it stays out of the
+  // bottom bar, and this is the one control that carries its unread count.
+  const { unread: unreadMessages } = useInbox()
+  // Requests carry a count too: staff see how many are waiting on a decision,
+  // a student how many of their own are still open. `useRequests` already
+  // returns only what the role may read, so one expression serves both.
+  const { requests } = useRequests()
+  // Open loans, for the half of the Requests queue that is returns waiting to
+  // be confirmed. Scoped by role like every other read.
+  const { transactions } = useTransactions()
+  // Presence is announced for as long as the app is open, not only while the
+  // inbox is on screen — otherwise a signed-in account reads as offline to
+  // everyone until it happens to be looking at its own messages. The channel is
+  // shared, so the inbox's own `usePresence` joins the same one.
+  usePresence()
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -74,14 +100,25 @@ export default function AppLayout() {
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef(null)
 
-  // Students never open the drawer: their bottom bar already carries everything
-  // they may reach, so a hamburger would only duplicate it. Staff keep it, since
-  // the bottom bar omits their maintenance, user, report and settings routes.
   const isStudent = user?.role === ROLE.STUDENT
   // The tool-crib role. Every branch keyed off this leaves the Admin and Student
   // shells on exactly the path they were on before.
   const isInstructor = user?.role === ROLE.INSTRUCTOR
   const isAdmin = user?.role === ROLE.ADMIN
+
+  // The Requests count is a queue of decisions to make, so it is staff only:
+  // a student raises the requests rather than answering them, and a badge on
+  // their own asks would be a number with nothing to do about it.
+  //
+  // Both halves of that queue count: asks still to be decided, and tools a
+  // borrower has handed in and is waiting to have received. Requests is the one
+  // page either is answered on, so its badge is the sum.
+  const requestCount = isStudent
+    ? 0
+    : requests.filter((request) => request.status === REQUEST_STATUS.PENDING).length +
+      transactions.filter(
+        (txn) => ACTIVE_TXN_STATUSES.includes(txn.status) && txnService.returnRequested(txn),
+      ).length
 
   // One navigation definition, filtered by the authenticated user's stored
   // role — the sidebar, the drawer and the bottom bar all read from it.
@@ -90,7 +127,11 @@ export default function AppLayout() {
   // An instructor's rail is the same permitted set, reordered for the crib and
   // with the counter actions lifted into their own block; every other role gets
   // the list untouched.
-  const railItems = isInstructor ? instructorRailItems(navItems) : navItems
+  const railItems = isInstructor
+    ? instructorRailItems(navItems)
+    : isStudent
+      ? studentRailItems(navItems)
+      : navItems
   const quickActions = isInstructor
     ? INSTRUCTOR_QUICK_ACTIONS.filter((a) => !a.permission || can(a.permission))
     : []
@@ -108,6 +149,33 @@ export default function AppLayout() {
         }
       : null
 
+  // On the inbox the raised slot carries "New chat" rather than Scan — the
+  // same compose dialog the list header used to open, reached through
+  // `?new=1`, which is the parameter the page already honours. Null everywhere
+  // else, so Scan is back the moment they leave.
+  const messageSlot =
+    location.pathname === '/messages' && can(PERM.MESSAGE_SEND)
+      ? {
+          to: '/messages?new=1',
+          label: 'New chat',
+          ariaLabel: 'Start a conversation',
+          icon: Plus,
+        }
+      : null
+
+  // On the requests list a student's raised slot carries "New request" rather
+  // than Scan — the same `/requests/new` form the page's own button opens. Null
+  // everywhere else, so Scan is back the moment they leave.
+  const requestSlot =
+    isStudent && location.pathname === '/requests' && can(PERM.REQUEST_CREATE)
+      ? {
+          to: '/requests/new',
+          label: 'New request',
+          ariaLabel: 'Raise a new request',
+          icon: Plus,
+        }
+      : null
+
   // The administrator's drawer is the five places it names, in that order, and
   // only the ones their permissions already allow.
   const adminDrawerItems = ADMIN_DRAWER_NAV.map((to) =>
@@ -118,15 +186,38 @@ export default function AppLayout() {
   // Maintenance it opens that page's own create form — the existing dialogs,
   // reached through the parameters those pages already honour. Everywhere else
   // there is nothing to add, so the button is rendered disabled.
+  // `/tools` and everything under it — the tool page and its history — so the
+  // bar does not change shape as an administrator moves between the inventory
+  // and one tool's record. `/tools?new=1` is the parameter `ToolsPage` already
+  // honours, so this opens the existing dialog rather than a second form.
+  const onToolsRoute =
+    location.pathname === '/tools' || location.pathname.startsWith('/tools/')
+
   const adminAddSlot = !isAdmin
     ? null
-    : location.pathname === '/tools' && can(PERM.TOOL_CREATE)
+    : onToolsRoute && can(PERM.TOOL_CREATE)
       ? { to: '/tools?new=1', label: 'Add tool', ariaLabel: 'Add a tool' }
       : location.pathname === '/users' && can(PERM.USER_CREATE)
         ? { to: '/users?new=1', label: 'Add user', ariaLabel: 'Add a user' }
         : location.pathname === '/maintenance' && can(PERM.MAINTENANCE_MANAGE)
           ? { to: '/maintenance?schedule=1', label: 'Schedule', ariaLabel: 'Schedule maintenance' }
           : null
+
+  // An open conversation takes the whole phone screen: the bar would sit over
+  // the composer, and the thread has its own back control. The desktop is
+  // unaffected — the bar is mobile-only.
+  const onThread = location.pathname.startsWith('/messages/')
+
+  // What each bottom-bar slot counts: alerts, unread messages, and requests
+  // that are still waiting on somebody.
+  const barBadge = (to) =>
+    to === '/notifications'
+      ? unread
+      : to === '/messages'
+        ? unreadMessages
+        : to === '/requests'
+          ? requestCount
+          : 0
 
   const mobileItems = mobileNavForRole(user?.role)
     .map((to) => NAV_ITEMS.find((item) => item.to === to))
@@ -230,7 +321,13 @@ export default function AppLayout() {
               three rows lost in a list of seven. Scan leads it, in the accent,
               because it is the way both of the others usually start. */}
           {quickActions.length > 0 && <RailQuickActions actions={quickActions} />}
-          <SidebarLinks items={railItems} unread={unread} spacious={isStudent} />
+          <SidebarLinks
+            items={railItems}
+            unread={unread}
+            messageUnread={unreadMessages}
+            requestCount={requestCount}
+            spacious={isStudent}
+          />
         </nav>
 
         {/* A student's navigation is the rail on desktop and the bottom bar on a
@@ -264,40 +361,52 @@ export default function AppLayout() {
       )}
 
       {/* ------------------------------ mobile drawer ----------------------------- */}
-      {!bare && !isStudent && drawerOpen && (
+      {/* Administrators only — they alone have more destinations than a bottom
+          bar holds, and they open this from the bar's own Menu slot. A student's
+          and an instructor's bottom bar carries every route they have, so
+          neither has a drawer to open. */}
+      {!bare && drawerOpen && isAdmin && (
         <div className="fixed inset-0 z-50 lg:hidden">
           <div
             className="absolute inset-0 bg-navy-950/70 animate-fade-in"
             onClick={() => setDrawerOpen(false)}
             aria-hidden="true"
           />
-          {isAdmin ? (
-            /* The administrator's menu: a plain white panel carrying the five
-               destinations and nothing else. Alerts are the bell in the top bar
-               and account actions — Sign out included — are the account
-               dropdown beside it, so neither is repeated here. */
+          {/* The administrator's menu: one panel carrying the five destinations
+               and nothing else. Alerts are the bell in the top bar and account
+               actions — Sign out included — are the account dropdown beside it,
+               so neither is repeated here.
+
+               Painted from the surface tokens rather than a hardcoded white:
+               the panel used to stay light while the rest of the app went dark,
+               which is the one place in the shell the theme did not reach. */}
             <aside
-              className="absolute inset-y-0 left-0 flex w-[78vw] max-w-[288px] flex-col
-                         bg-white text-navy-900 shadow-panel animate-slide-in-right"
+              className="safe-top absolute inset-y-0 left-0 flex w-[78vw] max-w-[288px] flex-col
+                         shadow-panel animate-slide-in-right"
+              // The panel runs the full height of the window, so its own header
+              // has to start below the status bar rather than under it. The
+              // surface carries on into the inset; only the content moves down.
+              style={{ paddingLeft: 'var(--sal)', background: 'rgb(var(--surface))' }}
               role="dialog"
               aria-modal="true"
               aria-label="Navigation menu"
             >
-              <div className="flex items-center justify-between border-b border-black/5 px-4 py-4">
-                <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-navy-500">
-                  Menu
-                </p>
+              <div className="flex items-center justify-between border-b px-4 py-4">
+                <p className="subtle text-[11px] font-bold uppercase tracking-[0.16em]">Menu</p>
                 <button
                   type="button"
                   onClick={() => setDrawerOpen(false)}
-                  className="grid h-9 w-9 place-items-center rounded-lg text-navy-500
-                             transition-colors hover:bg-black/5 hover:text-navy-900"
+                  className="grid h-9 w-9 place-items-center rounded-lg subtle transition-colors
+                             hover:bg-black/5 dark:hover:bg-white/5"
                   aria-label="Close menu"
                 >
                   <X className="h-5 w-5" />
                 </button>
               </div>
-              <nav className="safe-bottom min-h-0 flex-1 overflow-y-auto p-3">
+              {/* `pb-[max(…)]`, not `.safe-bottom` + `p-3`: the helper is a
+                  components-layer rule and `p-3` a utility, so the utility won
+                  and the drawer's last row sat under the gesture bar. */}
+              <nav className="min-h-0 flex-1 overflow-y-auto p-3 pb-[max(0.75rem,var(--sab))]">
                 <ul className="space-y-1">
                   {adminDrawerItems.map((item) => {
                     const Icon = item.icon
@@ -310,8 +419,8 @@ export default function AppLayout() {
                               'flex items-center gap-3 rounded-xl px-3 py-3 text-[14px] tracking-tight',
                               'transition-colors duration-150',
                               isActive
-                                ? 'bg-black/[0.05] font-bold text-navy-900'
-                                : 'font-semibold text-navy-600 hover:bg-black/[0.035] hover:text-navy-900',
+                                ? 'bg-black/[0.05] font-bold dark:bg-white/[0.07]'
+                                : 'muted font-semibold hover:bg-black/[0.035] dark:hover:bg-white/5',
                             )
                           }
                         >
@@ -322,7 +431,9 @@ export default function AppLayout() {
                                   strokeWidth={2}
                                   className={cx(
                                     'h-[18px] w-[18px]',
-                                    isActive ? 'text-amberline-600' : 'text-navy-400',
+                                    isActive
+                                      ? 'text-amberline-600 dark:text-amberline-400'
+                                      : 'opacity-60',
                                   )}
                                 />
                               </span>
@@ -336,49 +447,17 @@ export default function AppLayout() {
                 </ul>
               </nav>
             </aside>
-          ) : (
-          <aside
-            className="absolute inset-y-0 left-0 flex w-[82vw] max-w-[300px] flex-col
-                       shadow-panel animate-slide-in-right"
-            style={{ background: 'rgb(var(--rail))' }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Navigation menu"
-          >
-            <div className="hazard-stripe h-1 w-full shrink-0" />
-            <div className="flex items-center justify-between px-4 py-4">
-              <BrandLockup />
-              <button
-                type="button"
-                onClick={() => setDrawerOpen(false)}
-                className="grid h-9 w-9 place-items-center rounded-lg text-navy-300
-                           transition-colors hover:bg-white/10 hover:text-white"
-                aria-label="Close menu"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            <nav className="min-h-0 flex-1 overflow-y-auto px-3 pb-6">
-              <SidebarLinks items={navItems} unread={unread} showDescriptions />
-            </nav>
-            <div className="safe-bottom border-t border-white/5 px-4 py-3">
-              <button
-                type="button"
-                onClick={handleLogout}
-                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm
-                           font-semibold text-red-300 transition-colors hover:bg-red-500/10"
-              >
-                <LogOut className="h-4 w-4" />
-                Sign out
-              </button>
-            </div>
-          </aside>
-          )}
         </div>
       )}
 
       {/* --------------------------------- main ---------------------------------- */}
-      <div className={cx('flex min-w-0 flex-1 flex-col', !bare && 'lg:pl-[248px]')}>
+      {/* The side insets are taken here rather than on the shell, so the fixed
+          desktop rail still reaches the left edge of the window while the top
+          bar and the page keep clear of a notch or a curved edge in landscape.
+          Both are 0px in portrait and on desktop. */}
+      <div
+        className={cx('safe-x flex min-w-0 flex-1 flex-col', !bare && 'lg:pl-[248px]')}
+      >
         {/* The bar carries three things and no more: the way back to navigation
             on a phone, where you are, and who you are. There is no notification
             control here — Notifications is a first-class destination in the rail
@@ -387,7 +466,9 @@ export default function AppLayout() {
             empty, and the page's own hero is what should own the space below. */}
         {!bare && (
         <header
-          className="safe-top sticky top-0 z-20 border-b"
+          // Above the dashboard greeting, so the bar and the account menu it
+          // opens are painted over the mascot rather than under it.
+          className="safe-top sticky top-0 z-40 border-b"
           style={{
             // Solid rather than translucent: with no blur behind it, the page
             // scrolling past would otherwise show through the bar.
@@ -399,23 +480,11 @@ export default function AppLayout() {
               takes, so the title and the avatar are not pressed against the
               screen. The wider breakpoints are unchanged. */}
           <div className="flex h-14 items-center gap-2 px-4 sm:px-5 lg:px-8">
-            {/* The menu is the one navigation control in the bar, and only where
-                the bottom bar does not already carry every route — staff on a
-                phone. Students read the title, everybody gets the avatar. An
-                instructor works from five fixed destinations plus the bell and
-                the account menu, so no secondary menu is opened for them. */}
-            {/* An administrator opens the same drawer from the Menu slot in the
-                bottom bar, so the bar keeps only the bell and the account pill. */}
-            {!isStudent && !isInstructor && !isAdmin && (
-              <button
-                type="button"
-                onClick={() => setDrawerOpen(true)}
-                className="btn btn-ghost btn-icon lg:hidden"
-                aria-label="Open navigation menu"
-              >
-                <Menu className="h-5 w-5" />
-              </button>
-            )}
+            {/* No navigation control lives in the bar for any role: an
+                administrator opens their drawer from the Menu slot in the bottom
+                bar, and an instructor's and a student's bottom bar already
+                carries every route they have. The bar is the title, the bell and
+                the account pill. */}
 
             {/* The page name on its own: no glyph, no figure, no tile — the
                 account pill opposite is the only shape in the row. */}
@@ -443,7 +512,7 @@ export default function AppLayout() {
               <AppearanceToggleButton className={cx(notice && 'hidden')} />
             )}
 
-            {(isInstructor || isAdmin) && (
+            {(isInstructor || isAdmin || isStudent) && (
               <NavLink
                 to="/notifications"
                 className={({ isActive }) =>
@@ -487,13 +556,11 @@ export default function AppLayout() {
                 aria-expanded={menuOpen}
                 aria-label="Account menu"
               >
-                <span
-                  className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-sm
-                             font-extrabold ring-1 ring-black/5 dark:ring-white/10"
-                  style={{ background: 'rgb(var(--rail))', color: 'rgb(var(--accent))' }}
-                >
-                  {initials(user?.fullName)}
-                </span>
+                <Avatar
+                  name={user?.fullName}
+                  url={user?.avatarUrl}
+                  className="h-9 w-9 text-sm ring-1 ring-black/5 dark:ring-white/10"
+                />
                 <span className="hidden min-w-0 text-left sm:block">
                   <span className="block max-w-[140px] truncate text-xs font-bold leading-tight">
                     {user?.fullName}
@@ -515,10 +582,16 @@ export default function AppLayout() {
               {menuOpen && (
                 // Anchored to the trigger's right edge and capped to the
                 // viewport, so it can never hang off the screen on a narrow
-                // phone.
+                // phone. Its z-index sits above the dashboard greeting, so the
+                // menu is painted over the mascot standing behind it rather than
+                // the other way round.
                 <div
                   className={cx(
-                    'card absolute right-0 top-full z-30 mt-2 max-w-[calc(100vw-1.5rem)]',
+                    // The bar is inset 1rem on a phone where the page below is
+                    // inset 0.75rem, so the menu steps out that 4px and its
+                    // right edge lines up with the card underneath it. From
+                    // `sm` the two insets already match.
+                    'card absolute -right-1 top-full z-50 mt-2 max-w-[calc(100vw-1.5rem)] sm:right-0',
                     'overflow-hidden rounded-2xl p-1.5 shadow-panel animate-slide-up',
                     isStudent ? 'w-max min-w-[13rem]' : 'w-64',
                   )}
@@ -663,10 +736,22 @@ export default function AppLayout() {
             'min-w-0 flex-1',
             // No padding of its own: the standalone page centres itself in the
             // full viewport and carries its own margins.
-            bare ? 'flex' : 'px-3 pb-28 pt-4 sm:px-5 lg:px-8 lg:pb-12 lg:pt-6',
+            // `shell-main-pad` is the room reserved under the last card for the
+            // floating bottom bar, and the unchanged 3rem from `lg`, where
+            // there is no bar. It was a flat 7rem — the bar plus its 1rem gap
+            // on a phone with no gesture area; on one with a home indicator the
+            // wrapper sits that much higher and the bar covered the last row.
+            bare ? 'flex' : 'px-3 pt-4 sm:px-5 lg:px-8 lg:pt-6',
+            // The room under the last card for the floating bar — dropped on a
+            // thread, where there is no bar to clear.
+            !bare && !onThread && 'shell-main-pad',
           )}
         >
-          <Outlet />
+          {/* Keyed on the path so navigating away from a failed page clears
+              the error rather than sticking on it. */}
+          <ErrorBoundary key={location.pathname}>
+            <Outlet />
+          </ErrorBoundary>
         </main>
       </div>
 
@@ -683,10 +768,16 @@ export default function AppLayout() {
           has its clearance, and a phone that reports none still gets a full
           1rem — so the bar sits the same distance clear of the edge on every
           device instead of doubling up on the ones with a home indicator. */}
-      {!bare && (
+      {!bare && !onThread && (
       <div
-        className="fixed inset-x-0 z-30 px-3 lg:hidden"
-        style={{ bottom: 'max(env(safe-area-inset-bottom, 0px), 1rem)' }}
+        className="fixed inset-x-0 z-30 lg:hidden"
+        style={{
+          bottom: 'max(var(--sab), 1rem)',
+          // The bar is fixed to the window, so it does not inherit the shell's
+          // side insets — it takes its own, added to the 0.75rem it always had.
+          paddingLeft: 'calc(var(--sal) + 0.75rem)',
+          paddingRight: 'calc(var(--sar) + 0.75rem)',
+        }}
       >
         <nav
           className="mx-auto flex max-w-md items-stretch rounded-[22px] border px-1.5 py-1.5 shadow-panel"
@@ -731,7 +822,7 @@ export default function AppLayout() {
               // that page's own action instead — the same scheduler dialog the
               // page's button opens, reached through `?schedule=1`. Scan is not
               // renamed or removed: leaving /maintenance restores it.
-              const action = scheduleSlot ?? item
+              const action = scheduleSlot ?? messageSlot ?? requestSlot ?? item
               const ActionIcon = action.icon
               return (
                 <NavLink
@@ -762,6 +853,7 @@ export default function AppLayout() {
               <NavLink
                 key={item.to}
                 to={item.to}
+                aria-label={item.label}
                 className={({ isActive }) =>
                   cx(
                     'flex flex-1 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-[10px]',
@@ -786,13 +878,13 @@ export default function AppLayout() {
                           thicker stroke on top made that one glyph read as a
                           different set of icons from its neighbours. */}
                       <Icon className="h-[22px] w-[22px]" strokeWidth={2} />
-                      {item.to === '/notifications' && unread > 0 && (
+                      {barBadge(item.to) > 0 && (
                         <span
                           className="absolute right-1.5 top-0.5 grid h-3.5 min-w-[14px]
                                      place-items-center rounded-full bg-red-500 px-1 text-[9px]
                                      font-bold text-white"
                         >
-                          {unread > 9 ? '9+' : unread}
+                          {barBadge(item.to) > 9 ? '9+' : barBadge(item.to)}
                         </span>
                       )}
                     </span>
@@ -894,11 +986,30 @@ function RailQuickActions({ actions }) {
  *   • one step of type weight between resting and active, and a 150ms colour
  *     transition on both, so hovering the rail feels continuous.
  */
-function SidebarLinks({ items, unread, showDescriptions = false, spacious = false }) {
+function SidebarLinks({
+  items,
+  unread,
+  messageUnread = 0,
+  requestCount = 0,
+  showDescriptions = false,
+  spacious = false,
+}) {
+  // Three rails carry a count: alerts, unread messages and open requests. Same
+  // badge, same rules.
+  const badgeFor = (to) =>
+    to === '/notifications'
+      ? unread
+      : to === '/messages'
+        ? messageUnread
+        : to === '/requests'
+          ? requestCount
+          : 0
+
   return (
     <ul className={spacious ? 'space-y-1.5' : 'space-y-1'}>
       {items.map((item) => {
         const Icon = item.icon
+        const count = badgeFor(item.to)
         return (
           <li key={item.to}>
             <NavLink
@@ -941,9 +1052,9 @@ function SidebarLinks({ items, unread, showDescriptions = false, spacious = fals
                       </span>
                     )}
                   </span>
-                  {item.to === '/notifications' && unread > 0 && (
+                  {count > 0 && (
                     <span className="grid h-5 min-w-[20px] shrink-0 place-items-center rounded-full bg-red-500 px-1.5 text-[10px] font-bold text-white">
-                      {unread > 99 ? '99+' : unread}
+                      {count > 99 ? '99+' : count}
                     </span>
                   )}
                 </>

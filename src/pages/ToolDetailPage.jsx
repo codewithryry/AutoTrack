@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -22,7 +22,6 @@ import {
   DetailItem,
   EmptyState,
   MaintenanceStatusBadge,
-  PageHeader,
   SectionCard,
   Skeleton,
   Spinner,
@@ -34,6 +33,7 @@ import { QRCodePanel } from '../components/QRCodeDisplay'
 import TransactionTable from '../components/TransactionTable'
 import TransactionDetail from '../components/TransactionDetail'
 import ToolForm from '../components/ToolForm'
+import ToolImage from '../components/ToolImage'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import { useTool, useToolMaintenance, useToolTransactions } from '../hooks'
@@ -43,7 +43,8 @@ import { LocationCaptureField, LocationTrail } from '../components/LocationCaptu
 import { canReturnTransaction, isStaff, isStudent, PERM } from '../utils/permissions'
 import { TOOL_STATUS, SERIAL_CRITICAL_CATEGORIES } from '../utils/constants'
 import { cx } from '../utils/helpers'
-import { daysBetween, dueLabel, formatDate } from '../utils/dates'
+import { formatCoords } from '../utils/geo'
+import { daysBetween, dueLabel, formatDate, formatDateTime } from '../utils/dates'
 
 /**
  * First-run walkthrough for one tool's page. A student sees the record and the
@@ -61,8 +62,8 @@ const toolDetailTour = (student) =>
         },
         {
           target: 'detail-action',
-          title: 'Borrow or hand back',
-          text: 'When the tool is free, Borrow tool appears here. While you are holding it, Return tool takes its place.',
+          title: 'Request or hand back',
+          text: 'When the tool is free, Request to borrow appears here — staff approve it and you collect it from Requests. While you are holding it, Return tool takes its place.',
         },
         {
           target: 'detail-location',
@@ -93,6 +94,15 @@ export default function ToolDetailPage() {
   const navigate = useNavigate()
   const { user, can } = useApp()
   const toast = useToast()
+  const [searchParams] = useSearchParams()
+
+  // Where this page was opened from decides where "back" goes. A tool reached
+  // by scanning its label belongs to the scan — sending that person to the
+  // inventory instead would drop them somewhere they have never been. Every
+  // other entry point keeps the inventory, exactly as before.
+  const fromScan = searchParams.get('from') === 'scan'
+  const backTo = fromScan ? '/scan' : '/tools'
+  const backLabel = fromScan ? 'Back to Scan' : 'Back to Inventory'
 
   const { tool, loading } = useTool(id)
   const { transactions } = useToolTransactions(id)
@@ -113,12 +123,16 @@ export default function ToolDetailPage() {
     return (
       <div className="animate-fade-in">
         <Skeleton className="mb-3 h-4 w-32 rounded" />
-        <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0 flex-1 space-y-2">
-            <Skeleton className="h-6 w-2/3 max-w-xs rounded" />
-            <Skeleton className="h-3.5 w-40 rounded" />
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="card min-w-0 flex-1 overflow-hidden">
+            <div className="border-b px-4 py-3">
+              <div className="min-w-0 space-y-2">
+                <Skeleton className="h-6 w-2/3 max-w-xs rounded" />
+                <Skeleton className="h-3.5 w-40 rounded" />
+              </div>
+            </div>
           </div>
-          <Skeleton className="h-9 w-full rounded-lg sm:w-40" />
+          <Skeleton className="h-9 w-full shrink-0 rounded-lg sm:w-40" />
         </div>
         <Skeleton className="mb-4 h-12 rounded-lg" />
         <div className="grid gap-4 lg:grid-cols-3">
@@ -209,45 +223,82 @@ export default function ToolDetailPage() {
   return (
     <>
       <Link
-        to="/tools"
-        className="muted mb-3 inline-flex items-center gap-1.5 text-xs font-semibold hover:underline"
+        to={backTo}
+        className="muted mb-3 inline-flex w-fit items-center gap-1.5 rounded-full border px-3 py-1.5 text-[13px] font-semibold transition-colors hover:bg-black/[0.03] dark:hover:bg-white/5"
       >
         <ArrowLeft className="h-3.5 w-3.5" />
-        Back to inventory
+        {backLabel}
       </Link>
 
-      <PageHeader
-        title={tool.name}
-        description={`${tool.category} · ${tool.brand || 'Unbranded'}`}
-      >
-        {eligibility.ok && can(PERM.BORROW) && (
-          <Link to={`/borrow?tool=${tool.id}`} className="btn btn-primary" data-tour="detail-action">
-            <ArrowRight className="h-4 w-4" />
-            Borrow tool
+      {/* The heading is a card matching the Tool record card below it — same
+          surface, same header strip, same border and radius — so the page reads
+          as one record: the tool named on its card, then the record itself. The
+          name keeps the page-title size rather than the card's small section
+          title, and the action buttons stay outside the card on their own row. */}
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <section className="card min-w-0 flex-1 overflow-hidden">
+          <header className="border-b px-4 py-3" style={{ background: 'rgb(var(--surface-2))' }}>
+            <h1 className="truncate text-xl font-extrabold tracking-tight sm:text-2xl">
+              {tool.name}
+            </h1>
+            <p className="muted mt-1 text-sm">
+              {tool.category} · {tool.brand || 'Unbranded'}
+            </p>
+          </header>
+        </section>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Staff issue from the counter; a student asks for the tool, which
+              is one request raised on the one page that creates them. */}
+          {eligibility.ok && can(PERM.BORROW_FOR_OTHERS) && (
+            <Link to={`/borrow?tool=${tool.id}`} className="btn btn-primary" data-tour="detail-action">
+              <ArrowRight className="h-4 w-4" />
+              Borrow tool
+            </Link>
+          )}
+          {eligibility.ok && !can(PERM.BORROW_FOR_OTHERS) && can(PERM.REQUEST_CREATE) && (
+            <Link
+              to={`/requests/new?tool=${tool.id}`}
+              className="btn btn-primary"
+              data-tour="detail-action"
+            >
+              <ArrowRight className="h-4 w-4" />
+              Request to borrow
+            </Link>
+          )}
+          {/* Once the hand-back has been asked for, the same link stays — it is
+              how the record is opened — but it says what has already happened
+              rather than inviting the ask a second time. */}
+          {activeLoan && can(PERM.RETURN) && (
+            <Link
+              to={`/return?tool=${tool.id}`}
+              className={cx('btn', txnService.returnRequested(activeLoan) ? 'btn-outline' : 'btn-success')}
+              data-tour="detail-action"
+            >
+              <Undo2 className="h-4 w-4" />
+              {txnService.returnRequested(activeLoan) ? 'Return requested' : 'Return tool'}
+            </Link>
+          )}
+          {can(PERM.TOOL_EDIT) && (
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              className="btn btn-outline"
+              data-tour="detail-edit"
+            >
+              <Pencil className="h-4 w-4" />
+              Edit tool
+            </button>
+          )}
+          {/* One page per audience, on the same route: staff open the tool's
+              full laboratory timeline, a student their own borrowings of this
+              tool. It is the only place either list is shown, so nothing is
+              repeated on the record below. */}
+          <Link to={`/tools/${tool.id}/history`} className="btn btn-outline">
+            <History className="h-4 w-4" />
+            {isStaff(user) ? 'View history' : 'Borrow history'}
           </Link>
-        )}
-        {activeLoan && can(PERM.RETURN) && (
-          <Link to={`/return?tool=${tool.id}`} className="btn btn-success" data-tour="detail-action">
-            <Undo2 className="h-4 w-4" />
-            Return tool
-          </Link>
-        )}
-        {can(PERM.TOOL_EDIT) && (
-          <button
-            type="button"
-            onClick={() => setEditing(true)}
-            className="btn btn-outline"
-            data-tour="detail-edit"
-          >
-            <Pencil className="h-4 w-4" />
-            Edit tool
-          </button>
-        )}
-        <Link to={`/tools/${tool.id}/history`} className="btn btn-outline">
-          <History className="h-4 w-4" />
-          View history
-        </Link>
-      </PageHeader>
+        </div>
+      </div>
 
       {/* ------------------------------- alerts ------------------------------- */}
       <div className="mb-4 space-y-2">
@@ -293,32 +344,62 @@ export default function ToolDetailPage() {
           )}
 
           <SectionCard title="Tool record" data-tour="detail-record">
-            <div className="mb-4 flex flex-wrap items-center gap-2">
-              <StatusBadge status={tool.status} />
-              <ConditionBadge condition={tool.condition} />
-              <span
-                className="badge border-transparent"
-                style={{ background: 'rgb(var(--surface-3))', color: 'rgb(var(--text-muted))' }}
-              >
-                {tool.category}
-              </span>
+            {/* One layout at every width: a fixed square thumbnail with the
+                badges beside it, so a phone reads the same way the desktop does
+                instead of giving a picture the whole width and pushing the
+                record down. `min-w-0` on the text side is what lets the badges
+                wrap inside the card rather than widening it. A tool without a
+                picture keeps the icon tile, at the same size. */}
+            <div className="mb-4 flex items-start gap-3">
+              <ToolImage
+                tool={tool}
+                rounded="rounded-xl"
+                className="h-20 w-20 border sm:h-24 sm:w-24"
+                alt={`Picture of ${tool.name}`}
+              />
+              {/* The space beside the thumbnail carries the badges and the
+                  three fields that identify the tool, so the column is used
+                  rather than left blank and the grid below starts shorter. */}
+              <div className="min-w-0 flex-1 space-y-2.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusBadge status={tool.status} />
+                  <ConditionBadge condition={tool.condition} />
+                  <span
+                    className="badge border-transparent"
+                    style={{ background: 'rgb(var(--surface-3))', color: 'rgb(var(--text-muted))' }}
+                  >
+                    {tool.category}
+                  </span>
+                </div>
+                {/* Two up on a phone with Model on its own line beneath, three
+                    across from `sm` where the row has the width for it. */}
+                {/* `min-w-0` on each cell: a grid item sizes to its content by
+                    default, so without it a long brand or model name widens the
+                    row instead of ellipsing inside it. */}
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">
+                  <DetailItem label="Tool ID" className="min-w-0" mono>
+                    <span className="block truncate">{tool.id}</span>
+                  </DetailItem>
+                  <DetailItem label="Brand" className="min-w-0">
+                    <span className="block truncate">{tool.brand || '—'}</span>
+                  </DetailItem>
+                  <DetailItem label="Model" className="col-span-2 min-w-0 sm:col-span-1">
+                    <span className="block truncate">{tool.model || '—'}</span>
+                  </DetailItem>
+                </dl>
+              </div>
             </div>
 
             <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-              <DetailItem label="Tool ID" mono>
-                {tool.id}
-              </DetailItem>
-              <DetailItem label="Brand">{tool.brand || '—'}</DetailItem>
-              <DetailItem label="Model">{tool.model || '—'}</DetailItem>
               {showSerial && (
-                <DetailItem label="Serial number" mono>
-                  {tool.serialNumber || '—'}
+                <DetailItem label="Serial number" className="min-w-0" mono>
+                  <span className="block truncate">{tool.serialNumber || '—'}</span>
                 </DetailItem>
               )}
-              <DetailItem label="Location" className="col-span-2 sm:col-span-1">
+              <DetailItem label="Location" className="col-span-2 min-w-0 sm:col-span-1">
                 <span className="flex items-center gap-1.5">
                   <MapPin className="h-3.5 w-3.5 shrink-0 opacity-60" />
-                  {tool.location}
+                  <span className="truncate">{tool.location}</span>
                 </span>
               </DetailItem>
               <DetailItem label="Purchased" mono>
@@ -353,24 +434,40 @@ export default function ToolDetailPage() {
             )}
           </SectionCard>
 
+          {/* Staff only: a student's borrowings of this tool are the Borrow
+              history page above, and showing the newest three here as well
+              would be the same records twice on the one screen. */}
+          {isStaff(user) && (
           <SectionCard
             title="Borrowing history"
-            description={`${transactions.length} transaction${transactions.length === 1 ? '' : 's'} recorded`}
+            description={
+              (transactions.length > 3
+                ? `Latest 3 of ${transactions.length} transaction${
+                    transactions.length === 1 ? '' : 's'
+                  }`
+                : `${transactions.length} transaction${transactions.length === 1 ? '' : 's'}`) +
+              ' recorded'
+            }
             bodyClassName="p-0"
             action={
-              <Link to={`/tools/${tool.id}/history`} className="btn btn-ghost btn-sm">
-                Full timeline
-              </Link>
+              can(PERM.TXN_VIEW_ALL) ? (
+                <Link to={`/tools/${tool.id}/history`} className="btn btn-ghost btn-sm">
+                  Full timeline
+                </Link>
+              ) : null
             }
           >
             <TransactionTable
-              transactions={transactions}
+              // The three most recent only — the rest are one tap away under
+              // "Full timeline".
+              transactions={transactions.slice(0, 3)}
               onSelect={setSelectedTxn}
               emptyTitle="This tool has not been borrowed yet."
               emptyDescription="Issue it from the borrow desk or by scanning its QR code."
               compact={false}
             />
           </SectionCard>
+          )}
 
           {/* Service records are staff data — the data layer refuses them to a
               student outright, so the card could only ever show them an empty
@@ -613,12 +710,23 @@ function ToolLocationCheckpoint({ loan, actor, onRecorded }) {
 
   const checkpoints = txnService.checkpointsOf(record)
 
-  const save = async () => {
-    if (!reading) return
+  // Where this loan says the tool actually is — the borrower's own last
+  // recorded point for this tool, resolved from the loan rather than typed in
+  // or defaulted. Null when the loan has none, which is a state, not a value.
+  const known = txnService.lastKnownLocation(record)
+
+  const save = async (location = reading, noteText = note) => {
+    if (!location) return
     setSaving(true)
     try {
       const updated = await txnService.addLocationCheckpoint(
-        { transactionId: record.id, location: reading, note },
+        // Coordinates only: the checkpoint is stamped with the moment it is
+        // confirmed, not with the timestamp of the reading it resolved.
+        {
+          transactionId: record.id,
+          location: { lat: location.lat, lng: location.lng, accuracy: location.accuracy ?? null },
+          note: noteText,
+        },
         actor,
       )
       setRecord(updated)
@@ -646,6 +754,43 @@ function ToolLocationCheckpoint({ loan, actor, onRecorded }) {
         tool or you in between.
       </p>
 
+      {/* The tool's own last recorded whereabouts on this loan, resolved from
+          the borrower's records so it can be confirmed as it stands instead of
+          being re-typed. A loan with nothing recorded says so. */}
+      <div className="mt-3 rounded-xl border p-3.5" style={{ background: 'rgb(var(--surface-2))' }}>
+        <p className="subtle text-[11px] font-bold uppercase tracking-wider">
+          Last recorded location
+        </p>
+        {known ? (
+          <>
+            <p className="mono mt-1.5 text-xs font-bold">{formatCoords(known)}</p>
+            <p className="subtle mt-1 text-[11px] leading-relaxed">
+              {known.source === 'checkpoint'
+                ? `Confirmed by ${known.capturedByName ?? record.userName} while the tool was out`
+                : `Where ${record.userName} collected the tool`}
+              {' · '}
+              {formatDateTime(known.capturedAt)}
+              {known.note ? ` · “${known.note}”` : ''}
+            </p>
+            <button
+              type="button"
+              onClick={() => save(known, note)}
+              className="btn btn-outline btn-sm mt-3 w-full"
+              disabled={saving}
+            >
+              {saving ? <Spinner /> : <MapPin className="h-4 w-4" />}
+              Confirm the tool is still here
+            </button>
+          </>
+        ) : (
+          <p className="muted mt-1.5 text-xs leading-relaxed">
+            Nothing has been recorded for this loan yet. Capturing a location is optional, so a loan
+            where none was taken — or where permission was refused — simply has none. Take a reading
+            below to record the first one.
+          </p>
+        )}
+      </div>
+
       <div className="mt-3 space-y-3">
         <LocationCaptureField
           value={reading}
@@ -665,7 +810,7 @@ function ToolLocationCheckpoint({ loan, actor, onRecorded }) {
             />
             <button
               type="button"
-              onClick={save}
+              onClick={() => save()}
               className="btn btn-primary w-full"
               disabled={saving}
             >

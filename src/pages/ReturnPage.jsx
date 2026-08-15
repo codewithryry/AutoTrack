@@ -5,9 +5,7 @@ import {
   CheckCircle2,
   ClipboardCheck,
   MapPin,
-  QrCode,
   Repeat,
-  Undo2,
   Wrench,
 } from 'lucide-react'
 import {
@@ -24,7 +22,6 @@ import {
   TxnStatusBadge,
 } from '../components/ui'
 import { LocationCaptureField } from '../components/LocationCapture'
-import Mascot from '../components/Mascot'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import { useDebounced, useTransactions } from '../hooks'
@@ -101,6 +98,11 @@ export default function ReturnPage() {
 
   const selected = openLoans.find((t) => t.id === selectedId) ?? null
 
+  // A borrower who does not work the counter can only ask for the return; staff
+  // confirm it. `BORROW_FOR_OTHERS` is the existing "works the crib" permission.
+  const asksOnly = !can(PERM.BORROW_FOR_OTHERS)
+  const alreadyAsked = txnService.returnRequested(selected)
+
   const submit = async (event) => {
     event.preventDefault()
     if (!selected) {
@@ -111,6 +113,24 @@ export default function ReturnPage() {
     setErrors({})
 
     try {
+      // A student asks; the crib confirms. Same record, same service, two
+      // steps — nothing is closed here for a borrower.
+      if (asksOnly) {
+        await txnService.requestReturn(
+          { transactionId: selected.id, condition, notes },
+          user,
+        )
+        toast.success(
+          `Staff have been asked to receive ${selected.toolName}. Hand it in at the crib.`,
+          { title: 'Return requested' },
+        )
+        setSelectedId('')
+        setNotes('')
+        setCondition(CONDITION.GOOD)
+        setReturnLocation(null)
+        return
+      }
+
       await txnService.returnTool(
         { transactionId: selected.id, condition, notes, returnLocation },
         user,
@@ -148,22 +168,14 @@ export default function ReturnPage() {
 
   return (
     <>
-      <PageHeader
-        title="Return a tool"
-        description="Check the condition of returned equipment and close the transaction."
-        icon={Undo2}
-      >
-        <Link to="/scan" className="btn btn-outline">
-          <QrCode className="h-4 w-4" />
-          Scan instead
-        </Link>
-        {can(PERM.BORROW) && (
-          <Link to="/borrow" className="btn btn-outline">
-            <Repeat className="h-4 w-4" />
-            Borrow a tool
-          </Link>
-        )}
-      </PageHeader>
+      {/* The sticky top bar already names this page, and the numbered steps
+          below say what it does — so the H1, the subtitle and the scan shortcut
+          are dropped: returning is not a scanning flow. The Scan page itself is
+          untouched. */}
+      {/* This page closes borrowings and nothing else: issuing is reached from
+          the approved request it belongs to, on Requests, so neither half of
+          the counter is offered from two places. */}
+      <PageHeader hideTitle />
 
       <div className="grid gap-4 lg:grid-cols-[1fr_400px]">
         {/* ------------------------- open loans ------------------------- */}
@@ -182,7 +194,7 @@ export default function ReturnPage() {
 
           {error ? (
             <ErrorState
-              title="Open loans could not be loaded"
+              title="Open borrowings could not be loaded"
               description={error.message}
               onRetry={reload}
             />
@@ -191,10 +203,10 @@ export default function ReturnPage() {
           ) : visibleLoans.length === 0 ? (
             <EmptyState
               icon={CheckCircle2}
-              title={search ? 'No matching loans.' : 'Nothing is out on loan.'}
+              title={search ? 'No matching borrowings.' : 'Nothing is out right now.'}
               description={
                 search
-                  ? 'No open loan matches that search.'
+                  ? 'No open borrowing matches that search.'
                   : 'Every tool has been returned to the laboratory.'
               }
               compact
@@ -242,6 +254,7 @@ export default function ReturnPage() {
                           )}
                         >
                           {dueLabel(txn.dueDate)}
+                          {txnService.returnRequested(txn) && ' · return requested'}
                         </span>
                       </span>
                       <TxnStatusBadge status={txn.status} />
@@ -301,9 +314,30 @@ export default function ReturnPage() {
                 )}
               </SectionCard>
 
+              {/* Already handed in and waiting on the counter — stated on the
+                  record so neither the borrower nor staff ask twice. */}
+              {alreadyAsked && (
+                <div className="flex items-start gap-2.5 rounded-lg border border-blue-200 bg-blue-50 px-3.5 py-2.5 dark:border-blue-500/30 dark:bg-blue-500/10">
+                  <ClipboardCheck className="mt-0.5 h-4 w-4 shrink-0 text-blue-600 dark:text-blue-300" />
+                  <p className="text-xs font-medium leading-snug text-blue-800 dark:text-blue-200">
+                    Return requested on {formatDate(selected.returnRequestedAt)}
+                    {selected.returnRequestCondition
+                      ? ` · reported ${selected.returnRequestCondition}`
+                      : ''}
+                    . {asksOnly
+                      ? 'Laboratory staff will confirm it when the tool is handed in.'
+                      : 'Confirm it below once the tool is physically back.'}
+                  </p>
+                </div>
+              )}
+
               <SectionCard
                 title="2 · Condition check"
-                description="Inspect the tool before accepting it back"
+                description={
+                  asksOnly
+                    ? 'Tell the crib what condition you are handing it back in'
+                    : 'Inspect the tool before accepting it back'
+                }
               >
                 <form onSubmit={submit} className="space-y-4" noValidate>
                   <fieldset>
@@ -371,13 +405,17 @@ export default function ReturnPage() {
                     rows={3}
                   />
 
-                  <LocationCaptureField
-                    value={returnLocation}
-                    onChange={setReturnLocation}
-                    title="Where is this tool being handed back?"
-                    description="One reading, taken now, stored as the loan's return point. It is kept separately from where the tool was collected."
-                    disabled={submitting}
-                  />
+                  {/* The return point is recorded when the tool is actually
+                      received, so only the counter captures it. */}
+                  {!asksOnly && (
+                    <LocationCaptureField
+                      value={returnLocation}
+                      onChange={setReturnLocation}
+                      title="Where is this tool being handed back?"
+                      description="One reading, taken now, stored as the borrowing's return point. It is kept separately from where the tool was collected."
+                      disabled={submitting}
+                    />
+                  )}
 
                   <button
                     type="submit"
@@ -385,28 +423,36 @@ export default function ReturnPage() {
                       'btn btn-lg w-full',
                       condition === CONDITION.DAMAGED ? 'btn-danger' : 'btn-success',
                     )}
-                    disabled={submitting}
+                    disabled={submitting || (asksOnly && alreadyAsked)}
                   >
                     {submitting ? <Spinner /> : <ClipboardCheck className="h-4 w-4" />}
-                    {submitting ? 'Processing return…' : 'Confirm return'}
+                    {submitting
+                      ? asksOnly
+                        ? 'Sending request…'
+                        : 'Processing return…'
+                      : asksOnly
+                        ? alreadyAsked
+                          ? 'Return already requested'
+                          : 'Request return'
+                        : 'Confirm return'}
                   </button>
 
                   <p className="subtle text-center text-xs leading-relaxed">
-                    The transaction is closed, the tool status updated and the activity written to
-                    the laboratory log.
+                    {asksOnly
+                      ? 'The tool stays on your record until laboratory staff receive it at the crib and confirm the return.'
+                      : 'The transaction is closed, the tool status updated and the activity written to the laboratory log.'}
                   </p>
                 </form>
               </SectionCard>
             </>
           ) : (
             <SectionCard title="Loan record">
-              <div className="flex flex-col items-center px-4 py-8 text-center">
-                <Mascot state="curious" size={104} className="mb-3" />
-                <p className="text-sm font-bold">No loan selected.</p>
-                <p className="muted mt-1 max-w-sm text-sm">
-                  Pick a tool from the list to check it back in.
-                </p>
-              </div>
+              <EmptyState
+                icon={ClipboardCheck}
+                title="No borrowing selected."
+                description="Pick a tool from the list to check it back in."
+                compact
+              />
             </SectionCard>
           )}
 

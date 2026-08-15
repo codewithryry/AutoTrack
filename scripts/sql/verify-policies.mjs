@@ -46,7 +46,7 @@ console.log('\n- first-admin bootstrap -')
 
 await test('the first user can promote themselves to Admin (zero admins exist)', async () => {
   const db = await freshDb()
-  await seedUser(db, { id: A, email: 'rommelmislang49@gmail.com', role: 'Student', status: 'Active' })
+  await seedUser(db, { id: A, email: 'first-admin@lab.test', role: 'Student', status: 'Active' })
   await asUser(db, A, "update public.profiles set role='Admin', status='Active' where id=$1", [A])
   const r = await db.query('select role,status from public.profiles where id=$1', [A])
   if (r.rows[0].role !== 'Admin' || r.rows[0].status !== 'Active') throw new Error('not promoted')
@@ -54,9 +54,9 @@ await test('the first user can promote themselves to Admin (zero admins exist)',
 
 await test('the SQL-editor path works too (no session at all)', async () => {
   const db = await freshDb()
-  await seedUser(db, { id: A, email: 'rommelmislang49@gmail.com', role: 'Instructor', status: 'Active' })
+  await seedUser(db, { id: A, email: 'first-admin@lab.test', role: 'Instructor', status: 'Active' })
   await become(db, null)
-  await db.query("update public.profiles set role='Admin', status='Active' where lower(email)=lower('rommelmislang49@gmail.com')")
+  await db.query("update public.profiles set role='Admin', status='Active' where lower(email)=lower('first-admin@lab.test')")
   const r = await db.query('select role from public.profiles where id=$1', [A])
   if (r.rows[0].role !== 'Admin') throw new Error('the operator path is still blocked')
 })

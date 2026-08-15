@@ -2,11 +2,15 @@ import * as db from './db'
 import { COLLECTIONS } from './db'
 import * as activity from './activity'
 import * as notifications from './notifications'
+import * as reservations from './reservations'
+import * as requests from './requests'
 import { ValidationError } from './tools'
 import {
   ACTIVE_TXN_STATUSES,
   ACTIVITY,
   CONDITION,
+  NOTIF_TYPE,
+  REQUEST_STATUS,
   RETURN_CONDITIONS,
   TOOL_STATUS,
   TXN_STATUS,
@@ -17,6 +21,7 @@ import {
   daysBetween,
   isOverdue,
   isDueSoon,
+  isToday,
   nowISO,
   startOfDay,
   toDate,
@@ -176,6 +181,33 @@ export const checkpointsOf = (txn) =>
   Array.isArray(txn?.locationCheckpoints) ? txn.locationCheckpoints : []
 
 /**
+ * Where this loan's tool was last actually recorded.
+ *
+ * Read from the loan itself, which is what ties a tool to the one borrower
+ * holding it — so the answer is that student's own recorded whereabouts for
+ * that tool and cannot be another borrower's. The most recent usage checkpoint
+ * wins; failing that, the point captured when the tool was collected. A loan
+ * with neither returns null, which is "not recorded" and not a default.
+ *
+ * No new store: these are the same two columns `0008` added and the trail
+ * already displays.
+ */
+export function lastKnownLocation(txn) {
+  const stamped = (point) => new Date(point?.capturedAt ?? 0).getTime() || 0
+  const latest = checkpointsOf(txn)
+    .filter((point) => Number.isFinite(point?.lat) && Number.isFinite(point?.lng))
+    .reduce((newest, point) => (!newest || stamped(point) >= stamped(newest) ? point : newest), null)
+
+  if (latest) return { ...latest, source: 'checkpoint' }
+
+  const borrow = txn?.borrowLocation
+  if (Number.isFinite(borrow?.lat) && Number.isFinite(borrow?.lng)) {
+    return { ...borrow, source: 'borrow' }
+  }
+  return null
+}
+
+/**
  * Record where the tool is right now, on a loan that is still open.
  *
  * This is the only way a point is added mid-loan, and it exists solely so a
@@ -280,6 +312,25 @@ export function validateBorrow({ toolId, userId, borrowDate, dueDate, purpose },
  * ------------------------------------------------------------------ */
 
 /**
+ * The standing approval one account has on one tool, if any.
+ *
+ * Read straight from the request store rather than through the request service,
+ * so this stays a lookup and can never be mistaken for a way of writing one. A
+ * student's read is scoped to their own rows, which is exactly the question.
+ */
+async function approvedRequestFor(toolId, userId) {
+  if (!toolId || !userId) return null
+  const rows = await db.query(
+    COLLECTIONS.toolRequests,
+    (r) =>
+      r.toolId === toolId &&
+      r.userId === userId &&
+      r.status === REQUEST_STATUS.APPROVED,
+  )
+  return sortBy(rows, 'decidedAt', 'desc')[0] ?? null
+}
+
+/**
  * Issue a tool.
  *
  * The transaction record and the tool's status change together inside one
@@ -306,6 +357,73 @@ export async function borrow(input, actor, { maxDays = 30 } = {}) {
     throw new Error(`${user.fullName}'s account is ${user.status.toLowerCase()} and cannot borrow.`)
   }
 
+  // A student takes out only what has already been approved for them.
+  //
+  // The approval happens at the request stage, so the counter is not a second
+  // decision — it is the handover. Scanning a tool and confirming it turns the
+  // hold that approval created into the loan; without a hold there is nothing
+  // to confirm, and the tool is asked for rather than taken.
+  //
+  // Staff are unaffected: issuing a tool at the desk is their decision to make,
+  // and that is what `BORROW_FOR_OTHERS` already says.
+  //
+  // Staff issuing at the desk are unaffected — that is their decision to make,
+  // and it is what `BORROW_FOR_OTHERS` already says. The hold is still looked
+  // up for them, because closing it is what takes the approved item out of the
+  // ready-to-borrow queue once the tool has actually been handed over.
+  const hold = await reservations.activeFor(input.toolId, input.userId).catch(() => null)
+
+  // The approval itself is the authorisation, and the request is where it
+  // lives. The hold is the ordinary way of finding it, but a hold that could
+  // not be read — a pending migration, a hold released early — must not turn a
+  // genuinely approved request into "you have no permission", so the request is
+  // consulted as the second reading of the same fact. Neither one is created
+  // here; both are only looked up.
+  const approvedRequest = hold
+    ? null
+    : await approvedRequestFor(input.toolId, input.userId).catch(() => null)
+
+  if (!hold && !approvedRequest && !can(actor, PERM.BORROW_FOR_OTHERS)) {
+    throw new Error(
+      'This tool has not been approved for you yet. Request it first — once staff approve it, ' +
+        'it appears on the borrow desk as ready to borrow.',
+    )
+  }
+
+  // "Issued by" names the staff member whose approval put the tool in the
+  // borrower's hands, not whoever tapped confirm: a student collecting their own
+  // approved tool did not issue it to themselves. Staff issuing at the desk have
+  // no approval behind it, so they stay the issuer, as before.
+  const approval =
+    approvedRequest ??
+    (hold?.requestId ? await requests.getById(hold.requestId).catch(() => null) : null)
+  // The batch the approval belonged to, carried onto the loan so a tool taken
+  // out under a multi-tool ask can be traced back to it. Each tool keeps its
+  // own transaction and is returned on its own.
+  const batchId =
+    approval?.batchId && (await db.supportsColumn(COLLECTIONS.transactions, 'batchId'))
+      ? approval.batchId
+      : null
+
+  const issuer = approval?.decidedByName
+    ? { id: approval.decidedById ?? null, name: approval.decidedByName }
+    : // No approval to read: the issuer is whoever worked the counter. A
+      // borrower collecting their own approved tool is never the issuer, so
+      // rather than naming them the field is left empty.
+      can(actor, PERM.BORROW_FOR_OTHERS)
+      ? { id: actor?.id ?? null, name: actor?.fullName ?? null }
+      : { id: null, name: null }
+
+  // One approval is one borrowing. The atomic step below already refuses a tool that
+  // is not available, but the borrower's own open loan is checked first so a
+  // double-tapped checkout says what it means instead of "not available".
+  const ownLoan = (await listForUser(input.userId).catch(() => [])).find(
+    (t) => t.toolId === input.toolId && ACTIVE_TXN_STATUSES.includes(t.status),
+  )
+  if (ownLoan) {
+    throw new Error(`${ownLoan.toolName} is already borrowed on ${ownLoan.id}. Return it first.`)
+  }
+
   // A friendlier message than "not available" when staff can see who has it.
   if (can(actor, PERM.TXN_VIEW_ALL)) {
     const openLoan = await findActiveForTool(input.toolId, actor)
@@ -313,6 +431,15 @@ export async function borrow(input, actor, { maxDays = 30 } = {}) {
   }
 
   const timestamp = nowISO()
+
+  // The form submits a calendar date, and `fromDateInput` anchors it at local
+  // noon so the day cannot drift across timezones. For a loan being issued now
+  // that noon is not the borrow time — every loan came out as 12:00 PM. A loan
+  // dated today is therefore stamped with the clock reading of the handover
+  // itself; a back-dated entry keeps the date it was given, because no real
+  // time of day exists for it. Both are local-time ISO strings, so they render
+  // in the same timezone as the rest of the record.
+  const borrowDate = isToday(input.borrowDate) ? timestamp : input.borrowDate
 
   // Where the tool was handed over, if the borrower agreed to a reading and the
   // database has somewhere to keep it. A refusal, a failed fix or a pending
@@ -334,14 +461,14 @@ export async function borrow(input, actor, { maxDays = 30 } = {}) {
     }
 
     const record = {
-      id: generateTxnId(toDate(input.borrowDate) ?? new Date()),
+      id: generateTxnId(toDate(borrowDate) ?? new Date()),
       toolId: tool.id,
       toolName: tool.name,
       toolCategory: tool.category,
       userId: user.id,
       userName: user.fullName,
       userRole: user.role,
-      borrowDate: input.borrowDate,
+      borrowDate,
       dueDate: input.dueDate,
       returnDate: null,
       status: TXN_STATUS.BORROWED,
@@ -349,8 +476,12 @@ export async function borrow(input, actor, { maxDays = 30 } = {}) {
       conditionIn: null,
       purpose: input.purpose?.trim() ?? '',
       notes: input.notes?.trim() ?? '',
-      issuedById: actor?.id ?? null,
-      issuedByName: actor?.fullName ?? null,
+      issuedById: issuer.id,
+      issuedByName: issuer.name,
+      // The ask this loan came out of, when several tools were requested
+      // together. Omitted when there is none, or when `0020` has not been
+      // applied, so the insert never names a column this database lacks.
+      ...(batchId ? { batchId } : {}),
       receivedById: null,
       receivedByName: null,
       createdAt: timestamp,
@@ -375,6 +506,15 @@ export async function borrow(input, actor, { maxDays = 30 } = {}) {
   })
 
   await afterWrite('borrow follow-up', async () => {
+    // The approval has been collected: the hold becomes the loan, and the
+    // approved item leaves the borrow desk's ready-to-borrow queue. The request
+    // itself is left as it is — it stays the approval record.
+    if (hold) {
+      await reservations
+        .fulfil(hold.id, record.id, actor)
+        .catch((err) => console.warn('[transactions] the hold could not be closed', err))
+    }
+
     await activity.log({
       action: ACTIVITY.TOOL_BORROWED,
       toolId: record.toolId,
@@ -385,11 +525,16 @@ export async function borrow(input, actor, { maxDays = 30 } = {}) {
       message: `${user.fullName} borrowed the tool${
         input.purpose ? ` for ${input.purpose}` : ''
       }.`,
-      meta: { dueDate: record.dueDate, issuedBy: actor?.fullName ?? null },
+      meta: { dueDate: record.dueDate, issuedBy: issuer.name },
     })
 
-    await notifications.create(
-      addressed(notifications.templates.borrowed(tool, record, user), actor, user.id),
+    await notifyParties(
+      {
+        staff: notifications.templates.borrowed(tool, record, user),
+        personal: notifications.templates.borrowedByYou(tool, record, user),
+      },
+      actor,
+      user.id,
     )
 
     // If it is already due within the warning window, say so immediately.
@@ -417,32 +562,145 @@ async function afterWrite(label, fn) {
 }
 
 /**
- * Address a notification.
+ * Address a transaction notification to both parties, explicitly.
  *
- * Staff actions raise a laboratory-wide alert (`userId: null`), which is what the
- * tool room wants to see. A student acting for themselves gets a personal
- * confirmation instead: the security rules only let them notify themselves, so
- * that one account cannot fill every notification centre with broadcasts nobody
- * else is able to delete. Staff still see the loan itself in transactions and the
- * activity log.
+ * Every loan event has two audiences and they are not the same notification.
+ * The tool room wants the operational line — "Tool borrowed, issued to X" — and
+ * that stays a laboratory-wide alert (`userId: null`) that only staff read. The
+ * borrower wants their own loan status, so they get a separate copy addressed to
+ * them, in their own terms.
+ *
+ * Who may write what still follows the security rules: only a staff actor can
+ * raise the laboratory-wide alert, and a student acting for themselves writes
+ * their own copy alone. Both copies carry a per-recipient `dedupeKey`, so
+ * nobody's centre gets the same event twice.
  */
-function addressed(input, actor, recipientId) {
-  return can(actor, PERM.TXN_VIEW_ALL) ? input : { ...input, userId: recipientId }
+async function notifyParties({ staff, personal }, actor, recipientId) {
+  const broadcast = !!staff && can(actor, PERM.TXN_VIEW_ALL)
+  if (broadcast) {
+    await notifications.create(staff)
+  }
+  // One event, one notification per reader. A borrower who is also staff would
+  // otherwise read the same handover twice — once as the laboratory-wide line
+  // and once as their own copy — so the personal copy is skipped for a reader
+  // the broadcast already reaches.
+  const readsBroadcast = broadcast && recipientId === actor?.id
+  if (personal && recipientId && !readsBroadcast) {
+    await notifications.create({ ...personal, userId: recipientId })
+  }
 }
 
 /* ------------------------------------------------------------------ *
  * Return
  * ------------------------------------------------------------------ */
 
+/** Columns added by `0019_return_requests.sql`. */
+const RETURN_REQUEST_COLUMN = 'returnRequestedAt'
+
+/** Whether this database has the return-request columns `0019` adds. */
+export const returnRequestsAvailable = () =>
+  db.supportsColumn(COLLECTIONS.transactions, RETURN_REQUEST_COLUMN)
+
+/** Has this loan already been handed in and is only waiting on the counter? */
+export const returnRequested = (txn) => !!txn?.returnRequestedAt
+
+/**
+ * Ask to hand a tool back.
+ *
+ * What a student does instead of closing the loan themselves: the tool is still
+ * out and the record still says `Borrowed` — only now the counter knows it is
+ * coming back, in what condition the borrower says it is, and when they asked.
+ * Staff confirm the actual return with `returnTool()`, which is the one place a
+ * transaction is closed and a tool goes back on the shelf.
+ *
+ * One request per loan: asking again while one is open is refused rather than
+ * overwriting the first, so the counter's queue cannot be re-stamped.
+ */
+export async function requestReturn({ transactionId, condition, notes }, actor) {
+  assertCan(actor, PERM.RETURN, 'Your role is not allowed to return tools.')
+
+  const txn = await getById(transactionId)
+  if (!txn) throw new Error('Transaction not found.')
+  if (!ACTIVE_TXN_STATUSES.includes(txn.status)) {
+    throw new Error('This tool is not currently borrowed, so it cannot be handed back.')
+  }
+  if (!canReturnTransaction(actor, txn)) {
+    throw new Error('You can only hand back tools that you borrowed yourself.')
+  }
+  if (returnRequested(txn)) {
+    throw new Error('A return has already been requested for this tool. Staff will confirm it.')
+  }
+  if (!RETURN_CONDITIONS.includes(condition)) {
+    throw new ValidationError({ condition: 'Select the condition of the tool you are handing back.' })
+  }
+  if (!(await returnRequestsAvailable())) {
+    throw new Error(
+      'Return requests are not enabled on this database yet. Ask an administrator to apply the latest migration.',
+    )
+  }
+
+  const timestamp = nowISO()
+  const updated = await db.update(COLLECTIONS.transactions, txn.id, {
+    returnRequestedAt: timestamp,
+    returnRequestCondition: condition,
+    returnRequestNotes: notes?.trim() ?? '',
+    updatedAt: timestamp,
+  })
+
+  await afterWrite('return request follow-up', async () => {
+    await activity.log({
+      action: ACTIVITY.TOOL_RETURNED,
+      toolId: txn.toolId,
+      toolName: txn.toolName,
+      userId: txn.userId,
+      userName: txn.userName,
+      transactionId: txn.id,
+      message: `${txn.userName} asked to hand ${txn.toolName} back (reported ${condition}).`,
+      meta: { condition, returnRequest: true },
+    })
+
+    // The laboratory-wide alert is a staff write, so it is raised only when
+    // staff are the ones asking; a student's request reaches the counter
+    // through the return desk's own list, which reads the same column.
+    await notifyParties(
+      {
+        staff: {
+          type: NOTIF_TYPE.REQUEST,
+          title: 'Return requested',
+          message: `${txn.userName} is handing ${txn.toolName} back. Confirm it at the return desk.`,
+          toolId: txn.toolId,
+          toolName: txn.toolName,
+          transactionId: txn.id,
+          dedupeKey: `return-request:${txn.id}`,
+        },
+      },
+      actor,
+      null,
+    )
+  })
+
+  return updated ?? { ...txn, returnRequestedAt: timestamp, returnRequestCondition: condition }
+}
+
 /**
  * Take a tool back.
  *
- * A damaged return pulls the tool out of circulation rather than returning it
- * to the Available pool, and marks the transaction itself as Damaged so the
- * report on breakages stays accurate.
+ * The counter's own step, and the only one that closes a loan: a student asks
+ * with `requestReturn()` and a member of staff receives the tool here. A damaged
+ * return pulls the tool out of circulation rather than returning it to the
+ * Available pool, and marks the transaction itself as Damaged so the report on
+ * breakages stays accurate.
  */
 export async function returnTool({ transactionId, condition, notes, returnLocation }, actor) {
   assertCan(actor, PERM.RETURN, 'Your role is not allowed to return tools.')
+  // Receiving equipment is the crib's job: a borrower hands the tool in, staff
+  // confirm it. `BORROW_FOR_OTHERS` is the existing permission that says "works
+  // the counter", so no new one is introduced for it.
+  if (!can(actor, PERM.BORROW_FOR_OTHERS)) {
+    throw new Error(
+      'Only laboratory staff can confirm a return. Request the return and hand the tool in at the crib.',
+    )
+  }
 
   const txn = await getById(transactionId)
   if (!txn) throw new Error('Transaction not found.')
@@ -534,10 +792,18 @@ export async function returnTool({ transactionId, condition, notes, returnLocati
       }
 
       const borrower = txn.userId === actor?.id ? actor : { fullName: txn.userName }
-      const template = damaged
-        ? notifications.templates.damaged(tool, updatedTxn, borrower)
-        : notifications.templates.returned(tool, updatedTxn, borrower)
-      await notifications.create(addressed(template, actor, txn.userId))
+      await notifyParties(
+        {
+          staff: damaged
+            ? notifications.templates.damaged(tool, updatedTxn, borrower)
+            : notifications.templates.returned(tool, updatedTxn, borrower),
+          personal: notifications.templates.returnedByYou(tool, updatedTxn, txn.userId, {
+            damaged,
+          }),
+        },
+        actor,
+        txn.userId,
+      )
 
       // The loan is closed, so its overdue/due-soon alerts are no longer
       // actionable. A student may not delete laboratory-wide alerts, so this is
@@ -554,8 +820,14 @@ async function clearAlertsFor(transactionId) {
   try {
     await db.removeWhere(
       COLLECTIONS.notifications,
+      // Prefix match: the overdue alert now exists as a staff line and a copy
+      // addressed to the borrower (`overdue:<txn>:<uid>`), and closing the loan
+      // retires both.
       (n) =>
-        n.dedupeKey === `overdue:${transactionId}` || n.dedupeKey === `due-soon:${transactionId}`,
+        typeof n.dedupeKey === 'string' &&
+        (n.dedupeKey === `overdue:${transactionId}` ||
+          n.dedupeKey.startsWith(`overdue:${transactionId}:`) ||
+          n.dedupeKey === `due-soon:${transactionId}`),
     )
   } catch (err) {
     console.warn('[transactions] closed-loan alerts could not be cleared', err)
@@ -623,7 +895,14 @@ export async function runOverdueCheck({ dueSoonThresholdDays = 1, notify = true 
 
       if (notify && tool) {
         const user = await db.get(COLLECTIONS.users, txn.userId)
+        // The staff line is about the laboratory's tool; the borrower needs to
+        // be told it is theirs to bring back. Both are deduplicated per loan.
         await notifications.create(notifications.templates.overdue(tool, txn, user))
+        if (txn.userId) {
+          await notifications.create(
+            notifications.templates.overdueForYou(tool, txn, txn.userId),
+          )
+        }
       }
     } else if (isDueSoon(txn.dueDate, dueSoonThresholdDays)) {
       dueSoonCount++
@@ -740,10 +1019,13 @@ export async function extendDueDate(transactionId, newDueDate, actor) {
 export async function activeLoanContext(toolId, actor) {
   const txn = await findActiveForTool(toolId, actor)
   if (!txn) return null
-  const tool = await db.get(COLLECTIONS.tools, txn.toolId)
-  const borrower =
+  // Neither read depends on the other, so they go out together — one round trip
+  // on the scanner's path rather than two.
+  const [tool, borrower] = await Promise.all([
+    db.get(COLLECTIONS.tools, txn.toolId),
     txn.userId === actor?.id
-      ? actor
-      : await db.get(COLLECTIONS.users, txn.userId).catch(() => null)
+      ? Promise.resolve(actor)
+      : db.get(COLLECTIONS.users, txn.userId).catch(() => null),
+  ])
   return { transaction: txn, tool, borrower: borrower ?? { id: txn.userId, fullName: txn.userName } }
 }

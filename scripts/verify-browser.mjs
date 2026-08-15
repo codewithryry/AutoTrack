@@ -30,10 +30,11 @@ const ROLE = process.env.STMS_ROLE ?? 'Admin'
 const SIDEBARS = {
   Admin: [
     'Dashboard',
-    'Tools',
+    'Inventory',
     'Scan',
-    'Borrow / Return',
     'Transactions',
+    'Requests',
+    'Messages',
     'Users',
     'Maintenance',
     'Notifications',
@@ -42,21 +43,36 @@ const SIDEBARS = {
   ],
   Instructor: [
     'Dashboard',
-    'Tools',
-    'Scan',
-    'Borrow / Return',
+    'Inventory',
+    'Requests',
     'Transactions',
     'Maintenance',
+    'Messages',
     'Notifications',
   ],
-  Student: ['Dashboard', 'Tools', 'Scan', 'Borrow / Return', 'Transactions', 'Notifications'],
+  Student: [
+    'Dashboard',
+    'Inventory',
+    'Requests',
+    'Scan',
+    'Return',
+    'Messages',
+    'Transactions',
+    'Notifications',
+  ],
 }
 
-/** Routes each role must be refused, even when typed into the address bar. */
+/**
+ * Routes each role must be refused, even when typed into the address bar.
+ *
+ * `/settings` is not among them: every role has preferences of its own there,
+ * and the laboratory configuration inside the page is gated on its permissions
+ * rather than on the route.
+ */
 const FORBIDDEN = {
   Admin: [],
-  Instructor: ['/users', '/reports', '/settings'],
-  Student: ['/users', '/reports', '/settings', '/maintenance'],
+  Instructor: ['/users', '/reports'],
+  Student: ['/users', '/reports', '/maintenance', '/borrow'],
 }
 
 let passed = 0

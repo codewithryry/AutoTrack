@@ -1,10 +1,19 @@
 import { Children, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AlertTriangle, Check, ChevronDown, Loader2, Search, X } from 'lucide-react'
+import {
+  AlertTriangle,
+  ChevronDown,
+  Loader2,
+  Search,
+  SlidersHorizontal,
+  X,
+} from 'lucide-react'
 import { cx } from '../utils/helpers'
 import {
   CONDITION_STYLES,
   MAINTENANCE_STATUS_STYLES,
+  REQUEST_STATUS_STYLES,
+  RESERVATION_STATUS_STYLES,
   ROLE_STYLES,
   STATUS_STYLES,
   TXN_STATUS_STYLES,
@@ -47,6 +56,18 @@ export const RoleBadge = ({ role }) => <Badge className={ROLE_STYLES[role]}>{rol
 
 export const UserStatusBadge = ({ status }) => (
   <Badge className={USER_STATUS_STYLES[status]} dot>
+    {status}
+  </Badge>
+)
+
+export const RequestStatusBadge = ({ status, dot = true }) => (
+  <Badge className={REQUEST_STATUS_STYLES[status]} dot={dot}>
+    {status}
+  </Badge>
+)
+
+export const ReservationStatusBadge = ({ status, dot = true }) => (
+  <Badge className={RESERVATION_STATUS_STYLES[status]} dot={dot}>
     {status}
   </Badge>
 )
@@ -197,7 +218,13 @@ export function SectionCard({
  * States
  * ------------------------------------------------------------------ */
 
-export function EmptyState({ icon: Icon, title, description, action, compact = false }) {
+export function EmptyState({
+  icon: Icon,
+  title,
+  description,
+  action,
+  compact = false,
+}) {
   return (
     <div
       className={cx(
@@ -387,114 +414,161 @@ export function TextAreaField({ label, error, hint, required, className, rows = 
  * Mobile filter toolbar
  * ------------------------------------------------------------------ */
 
-const optionValue = (o) => (typeof o === 'string' ? o : o.value)
-const optionLabel = (o) => (typeof o === 'string' ? o : o.label)
-
 /**
- * One chip in the mobile filter toolbar. It shows the filter's name while it is
- * unset and the chosen option once it is, so the row reads as the current state
- * of the list rather than as a set of empty controls.
- */
-function FilterChip({ label, active, onClick }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cx(
-        'flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-full border px-3.5',
-        'text-[13px] font-semibold',
-        active
-          ? 'border-amberline-400/50 bg-amberline-400/15 text-amberline-700 dark:text-amberline-300'
-          : 'muted',
-      )}
-    >
-      <span className="max-w-[10rem] truncate">{label}</span>
-      <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" />
-    </button>
-  )
-}
-
-/**
- * The phone's filter toolbar: one scrollable row of chips, one per filter, each
- * opening its options in a bottom sheet at a comfortable tap size. It replaces
- * the desktop's inline row of dropdowns on small screens only — the filters,
- * their options and their handlers are the page's own, unchanged.
+ * The phone's filter control: one button beside the search box, opening every
+ * filter in a single sheet. It replaces the desktop's inline row of dropdowns
+ * on small screens only — the filters, their options and their handlers are the
+ * page's own, unchanged.
  *
  * `filters` is `[{ key, label, value, onChange, options }]`. `extra` adds one
  * more chip holding arbitrary controls (date ranges and the like).
  */
-export function MobileFilterBar({ filters, extra, hasFilters, onClear, className }) {
-  const [openKey, setOpenKey] = useState(null)
-  const open = filters.find((f) => f.key === openKey)
-  const extraOpen = openKey === '__extra'
+export function MobileFilterBar({ filters, extra, hasFilters, onClear, className, iconOnly }) {
+  const [open, setOpen] = useState(false)
+  const setCount = filters.filter((f) => f.value !== 'all').length + (extra?.active ? 1 : 0)
+
+  // Sat at the end of the search row: a single square control, the same height
+  // as the field beside it, carrying how many filters are on. Everything it
+  // opens is the sheet below, so the row itself never grows.
+  if (iconOnly) {
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          aria-label={setCount ? `Filters, ${setCount} applied` : 'Filters'}
+          className={cx(
+            'relative grid h-10 w-10 shrink-0 place-items-center rounded-xl border transition-colors',
+            'active:scale-95 motion-reduce:transition-none',
+            setCount
+              ? 'border-amberline-400/50 bg-amberline-400/15 text-amberline-700 dark:text-amberline-300'
+              : 'muted hover:bg-black/[0.03] dark:hover:bg-white/5',
+            className,
+          )}
+          style={setCount ? undefined : { background: 'rgb(var(--surface-2))' }}
+        >
+          <SlidersHorizontal className="h-4 w-4" />
+          {setCount > 0 && (
+            <span
+              className="absolute -right-1 -top-1 grid h-4 min-w-[16px] place-items-center rounded-full
+                         bg-amberline-500 px-1 text-[10px] font-extrabold text-navy-950"
+            >
+              {setCount}
+            </span>
+          )}
+        </button>
+        <FilterSheet
+          open={open}
+          onClose={() => setOpen(false)}
+          filters={filters}
+          extra={extra}
+          hasFilters={hasFilters}
+          onClear={onClear}
+        />
+      </>
+    )
+  }
 
   return (
-    <div className={cx('no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 pb-0.5', className)}>
-      {filters.map((filter) => {
-        const active = filter.value !== 'all'
-        const current = filter.options.find((o) => optionValue(o) === filter.value)
-        return (
-          <FilterChip
-            key={filter.key}
-            label={active && current ? optionLabel(current) : filter.label}
-            active={active}
-            onClick={() => setOpenKey(filter.key)}
-          />
-        )
-      })}
-
-      {extra && (
-        <FilterChip
-          label={extra.label}
-          active={!!extra.active}
-          onClick={() => setOpenKey('__extra')}
-        />
-      )}
+    <div className={cx('flex items-center gap-1.5', className)}>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className={cx(
+          'flex min-h-[34px] flex-1 items-center justify-between gap-2 rounded-full border px-3.5',
+          'text-[12px] font-semibold transition-colors active:scale-[0.99] motion-reduce:transition-none',
+          setCount
+            ? 'border-amberline-400/50 bg-amberline-400/15 text-amberline-700 dark:text-amberline-300'
+            : 'muted',
+        )}
+        style={setCount ? undefined : { background: 'rgb(var(--surface-2))' }}
+      >
+        <span className="flex min-w-0 items-center gap-1.5">
+          <SlidersHorizontal className="h-3.5 w-3.5 shrink-0 opacity-70" />
+          <span className="truncate">
+            {setCount ? `Filters · ${setCount} applied` : 'Filters'}
+          </span>
+        </span>
+        <ChevronDown className="h-3 w-3 shrink-0 opacity-70" />
+      </button>
 
       {hasFilters && (
         <button
           type="button"
           onClick={onClear}
-          className="min-h-[40px] shrink-0 rounded-full px-3 text-[13px] font-semibold muted"
+          className="flex min-h-[34px] shrink-0 items-center gap-1 rounded-full border border-dashed
+                     px-3 text-[12px] font-semibold muted transition-colors
+                     hover:bg-black/[0.03] dark:hover:bg-white/5"
         >
+          <X className="h-3 w-3 shrink-0" />
           Clear
         </button>
       )}
 
-      <Modal
-        open={!!open || extraOpen}
-        onClose={() => setOpenKey(null)}
-        title={open?.label ?? extra?.label ?? ''}
-      >
-        {open ? (
-          <div className="-my-1">
-            {open.options.map((option) => {
-              const value = optionValue(option)
-              const selected = value === open.value
-              return (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => {
-                    open.onChange(value)
-                    setOpenKey(null)
-                  }}
-                  className={cx(
-                    'flex min-h-[48px] w-full items-center justify-between gap-3 border-b px-1 text-left text-sm last:border-b-0',
-                    selected && 'font-bold',
-                  )}
-                >
-                  <span className="min-w-0 flex-1">{optionLabel(option)}</span>
-                  {selected && <Check className="h-4 w-4 shrink-0 text-amberline-500" />}
-                </button>
-              )
-            })}
-          </div>
-        ) : (
-          extra?.children
-        )}
-      </Modal>
+      <FilterSheet
+        open={open}
+        onClose={() => setOpen(false)}
+        filters={filters}
+        extra={extra}
+        hasFilters={hasFilters}
+        onClear={onClear}
+      />
     </div>
+  )
+}
+
+/**
+ * Every filter in one sheet: the page's own options and handlers, one labelled
+ * dropdown each, plus whatever `extra` carries (a date range, typically).
+ * Nothing is applied twice — each control writes straight through to the page's
+ * own state.
+ */
+function FilterSheet({ open, onClose, filters, extra, hasFilters, onClear }) {
+  return (
+    <Modal open={open} onClose={onClose} title="Filters">
+      <div className="space-y-3">
+        {filters.map((filter) => (
+          <div key={filter.key}>
+            <p className="subtle mb-1 text-[11px] font-bold uppercase tracking-wide">
+              {filter.label}
+            </p>
+            <FilterSelect
+              value={filter.value}
+              onChange={filter.onChange}
+              options={filter.options}
+              className="w-full"
+            />
+          </div>
+        ))}
+
+        {extra && (
+          <div>
+            <p className="subtle mb-1 text-[11px] font-bold uppercase tracking-wide">
+              {extra.label}
+            </p>
+            {extra.children}
+          </div>
+        )}
+
+        <div className="flex gap-2 pt-1">
+          {hasFilters && (
+            <button
+              type="button"
+              onClick={() => {
+                onClear?.()
+                onClose()
+              }}
+              className="btn btn-outline flex-1"
+            >
+              Clear all
+            </button>
+          )}
+          <button type="button" onClick={onClose} className="btn btn-primary flex-1">
+            Done
+          </button>
+        </div>
+      </div>
+    </Modal>
   )
 }
 
@@ -611,7 +685,11 @@ export function Modal({ open, onClose, title, description, children, footer, siz
   if (!open) return null
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4">
+    // The dialog is fixed to the window, above the shell and outside its
+    // padding, so it takes the safe-area insets itself: the sheet's top edge
+    // stays clear of a notch and its sides clear of a curved edge. The backdrop
+    // below is `inset-0` and still covers the window corner to corner.
+    <div className="dialog-safe fixed inset-0 z-50 flex items-end justify-center sm:items-center">
       <div
         className="absolute inset-0 bg-navy-950/60 animate-fade-in"
         onClick={onClose}
@@ -649,8 +727,13 @@ export function Modal({ open, onClose, title, description, children, footer, siz
 
         {footer && (
           <footer
-            className="safe-bottom flex shrink-0 flex-col-reverse gap-2 border-t px-4 py-3
-                       sm:flex-row sm:justify-end sm:px-5"
+            // `pb-[max(…)]` rather than the `.safe-bottom` helper plus `py-3`:
+            // the helper lives in the components layer and `py-3` in utilities,
+            // so the utility won and the inset was never actually applied. The
+            // sheet's footer is the app's lowest control on a phone, so the
+            // gesture bar has to be kept off it.
+            className="flex shrink-0 flex-col-reverse gap-2 border-t px-4 pt-3
+                       pb-[max(0.75rem,var(--sab))] sm:flex-row sm:justify-end sm:px-5"
             style={{ background: 'rgb(var(--surface-2))' }}
           >
             {footer}
@@ -673,7 +756,19 @@ export function ConfirmDialog({
   cancelLabel = 'Cancel',
   variant = 'danger',
   loading = false,
+  // A phrase the reader has to type before the action unlocks. For the few
+  // steps that cannot be undone: reading a warning is not the same as meaning
+  // it, and typing the words is the pause that makes it deliberate.
+  confirmPhrase,
 }) {
+  const [typed, setTyped] = useState('')
+  const locked = !!confirmPhrase && typed.trim().toUpperCase() !== confirmPhrase.toUpperCase()
+
+  // A fresh dialog starts from an empty box, whatever the last one asked for.
+  useEffect(() => {
+    if (!open) setTyped('')
+  }, [open])
+
   return (
     <Modal
       open={open}
@@ -689,7 +784,7 @@ export function ConfirmDialog({
             type="button"
             className={cx('btn', variant === 'danger' ? 'btn-danger' : 'btn-primary')}
             onClick={onConfirm}
-            disabled={loading}
+            disabled={loading || locked}
           >
             {loading && <Spinner />}
             {confirmLabel}
@@ -713,6 +808,20 @@ export function ConfirmDialog({
         </span>
         <p className="muted pt-1.5 text-sm leading-relaxed">{message}</p>
       </div>
+
+      {confirmPhrase && (
+        <div className="mt-4">
+          <TextField
+            label={`Type ${confirmPhrase} to confirm`}
+            value={typed}
+            onChange={(event) => setTyped(event.target.value)}
+            placeholder={confirmPhrase}
+            autoComplete="off"
+            spellCheck={false}
+            disabled={loading}
+          />
+        </div>
+      )}
     </Modal>
   )
 }

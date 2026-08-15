@@ -21,7 +21,7 @@ import { SelectField, Spinner, TextField } from '../components/ui'
 import { useToast } from '../context/ToastContext'
 import * as userService from '../services/users'
 import { ValidationError } from '../services/tools'
-import { ROLE, USER_STATUS } from '../utils/constants'
+import { APP_VERSION, ROLE } from '../utils/constants'
 import { cx } from '../utils/helpers'
 
 /**
@@ -116,22 +116,16 @@ export default function SignUpPage() {
       // Never leave credentials in component state.
       setForm((f) => ({ ...f, password: '', confirmPassword: '' }))
 
-      const pending = account.status === USER_STATUS.PENDING
       toast.success('Account created successfully.', {
-        title: pending ? 'Waiting for approval' : `Welcome, ${account.fullName.split(' ')[0]}`,
+        title: `Welcome, ${account.fullName.split(' ')[0]}`,
       })
 
-      // Straight to the login screen: nothing is signed in yet, which is also
-      // what keeps a pending instructor out until an administrator approves.
-      navigate('/login', {
-        replace: true,
-        state: {
-          email: account.email,
-          notice: pending
-            ? 'Account created successfully. Your instructor account is awaiting activation.'
-            : 'Account created successfully. Sign in to continue.',
-        },
-      })
+      // Registration signs the account in and it starts Active, so there is
+      // nothing to wait for and nothing to type again: straight to the
+      // dashboard, which renders the view for the role just created. An account
+      // an administrator has since set to Pending is caught by the session
+      // check on the way in, exactly as it is for any other sign-in.
+      navigate('/dashboard', { replace: true })
     } catch (err) {
       if (err instanceof ValidationError) {
         setErrors(err.errors)
@@ -456,9 +450,15 @@ export default function SignUpPage() {
           {/* Kept with the form column so it centres under it at every width and
               stays clear of the phone's home indicator via the section's own
               safe-area padding. */}
-          <p className="subtle mt-8 text-center text-[11px] font-semibold">
-            Powered by Student BTVTED
-          </p>
+          <div className="mt-8 text-center">
+            <p className="subtle text-[11px] font-semibold">Powered by Student BTVTED</p>
+            {/* One quiet line under it: what the app is and which build this is.
+                Smaller and dimmer than the line above so it fills the space
+                without drawing the eye away from the form. */}
+            <p className="subtle mt-1 text-[10px] leading-relaxed opacity-70">
+              Smart Tool Monitoring System · Version {APP_VERSION}
+            </p>
+          </div>
         </div>
       </section>
     </div>

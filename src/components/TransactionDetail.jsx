@@ -55,8 +55,10 @@ export default function TransactionDetail({ transaction, open, onClose, footer, 
         <dl className="grid grid-cols-2 gap-4">
           <DetailItem label="Borrower">{transaction.userName}</DetailItem>
           <DetailItem label="Role">{transaction.userRole}</DetailItem>
+          {/* The time the tool actually changed hands, on the same terms as the
+              return above it. */}
           <DetailItem label="Borrow date" mono>
-            {formatDate(transaction.borrowDate)}
+            {formatDateTime(transaction.borrowDate)}
           </DetailItem>
           <DetailItem label="Due date" mono>
             {formatDate(transaction.dueDate)}

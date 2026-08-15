@@ -122,16 +122,22 @@ export default function ScanPage() {
       }
 
       try {
-        const tool = await toolService.findByQR(parsed.toolId)
+        // Both lookups are keyed by the id on the label, so they run together
+        // rather than one after the other — a scan resolves in one round trip
+        // instead of two. A code that turns out to be unknown simply discards
+        // the loan lookup, which found nothing anyway.
+        // A student only ever sees a loan record that is their own; for anyone
+        // else's the tool is simply reported as unavailable.
+        const [tool, loan] = await Promise.all([
+          toolService.findByQR(parsed.toolId),
+          txnService.activeLoanContext(parsed.toolId, user).catch(() => null),
+        ])
         if (!tool) {
           const message = `Tool not found. Please check the QR code. (${parsed.toolId})`
           setResult({ error: message, raw: parsed.toolId })
           toast.error('Tool not found. Please check the QR code.')
           return
         }
-        // A student only ever sees a loan record that is their own; for anyone
-        // else's the tool is simply reported as unavailable.
-        const loan = await txnService.activeLoanContext(tool.id, user)
         setResult({ tool, loan })
         toast.success(`${tool.name} identified.`, { title: tool.id })
       } catch (err) {
@@ -151,23 +157,18 @@ export default function ScanPage() {
       {/* The student's shell already names this page and the camera panel below
           says what to do, so the introduction is dropped for them entirely.
           Staff keep the heading exactly as it was. */}
-      <PageHeader
-        title="Scan a tool"
-        description="Point the camera at the QR label to borrow, return or inspect a tool."
-        icon={QrCode}
-        hideTitleMobile
-        hideTitle={isStudent(user)}
-      >
-        {result && (
-          <button type="button" onClick={reset} className="btn btn-outline">
-            <RotateCcw className="h-4 w-4" />
-            Scan another
-          </button>
-        )}
-      </PageHeader>
+      {/* The shell's top bar already names this page on a phone, and what the
+          scanner is for is said once, in "How it works" below — so the H1 and
+          its subtitle are the desktop's alone. */}
+      <PageHeader title="Scan a tool" icon={QrCode} hideTitleMobile hideTitle={isStudent(user)} />
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <SectionCard title="Camera" description="Works offline once the app is installed">
+        {/* The two ways in, in one panel: point the camera at the label, or type
+            the Tool ID printed on it. Both resolve the same tool record and
+            land on the same result beside them. */}
+        {/* No heading: the viewfinder and the Tool ID field say what they are,
+            and "How it works" beside them says the rest. */}
+        <SectionCard>
           <QRScanner onDetected={handleDetected} disabled={looking} />
         </SectionCard>
 
@@ -181,7 +182,7 @@ export default function ScanPage() {
 
           {!looking && !result && (
             <div data-tour="scan-guide">
-              <ScanHint />
+              <ScanHint student={isStudent(user)} />
             </div>
           )}
 
@@ -240,9 +241,12 @@ export default function ScanPage() {
   )
 }
 
-function ScanHint() {
+function ScanHint({ student }) {
   return (
-    <SectionCard title="How it works">
+    <SectionCard
+      title="How it works"
+      description="Point the camera at the QR label to borrow, return or inspect a tool. It works offline once the app is installed."
+    >
       <ol className="space-y-3.5">
         {[
           {
@@ -255,11 +259,20 @@ function ScanHint() {
             title: 'Check the record',
             text: 'The tool’s status, condition and current holder appear instantly.',
           },
-          {
-            icon: ArrowRight,
-            title: 'Borrow or return',
-            text: 'Confirm the transaction and the inventory updates immediately.',
-          },
+          // What actually happens next depends on who is scanning: a student
+          // asks for the tool and the crib decides, staff issue or receive it
+          // at the counter. Neither is confirmed from this page.
+          student
+            ? {
+                icon: ArrowRight,
+                title: 'Request it, or hand it back',
+                text: 'A free tool opens a request for staff to approve — approving issues it to you. One you are holding opens the return instead.',
+              }
+            : {
+                icon: ArrowRight,
+                title: 'Issue or receive',
+                text: 'A free tool opens the borrow desk; one that is out opens the return, and the inventory updates the moment it is confirmed.',
+              },
         ].map(({ icon: Icon, title, text }, index) => (
           <li key={title} className="flex gap-3">
             <span
@@ -545,8 +558,11 @@ function ScanResult({ tool, loan, can, onNavigate, onReset }) {
       <div className="p-4 pt-5 sm:p-5 sm:pt-6">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
+            {/* `from=scan` is what keeps the tool page's back control pointing
+                at the scanner rather than at the inventory — the scan is where
+                this person came from, so it is where "back" means. */}
             <Link
-              to={`/tools/${tool.id}`}
+              to={`/tools/${tool.id}?from=scan`}
               className="block truncate text-lg font-extrabold leading-tight hover:underline"
             >
               {tool.name}
@@ -642,20 +658,26 @@ function ScanResult({ tool, loan, can, onNavigate, onReset }) {
             <button
               type="button"
               onClick={() => onNavigate(`/return?tool=${tool.id}`)}
-              className="btn btn-success btn-lg w-full"
+              className={cx(
+                'btn btn-lg w-full',
+                txnService.returnRequested(activeLoan) ? 'btn-outline' : 'btn-success',
+              )}
             >
               <Undo2 className="h-4 w-4" />
-              Return tool
+              {txnService.returnRequested(activeLoan) ? 'Return requested' : 'Return tool'}
             </button>
           )}
+          {/* Scanning identifies the tool; the borrowing itself starts as one
+              request, on the one page that creates them. An approved request
+              is collected from Requests, not from here. */}
           {canBorrow && (
             <button
               type="button"
-              onClick={() => onNavigate(`/borrow?tool=${tool.id}`)}
+              onClick={() => onNavigate(`/requests/new?tool=${tool.id}`)}
               className="btn btn-primary btn-lg w-full"
             >
               <ArrowRight className="h-4 w-4" />
-              Borrow tool
+              Request to borrow
             </button>
           )}
           {activeLoan && !canReturn && (
@@ -664,15 +686,20 @@ function ScanResult({ tool, loan, can, onNavigate, onReset }) {
             </p>
           )}
 
+          {/* The tool's timeline is laboratory record-keeping, so it is offered
+              only to whoever may read everyone's transactions. A student gets
+              the record itself and the action, and nothing between them. */}
           <div className="flex gap-2">
-            <Link to={`/tools/${tool.id}`} className="btn btn-outline flex-1">
+            <Link to={`/tools/${tool.id}?from=scan`} className="btn btn-outline flex-1">
               <Wrench className="h-4 w-4" />
               Tool details
             </Link>
-            <Link to={`/tools/${tool.id}/history`} className="btn btn-outline flex-1">
-              <History className="h-4 w-4" />
-              History
-            </Link>
+            {can(PERM.TXN_VIEW_ALL) && (
+              <Link to={`/tools/${tool.id}/history`} className="btn btn-outline flex-1">
+                <History className="h-4 w-4" />
+                History
+              </Link>
+            )}
           </div>
 
           <button type="button" onClick={onReset} className="btn btn-ghost w-full">

@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -15,6 +16,7 @@ import {
   UserCheck,
 } from 'lucide-react'
 import {
+  DetailItem,
   EmptyState,
   PageHeader,
   SectionCard,
@@ -23,9 +25,11 @@ import {
   StatusBadge,
   ConditionBadge,
 } from '../components/ui'
-import { useTool, useToolActivity } from '../hooks'
-import { cx } from '../utils/helpers'
-import { formatDate, formatTime, timeAgo } from '../utils/dates'
+import { useTool, useToolActivity, useToolTransactions } from '../hooks'
+import { useApp } from '../context/AppContext'
+import { visibleTransactions } from '../utils/permissions'
+import { cx, sortBy } from '../utils/helpers'
+import { formatDate, formatDateTime, formatTime, timeAgo } from '../utils/dates'
 import { ACTIVITY } from '../utils/constants'
 
 /**
@@ -50,8 +54,58 @@ const DEFAULT_STYLE = { icon: ClipboardList, dot: 'bg-slate-400', label: 'Activi
 
 export default function ToolHistoryPage() {
   const { id } = useParams()
+  const { user } = useApp()
   const { tool, loading } = useTool(id)
-  const { entries, loading: loadingEntries } = useToolActivity(id)
+  const { entries: logEntries, loading: loadingLog, allowed } = useToolActivity(id)
+
+  // The loans themselves, for both audiences and for two different reasons.
+  //
+  // Staff need them to answer the question this page is opened for — who had
+  // this tool last, when it went out and whether it came back — which the
+  // activity log narrates but does not state. A student needs them because the
+  // log is staff-only, so their timeline is built from their own loans instead.
+  //
+  // The same read serves both safely: the policies return a student only their
+  // own rows, the data layer sends the same filter, and `useToolTransactions`
+  // applies `visibleTransactions` on top.
+  const { transactions, loading: loadingTxns, error: txnError } = useToolTransactions(id)
+
+  const ownEntries = useMemo(() => {
+    if (allowed) return []
+    const mine = visibleTransactions(user, transactions)
+    const rows = mine.flatMap((txn) => [
+      {
+        id: `${txn.id}-borrow`,
+        action: ACTIVITY.TOOL_BORROWED,
+        createdAt: txn.borrowDate,
+        userName: txn.userName,
+        message: `Borrowed by ${txn.userName}`,
+      },
+      ...(txn.returnDate
+        ? [
+            {
+              id: `${txn.id}-return`,
+              action: ACTIVITY.TOOL_RETURNED,
+              createdAt: txn.returnDate,
+              userName: txn.userName,
+              message: txn.conditionIn
+                ? `Returned in ${txn.conditionIn} condition`
+                : 'Returned',
+            },
+          ]
+        : []),
+    ])
+    return sortBy(rows, 'createdAt', 'desc')
+  }, [allowed, user, transactions])
+
+  const entries = allowed ? logEntries : ownEntries
+  const loadingEntries = allowed ? loadingLog : loadingTxns
+
+  // The most recent loan on this tool — `listForTool` sorts newest first, and
+  // the list is already scoped to what this role may read, so for staff this is
+  // the tool's last borrower and for a student it is their own last loan.
+  const lastLoan = transactions[0] ?? null
+  const stillOut = !!lastLoan && !lastLoan.returnDate
 
   // The same shape this page settles into: back link, heading, timeline card.
   if (loading && !tool) {
@@ -105,7 +159,9 @@ export default function ToolHistoryPage() {
       </Link>
 
       <PageHeader
-        title="Tool history"
+        // Staff read the tool's laboratory record; a student reads their own
+        // borrowings of it, so the page is named for what each of them sees.
+        title={allowed ? 'Tool history' : 'Borrow history'}
         description={`${tool.name} · ${tool.id}`}
         icon={History}
       >
@@ -113,18 +169,67 @@ export default function ToolHistoryPage() {
         <ConditionBadge condition={tool.condition} />
       </PageHeader>
 
+      {/* The question this page is opened to answer, stated rather than left to
+          be read out of the timeline: who had the tool last, when it went out
+          and whether it is back. Built from the same borrowing records the timeline
+          below is, so it can never disagree with them. Staff only — an
+          instructor or administrator needs to know who holds a tool, while a
+          student sees nothing but their own timeline below. */}
+      {allowed && lastLoan && (
+        <SectionCard
+          className="mb-4"
+          title={stillOut ? 'Currently with' : 'Last used by'}
+          description="The most recent borrowing recorded against this tool"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="flex items-center gap-1.5 text-sm font-bold">
+                <UserCheck className="h-4 w-4 shrink-0 opacity-60" />
+                <span className="truncate">{lastLoan.userName}</span>
+              </p>
+              <p className="subtle mono mt-0.5 text-[11px]">{lastLoan.id}</p>
+            </div>
+            <StatusBadge status={lastLoan.status} />
+          </div>
+
+          <dl className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3">
+            <DetailItem label="Borrowed" className="min-w-0" mono>
+              {formatDateTime(lastLoan.borrowDate)}
+            </DetailItem>
+            <DetailItem label="Due" className="min-w-0" mono>
+              {formatDate(lastLoan.dueDate)}
+            </DetailItem>
+            <DetailItem label="Returned" className="min-w-0" mono>
+              {lastLoan.returnDate ? formatDateTime(lastLoan.returnDate) : 'Still out'}
+            </DetailItem>
+          </dl>
+        </SectionCard>
+      )}
+
       <SectionCard
         title="Activity timeline"
-        description={`${entries.length} event${entries.length === 1 ? '' : 's'} recorded for this tool`}
+        description={`${entries.length} event${entries.length === 1 ? '' : 's'} ${
+          allowed ? 'recorded for this tool' : 'recorded on your borrowings of this tool'
+        }`}
         bodyClassName="p-0"
       >
         {loadingEntries && !entries.length ? (
           <SkeletonRows rows={5} columns={2} />
+        ) : !allowed && txnError ? (
+          <EmptyState
+            icon={History}
+            title="This history could not be loaded."
+            description={txnError.message ?? 'Please try again in a moment.'}
+          />
         ) : entries.length === 0 ? (
           <EmptyState
             icon={History}
             title="No history recorded yet."
-            description="Borrowing, returns and maintenance for this tool will appear here."
+            description={
+              allowed
+                ? 'Borrowing, returns and maintenance for this tool will appear here.'
+                : 'Your own borrowing and returns for this tool will appear here.'
+            }
           />
         ) : (
           <div className="p-4 sm:p-5">

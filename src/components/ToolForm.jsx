@@ -1,13 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { Camera, ImagePlus, Trash2 } from 'lucide-react'
 import {
+  Field,
   Modal,
   SelectField,
   Spinner,
   TextAreaField,
   TextField,
 } from './ui'
+import ToolImage from './ToolImage'
+import * as storage from '../services/storage'
 import { useToast } from '../context/ToastContext'
 import { useApp } from '../context/AppContext'
+import { useMediaQuery } from '../hooks'
 import * as toolService from '../services/tools'
 import { ValidationError } from '../services/tools'
 import {
@@ -19,6 +24,17 @@ import {
   TOOL_STATUSES,
 } from '../utils/constants'
 import { toDateInput, fromDateInput, addDaysISO } from '../utils/dates'
+
+/**
+ * Does this browser understand `<input capture>` at all?
+ *
+ * Read once from the element itself rather than sniffed from the user agent.
+ * The companion half — whether the device has a camera worth opening — is the
+ * coarse-pointer query below, which is what separates a phone or tablet from a
+ * desktop where `capture` is understood but only reopens the file picker.
+ */
+const CAPTURE_SUPPORTED =
+  typeof document !== 'undefined' && 'capture' in document.createElement('input')
 
 const BLANK = {
   id: '',
@@ -35,6 +51,7 @@ const BLANK = {
   lastMaintenanceDate: '',
   nextMaintenanceDate: '',
   notes: '',
+  imageUrl: null,
 }
 
 /**
@@ -48,13 +65,27 @@ export default function ToolForm({ open, onClose, tool, onSaved }) {
   const toast = useToast()
   const isEdit = !!tool
 
+  // A touch device — a phone or tablet, installed or in a tab — is where
+  // `capture` opens the camera rather than the file picker.
+  const touchDevice = useMediaQuery('(pointer: coarse)')
+  const cameraSupported = CAPTURE_SUPPORTED && touchDevice
+
   const [form, setForm] = useState(BLANK)
   const [errors, setErrors] = useState({})
   const [saving, setSaving] = useState(false)
 
+  // The picture is uploaded on selection so the dialog can show it, which means
+  // the object can outlive the choice: a replaced or removed URL is retired
+  // once the record no longer points at it, and only then.
+  const [uploading, setUploading] = useState(false)
+  const fileInput = useRef(null)
+  const cameraInput = useRef(null)
+  const retired = useRef([])
+
   useEffect(() => {
     if (!open) return
     setErrors({})
+    retired.current = []
 
     if (tool) {
       setForm({
@@ -84,6 +115,42 @@ export default function ToolForm({ open, onClose, tool, onSaved }) {
     setErrors((e) => ({ ...e, [field]: undefined }))
   }
 
+  /** Upload the chosen file and point the form at it. */
+  const pickImage = async (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = '' // so choosing the same file twice still fires
+    if (!file) return
+
+    const invalid = storage.validateImageFile(file)
+    if (invalid) {
+      setErrors((e) => ({ ...e, imageUrl: invalid }))
+      return
+    }
+
+    setUploading(true)
+    setErrors((e) => ({ ...e, imageUrl: undefined }))
+    try {
+      const url = await storage.uploadToolImage(file, form.id || tool?.id)
+      // Replacing: the picture being displaced is retired once the save lands.
+      if (form.imageUrl) retired.current.push(form.imageUrl)
+      setForm((f) => ({ ...f, imageUrl: url }))
+    } catch (err) {
+      const message =
+        err instanceof ValidationError
+          ? (err.errors?.imageUrl ?? 'That image could not be used.')
+          : (err.message ?? 'The image could not be uploaded.')
+      setErrors((e) => ({ ...e, imageUrl: message }))
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const removeImage = () => {
+    if (form.imageUrl) retired.current.push(form.imageUrl)
+    setForm((f) => ({ ...f, imageUrl: null }))
+    setErrors((e) => ({ ...e, imageUrl: undefined }))
+  }
+
   const submit = async (event) => {
     event.preventDefault()
     setSaving(true)
@@ -100,6 +167,13 @@ export default function ToolForm({ open, onClose, tool, onSaved }) {
       const saved = isEdit
         ? await toolService.updateTool(tool.id, payload, user)
         : await toolService.create(payload, user)
+      // The record is saved and no longer points at these, so the objects they
+      // named are removed. Best-effort by design — see `services/storage.js`.
+      for (const url of retired.current) {
+        if (url !== saved.imageUrl) await storage.removeToolImage(url)
+      }
+      retired.current = []
+
       toast.success(
         isEdit ? `${saved.name} was updated.` : `${saved.name} was added to the inventory.`,
         { title: isEdit ? 'Tool updated' : 'Tool added' },
@@ -197,6 +271,84 @@ export default function ToolForm({ open, onClose, tool, onSaved }) {
             placeholder="What the tool is used for in the workshop."
             rows={2}
           />
+
+          {/* Optional throughout: a tool without a picture shows the same tile
+              the inventory draws for it, and saves exactly as before. */}
+          <Field
+            label="Picture"
+            error={errors.imageUrl}
+            hint={
+              errors.imageUrl
+                ? undefined
+                : 'Optional. JPEG, PNG or WebP, up to 5 MB — shown on the tool card and its page.'
+            }
+          >
+            <div className="mt-1 flex items-center gap-3">
+              <ToolImage
+                tool={form}
+                className="h-20 w-20 border"
+                rounded="rounded-xl"
+                alt={form.name ? `Picture of ${form.name}` : 'Tool picture'}
+              />
+              <div className="flex min-w-0 flex-wrap gap-2">
+                <input
+                  ref={fileInput}
+                  type="file"
+                  accept={storage.IMAGE_ACCEPT}
+                  onChange={pickImage}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={() => fileInput.current?.click()}
+                  disabled={uploading || saving}
+                >
+                  {uploading ? <Spinner /> : <ImagePlus className="h-4 w-4" />}
+                  {form.imageUrl ? 'Replace' : 'Upload'}
+                </button>
+
+                {/* The camera, through the browser's own capability rather than
+                    a library: `capture` asks a phone to open the camera app
+                    directly, and the file it hands back is an ordinary File —
+                    so it goes through the same validation, upload and save as
+                    a picture chosen from disk. Offered only where the input
+                    actually supports it. */}
+                {cameraSupported && (
+                  <>
+                    <input
+                      ref={cameraInput}
+                      type="file"
+                      accept={storage.IMAGE_ACCEPT}
+                      capture="environment"
+                      onChange={pickImage}
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-sm"
+                      onClick={() => cameraInput.current?.click()}
+                      disabled={uploading || saving}
+                    >
+                      <Camera className="h-4 w-4" />
+                      Take a picture
+                    </button>
+                  </>
+                )}
+                {form.imageUrl && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={removeImage}
+                    disabled={uploading || saving}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Remove
+                  </button>
+                )}
+              </div>
+            </div>
+          </Field>
         </fieldset>
 
         <fieldset className="space-y-4 border-t pt-5">

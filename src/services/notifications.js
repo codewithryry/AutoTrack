@@ -1,7 +1,7 @@
 import * as db from './db'
 import { COLLECTIONS } from './db'
 import { NOTIF_TYPE } from '../utils/constants'
-import { isAdmin } from '../utils/permissions'
+import { isAdmin, isStaff } from '../utils/permissions'
 import { uid } from '../utils/helpers'
 import { nowISO } from '../utils/dates'
 
@@ -83,11 +83,27 @@ export async function listAll() {
  * (borrowed, returned, overdue, damaged/lost, maintenance, system) plus anything
  * addressed to them — is exactly the broadcast-plus-own rule below, so the flag
  * is clamped rather than trusted.
+ *
+ * An unaddressed notification (`userId: null`) splits in two. Maintenance and
+ * system alerts — a tool out for service, one reported lost or damaged out of
+ * circulation — are laboratory announcements, and a student is meant to read
+ * those: they change what is on the shelf. The loan traffic is not: "Tool
+ * borrowed — issued to X", "Tool returned by X" and the staff overdue line are
+ * written about one person's transaction, for the tool room. A student reads
+ * those only as their own copy, addressed to them by the domain services.
  */
+const STUDENT_BROADCAST_TYPES = [NOTIF_TYPE.MAINTENANCE, NOTIF_TYPE.SYSTEM]
+
 export async function listFor(user, { seeAll = false } = {}) {
   const rows = await listAll()
   if (!user) return seeAll ? rows : []
   if (seeAll && isAdmin(user)) return rows
+  if (!isStaff(user)) {
+    return rows.filter(
+      (n) =>
+        n.userId === user.id || (!n.userId && STUDENT_BROADCAST_TYPES.includes(n.type)),
+    )
+  }
   return rows.filter((n) => !n.userId || n.userId === user.id)
 }
 
@@ -149,9 +165,22 @@ export async function removeForTool(toolId) {
   return db.removeWhere(COLLECTIONS.notifications, (n) => n.toolId === toolId)
 }
 
+/** The alerts that open a conversation, dropped with the conversation itself. */
+export async function removeForConversation(conversationId) {
+  const link = `/messages/${conversationId}`
+  return db.removeWhere(COLLECTIONS.notifications, (n) => n.link === link)
+}
+
 /* ------------------------------------------------------------------ *
  * Builders — one place per notification wording, so the copy in the
  * notification centre always matches the copy in a toast.
+ *
+ * Each builder states who it is for. The ones with `userId: null` are the
+ * laboratory-wide operational stream and are read by staff only; the `*ByYou`
+ * and `dueSoon` builders are addressed to the borrower and are what a student
+ * sees about their own loan. Every one carries a `dedupeKey`, so the same event
+ * cannot be written twice — including once by the staff path and once by the
+ * borrower path.
  * ------------------------------------------------------------------ */
 
 export const templates = {
@@ -163,6 +192,22 @@ export const templates = {
     toolId: tool.id,
     toolName: tool.name,
     userId: null,
+    transactionId: txn.id,
+    link: `/tools/${tool.id}`,
+  }),
+
+  /** The borrower's own overdue alert — the staff one above is not theirs. */
+  overdueForYou: (tool, txn, userId) => ({
+    type: NOTIF_TYPE.OVERDUE,
+    title: 'Your tool is overdue',
+    message: `${tool.name} was due back on ${new Date(txn.dueDate).toLocaleDateString('en-US', {
+      month: 'long',
+      day: 'numeric',
+    })}. Please return it.`,
+    dedupeKey: `overdue:${txn.id}:${userId ?? ''}`,
+    toolId: tool.id,
+    toolName: tool.name,
+    userId: userId ?? null,
     transactionId: txn.id,
     link: `/tools/${tool.id}`,
   }),
@@ -182,10 +227,12 @@ export const templates = {
     link: `/tools/${tool.id}`,
   }),
 
+  /** Staff stream: a tool left the crib. */
   borrowed: (tool, txn, user) => ({
     type: NOTIF_TYPE.BORROWED,
     title: 'Tool borrowed',
     message: `${tool.name} was issued to ${user?.fullName ?? 'a user'}.`,
+    dedupeKey: `borrowed:${txn.id}`,
     toolId: tool.id,
     toolName: tool.name,
     userId: null,
@@ -193,10 +240,27 @@ export const templates = {
     link: `/tools/${tool.id}`,
   }),
 
+  /** The borrower's own copy of the same event, in their own terms. */
+  borrowedByYou: (tool, txn, user) => ({
+    type: NOTIF_TYPE.BORROWED,
+    title: 'Tool issued to you',
+    message: `${tool.name} is now checked out to you. It is due back on ${new Date(
+      txn.dueDate,
+    ).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}.`,
+    dedupeKey: `borrowed:${txn.id}:${user?.id ?? ''}`,
+    toolId: tool.id,
+    toolName: tool.name,
+    userId: user?.id ?? null,
+    transactionId: txn.id,
+    link: `/tools/${tool.id}`,
+  }),
+
+  /** Staff stream: a tool came back. */
   returned: (tool, txn, user) => ({
     type: NOTIF_TYPE.RETURNED,
     title: 'Tool returned',
     message: `${tool.name} was successfully returned by ${user?.fullName ?? 'a user'}.`,
+    dedupeKey: `returned:${txn.id}`,
     toolId: tool.id,
     toolName: tool.name,
     userId: null,
@@ -204,12 +268,29 @@ export const templates = {
     link: `/tools/${tool.id}`,
   }),
 
+  /** The borrower's own copy: their loan is closed. */
+  returnedByYou: (tool, txn, userId, { damaged = false } = {}) => ({
+    type: damaged ? NOTIF_TYPE.DAMAGED : NOTIF_TYPE.RETURNED,
+    title: damaged ? 'Return recorded as damaged' : 'Return recorded',
+    message: damaged
+      ? `${tool.name} was returned in a damaged condition. Your loan is closed and the tool has been pulled from circulation.`
+      : `${tool.name} was returned. Your loan is closed.`,
+    dedupeKey: `returned:${txn?.id ?? ''}:${userId ?? ''}`,
+    toolId: tool.id,
+    toolName: tool.name,
+    userId: userId ?? null,
+    transactionId: txn?.id ?? null,
+    link: `/tools/${tool.id}`,
+  }),
+
+  /** Staff stream: a breakage to deal with. */
   damaged: (tool, txn, user) => ({
     type: NOTIF_TYPE.DAMAGED,
     title: 'Damaged tool returned',
     message: `${tool.name} was returned in a damaged condition by ${
       user?.fullName ?? 'a user'
     }. It has been pulled from circulation.`,
+    dedupeKey: txn?.id ? `damaged:${txn.id}` : null,
     toolId: tool.id,
     toolName: tool.name,
     userId: null,

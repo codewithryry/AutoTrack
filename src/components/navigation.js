@@ -2,14 +2,15 @@ import {
   BarChart3,
   Bell,
   LayoutDashboard,
+  MessageSquare,
+  Package,
   QrCode,
-  Repeat,
   Settings,
   Undo2,
   UserRound,
   Users,
-  Wrench,
   ClipboardList,
+  FileCheck2,
   HardHat,
 } from 'lucide-react'
 import { PERM } from '../utils/permissions'
@@ -23,16 +24,24 @@ import { ROLE } from '../utils/constants'
  * `App.jsx`. Both are listed together so the two can never drift apart — and
  * both are enforced again by the read scoping in `services/db.js`.
  *
- *   Admin       Dashboard · Tools · Scan · Borrow/Return · Transactions ·
- *               Users · Maintenance · Notifications · Reports · Settings
- *   Instructor  Dashboard · Tools · Scan · Borrow/Return · Transactions ·
- *               Maintenance · Notifications
+ *   Admin       Dashboard · Inventory · Scan · Borrow/Return · Transactions ·
+ *               Requests · Messages · Users · Maintenance ·
+ *               Notifications · Reports · Settings
+ *   Instructor  Dashboard · Inventory · Scan · Borrow/Return · Transactions ·
+ *               Requests · Messages · Maintenance · Notifications
  *               (arranged for the tool crib — see the Instructor block below:
  *                the rail leads with inventory, transactions and maintenance and
  *                lifts Scan/Borrow/Return into their own action group, and the
- *                bottom bar is Home · Tools · Scan · Transactions · Maintenance.)
- *   Student     Dashboard · Tools · Scan · Borrow/Return · Transactions ·
- *               Notifications
+ *                bottom bar is Home · Requests · Scan · Messages · Transactions.)
+ *   Student     Dashboard · Inventory · Request · Scan · Return · Messages ·
+ *               Transactions
+ *
+ * The student's list is the borrowing lifecycle in order, and each destination
+ * owns exactly one step of it: Inventory and Scan identify a tool, Request is
+ * where one ask is raised and followed to Approved, Return closes a loan that
+ * is actually out, and Transactions is the history afterwards. Borrow / Return
+ * is the crib's own desk and is staff-only — a student never issues a tool to
+ * themselves from it. Messages is independent of all of it.
  */
 
 const ALL_ROLES = [ROLE.ADMIN, ROLE.INSTRUCTOR, ROLE.STUDENT]
@@ -48,10 +57,12 @@ export const NAV_ITEMS = [
     roles: ALL_ROLES,
   },
   {
+    // The tool inventory, named as what it is for every role. The route, the
+    // page and the records behind it are unchanged — only the name is.
     to: '/tools',
-    label: 'Tools',
-    icon: Wrench,
-    description: 'Inventory',
+    label: 'Inventory',
+    icon: Package,
+    description: 'Laboratory tool inventory',
     roles: ALL_ROLES,
     permission: PERM.TOOL_VIEW,
   },
@@ -63,20 +74,47 @@ export const NAV_ITEMS = [
     roles: ALL_ROLES,
     primary: true,
   },
+  // The crib's counter — issuing an approved tool and receiving it back — is
+  // not a destination any more: staff reach it from the request it belongs to,
+  // on Requests, so the same handover is not offered from two places. The route
+  // and its guard are unchanged.
   {
-    to: '/borrow',
-    label: 'Borrow / Return',
-    icon: Repeat,
-    description: 'Issue and receive tools',
-    roles: ALL_ROLES,
-    permission: PERM.BORROW,
+    // Handing a tool back. Staff reach the same route from the borrow desk and
+    // their quick actions, so it is listed as a destination for the student,
+    // for whom returning is a step of their own lifecycle.
+    to: '/return',
+    label: 'Return',
+    icon: Undo2,
+    description: 'Hand a borrowed tool back',
+    roles: [ROLE.STUDENT],
+    permission: PERM.RETURN,
   },
   {
+    // Borrowing history. Staff read the laboratory's; a student reads their
+    // own — the data layer scopes the same page to each.
     to: '/transactions',
     label: 'Transactions',
     icon: ClipboardList,
     description: 'Borrowing history',
     roles: ALL_ROLES,
+  },
+  {
+    // Staff work the queue of everyone's asks and decide them; a student sees
+    // their own requests and their states. One page, scoped by role.
+    to: '/requests',
+    label: 'Requests',
+    icon: FileCheck2,
+    description: 'Tool requests',
+    roles: ALL_ROLES,
+    permission: PERM.REQUEST_CREATE,
+  },
+  {
+    to: '/messages',
+    label: 'Messages',
+    icon: MessageSquare,
+    description: 'Conversations',
+    roles: ALL_ROLES,
+    permission: PERM.MESSAGE_SEND,
   },
   {
     to: '/users',
@@ -119,24 +157,64 @@ export const NAV_ITEMS = [
   },
 ]
 
-/** Four destinations plus the scan action for the mobile bottom bar. */
-export const MOBILE_NAV = ['/dashboard', '/tools', '/scan', '/transactions', '/notifications']
+/**
+ * The student's bottom bar — their only navigation, five fixed slots:
+ * Dashboard · Inventory · action · Messages · Transactions.
+ *
+ * The middle slot is the raised action rather than a destination: Scan by
+ * default, and the page's own "+" while Requests or Messages is open (see the
+ * slots in `AppLayout`). Requests is reached from the inventory — asking for a
+ * tool is what starts one — and Return from the borrowing on Transactions.
+ * Notifications sits beside the account pill in the top bar.
+ */
+export const MOBILE_NAV = ['/dashboard', '/tools', '/scan', '/messages', '/transactions']
 
 /**
- * The administrator's bottom bar: Home · Tools · Scan · Transactions, plus a
+ * The student's rail, in lifecycle order rather than in the shared list's
+ * order. Same items, same permissions — only the sequence differs, exactly as
+ * `instructorRailItems` does for the crib.
+ */
+const STUDENT_RAIL_ORDER = [
+  '/dashboard',
+  '/tools',
+  '/requests',
+  '/scan',
+  '/return',
+  '/messages',
+  '/transactions',
+]
+
+export function studentRailItems(items = []) {
+  return [...items].sort((a, b) => {
+    const ai = STUDENT_RAIL_ORDER.indexOf(a.to)
+    const bi = STUDENT_RAIL_ORDER.indexOf(b.to)
+    return (
+      (ai === -1 ? STUDENT_RAIL_ORDER.length : ai) - (bi === -1 ? STUDENT_RAIL_ORDER.length : bi)
+    )
+  })
+}
+
+/**
+ * The administrator's bottom bar: Home · Requests · Scan · Transactions, plus a
  * Menu slot the shell adds itself, which opens the drawer below. Notifications
  * leaves the bar because the bell now sits beside the account pill in the top
  * bar — same route, same badge.
  */
-export const ADMIN_MOBILE_NAV = ['/dashboard', '/tools', '/scan', '/transactions']
+export const ADMIN_MOBILE_NAV = ['/dashboard', '/requests', '/scan', '/transactions']
 
 /**
  * The administrator's drawer: only what the bottom bar and the top bar do not
- * already carry. Dashboard, Tools, Transactions and Settings are reached from
- * the bar, Notifications from the bell, and account actions — Sign out included
- * — from the account dropdown, so none of them is repeated here.
+ * already carry. Dashboard, Requests and Transactions are reached from the bar,
+ * Notifications from the bell, and account actions — Sign out included — from
+ * the account dropdown, so none of them is repeated here.
  */
-export const ADMIN_DRAWER_NAV = ['/borrow', '/users', '/maintenance', '/reports']
+export const ADMIN_DRAWER_NAV = [
+  '/tools',
+  '/messages',
+  '/users',
+  '/maintenance',
+  '/reports',
+]
 
 /* ------------------------------------------------------------------ *
  * Instructor — the laboratory / tool-crib operational role
@@ -156,8 +234,10 @@ export const ADMIN_DRAWER_NAV = ['/borrow', '/users', '/maintenance', '/reports'
 const INSTRUCTOR_RAIL_ORDER = [
   '/dashboard',
   '/tools',
+  '/requests',
   '/transactions',
   '/maintenance',
+  '/messages',
   '/notifications',
 ]
 
@@ -181,36 +261,21 @@ export const INSTRUCTOR_QUICK_ACTIONS = [
     permission: null,
     primary: true,
   },
-  {
-    to: '/borrow',
-    label: 'Borrow',
-    icon: Repeat,
-    description: 'Issue a tool',
-    permission: PERM.BORROW,
-  },
-  {
-    to: '/return',
-    label: 'Return',
-    icon: Undo2,
-    description: 'Receive a tool',
-    permission: PERM.RETURN,
-  },
 ]
 
 /**
- * The instructor's bottom bar: Home · Tools · Scan · Transactions · Maintenance.
+ * The instructor's bottom bar: Home · Requests · Scan · Messages · Transactions.
  *
- * Scan keeps the middle slot, where the raised primary button is drawn. Every
- * slot is a real destination — there is no "More" control and no second menu:
- * Notifications sits beside the account pill in the top bar, and the counter
- * actions are on the dashboard hero and the Scan result.
+ * Scan keeps the middle slot, where the raised primary button is drawn. Tools
+ * and Maintenance leave the bar — both are reached from the dashboard cards —
+ * and Notifications sits beside the account pill in the top bar.
  */
 export const INSTRUCTOR_MOBILE_NAV = [
   '/dashboard',
-  '/tools',
+  '/requests',
   '/scan',
+  '/messages',
   '/transactions',
-  '/maintenance',
 ]
 
 /**

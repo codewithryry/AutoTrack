@@ -40,9 +40,15 @@ const check = (name, fn) => {
   }
 }
 
-const { NAV_ITEMS, navItemsForRole, visibleNavItems } = await import(
-  '../src/components/navigation.js'
-)
+const {
+  NAV_ITEMS,
+  navItemsForRole,
+  visibleNavItems,
+  mobileNavForRole,
+  studentRailItems,
+  ADMIN_MOBILE_NAV,
+  INSTRUCTOR_MOBILE_NAV,
+} = await import('../src/components/navigation.js')
 const perms = await import('../src/utils/permissions.js')
 const { ROLE } = await import('../src/utils/constants.js')
 
@@ -53,13 +59,14 @@ const can = (role) => (permission) => perms.can({ role }, permission)
 
 console.log('\n— role-based navigation —')
 
-check('admin sidebar has all ten destinations', () => {
+check('admin sidebar has every destination', () => {
   assert.deepEqual(labels(navItemsForRole(ROLE.ADMIN)), [
     'Dashboard',
-    'Tools',
+    'Inventory',
     'Scan',
-    'Borrow / Return',
     'Transactions',
+    'Requests',
+    'Messages',
     'Users',
     'Maintenance',
     'Notifications',
@@ -71,24 +78,64 @@ check('admin sidebar has all ten destinations', () => {
 check('instructor sidebar excludes users, reports and settings', () => {
   assert.deepEqual(labels(navItemsForRole(ROLE.INSTRUCTOR)), [
     'Dashboard',
-    'Tools',
+    'Inventory',
     'Scan',
-    'Borrow / Return',
     'Transactions',
+    'Requests',
+    'Messages',
     'Maintenance',
     'Notifications',
   ])
 })
 
-check('student sidebar is the six permitted destinations', () => {
-  assert.deepEqual(labels(navItemsForRole(ROLE.STUDENT)), [
+check('student sidebar is the borrowing lifecycle, in order', () => {
+  // Each destination owns one step: Inventory and Scan identify a tool,
+  // Requests is where one ask lives from Pending to Approved to collected,
+  // Return closes a loan, Transactions is the history afterwards.
+  assert.deepEqual(labels(studentRailItems(navItemsForRole(ROLE.STUDENT))), [
     'Dashboard',
-    'Tools',
+    'Inventory',
+    'Requests',
     'Scan',
-    'Borrow / Return',
+    'Return',
+    'Messages',
     'Transactions',
     'Notifications',
   ])
+})
+
+check('the counter is staff-only: a student never issues a tool to themselves', () => {
+  // The counter is no longer a destination for anybody — staff reach /borrow
+  // from the request it belongs to — so what has to hold is that no role's
+  // navigation offers it, and that the permission behind it stays with staff.
+  for (const role of [ROLE.ADMIN, ROLE.INSTRUCTOR, ROLE.STUDENT]) {
+    assert.ok(!navItemsForRole(role).some((i) => i.to === '/borrow'), role)
+    assert.ok(!mobileNavForRole(role).includes('/borrow'), role)
+  }
+  assert.equal(perms.can({ role: ROLE.INSTRUCTOR }, perms.PERM.BORROW_FOR_OTHERS), true)
+  // And the permission behind it says the same thing.
+  assert.equal(perms.can({ role: ROLE.STUDENT }, perms.PERM.BORROW_FOR_OTHERS), false)
+})
+
+check('requests are a destination for every role', () => {
+  for (const role of [ROLE.ADMIN, ROLE.INSTRUCTOR, ROLE.STUDENT]) {
+    assert.ok(labels(navItemsForRole(role)).includes('Requests'), role)
+  }
+})
+
+check('the student bottom bar is the lifecycle, with Scan in the middle', () => {
+  // Five fixed slots with the raised action in the middle; Requests is reached
+  // from the inventory and Return from the borrowing on Transactions.
+  assert.deepEqual(mobileNavForRole(ROLE.STUDENT), [
+    '/dashboard',
+    '/tools',
+    '/scan',
+    '/messages',
+    '/transactions',
+  ])
+  assert.ok(ADMIN_MOBILE_NAV.includes('/requests'))
+  assert.ok(INSTRUCTOR_MOBILE_NAV.includes('/requests'))
+  assert.ok(!INSTRUCTOR_MOBILE_NAV.includes('/tools'), 'staff bars keep their own layout')
 })
 
 check('the three sidebars are genuinely different', () => {
@@ -120,10 +167,12 @@ console.log('\n— route guards —')
 const app = read('src/App.jsx')
 
 check('every admin-only route is guarded, not just hidden', () => {
+  // `/settings` is deliberately absent: every role has preferences of its own
+  // there, and the laboratory configuration inside the page is gated on
+  // SETTINGS_VIEW / SETTINGS_EDIT / DATA_MANAGE instead — checked below.
   for (const [route, permission] of [
     ['/users', 'PERM.USER_MANAGE'],
     ['/reports', 'PERM.REPORTS_VIEW'],
-    ['/settings', 'PERM.SETTINGS_VIEW'],
     ['/maintenance', 'PERM.MAINTENANCE_VIEW'],
   ]) {
     const pattern = new RegExp(
@@ -131,6 +180,37 @@ check('every admin-only route is guarded, not just hidden', () => {
     )
     assert.match(app, pattern, `${route} must be wrapped in RequirePermission ${permission}`)
   }
+})
+
+check('the settings page gates the laboratory configuration itself', () => {
+  const page = read(join('src', 'pages', 'SettingsPage.jsx'))
+  for (const permission of ['SETTINGS_VIEW', 'SETTINGS_EDIT', 'DATA_MANAGE']) {
+    assert.match(page, new RegExp(`PERM\\.${permission}`), `${permission} is not checked`)
+  }
+})
+
+check('deleting a conversation is bounded by membership, for every role', () => {
+  // Anybody in a thread may remove it, so the boundary is membership rather
+  // than role — and it is the same boundary in the service and in the policy.
+  const service = read(join('src', 'services', 'messages.js'))
+  const body = service.slice(service.indexOf('export async function remove(')).slice(0, 1600)
+  assert.match(body, /assertCan\(actor, PERM\.MESSAGE_SEND/)
+  assert.match(body, /membership\(conversationId, actor\.id\)/, 'the membership test is missing')
+  assert.match(body, /isBroadcast\(conversation\)/, 'the standing rooms must stay')
+  for (const role of [ROLE.ADMIN, ROLE.INSTRUCTOR, ROLE.STUDENT]) {
+    assert.equal(perms.can({ role }, perms.PERM.MESSAGE_SEND), true, role)
+  }
+  const sql = read(join('supabase', 'migrations', '0025_participants_can_delete_conversation.sql'))
+  assert.match(sql, /conversations_delete[\s\S]{0,240}?in_conversation\(id\)/)
+})
+
+check('clearing every conversation stays with the administrator', () => {
+  const service = read(join('src', 'services', 'messages.js'))
+  const body = service.slice(service.indexOf('export async function removeAll')).slice(0, 800)
+  assert.match(body, /assertCan\(actor, PERM\.DATA_MANAGE/)
+  assert.equal(perms.can({ role: ROLE.INSTRUCTOR }, perms.PERM.DATA_MANAGE), false)
+  assert.equal(perms.can({ role: ROLE.STUDENT }, perms.PERM.DATA_MANAGE), false)
+  assert.equal(perms.can({ role: ROLE.ADMIN }, perms.PERM.DATA_MANAGE), true)
 })
 
 check('admin-only routes are denied for instructors and students', () => {

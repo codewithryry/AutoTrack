@@ -14,13 +14,13 @@ import {
   Repeat,
   ShieldAlert,
   TrendingUp,
-  Undo2,
   UserCheck,
-  Users as UsersIcon,
+  Undo2,
   Wrench,
+  Users as UsersIcon,
 } from 'lucide-react'
 import Walkthrough, { usePageTour } from '../components/Walkthrough'
-import Mascot, { MascotGreeter } from '../components/Mascot'
+import { MascotGreeter } from '../components/Mascot'
 import StatCard from '../components/StatCard'
 import TransactionTable from '../components/TransactionTable'
 import TransactionDetail from '../components/TransactionDetail'
@@ -28,17 +28,76 @@ import {
   EmptyState,
   ErrorState,
   ProgressBar,
+  RequestStatusBadge,
   SectionCard,
   Skeleton,
   SkeletonCards,
   SkeletonRows,
 } from '../components/ui'
 import { useApp } from '../context/AppContext'
-import { useDashboard, useMediaQuery, useNotifications, useUsers } from '../hooks'
+import {
+  useDashboard,
+  useInbox,
+  useMediaQuery,
+  useNotifications,
+  useRequests,
+  useTransactions,
+  useUsers,
+} from '../hooks'
 import { pendingAccounts, pendingProfileChanges } from '../services/users'
 import { PERM, isInstructor, isStaff } from '../utils/permissions'
+import {
+  ACTIVE_TXN_STATUSES,
+  OPEN_REQUEST_STATUSES,
+  REQUEST_STATUS,
+} from '../utils/constants'
 import { cx, initials } from '../utils/helpers'
 import { dueLabel, formatDate, timeAgo } from '../utils/dates'
+
+/**
+ * The hero card's own action buttons.
+ *
+ * Pills rather than the app's square buttons: they sit inside a card beside the
+ * mascot, where a full-height `btn-lg` read as a form control rather than as a
+ * shortcut. Same routes, same order, same two variants — filled for the action
+ * that starts something, outlined for the one that closes it — and both are the
+ * same height, so a wrapped row still lines up.
+ */
+const HERO_ACTION_STYLE = { background: 'rgb(var(--accent))', color: 'rgb(var(--accent-contrast))' }
+
+const HERO_ACTION = {
+  // Each button takes the width its own label needs rather than a fixed one, so
+  // the whole label is always readable on one line. The primary is the larger of
+  // the two — it is the action the role starts from.
+  primary:
+    'inline-flex h-12 shrink items-center justify-center gap-2 whitespace-nowrap rounded-full ' +
+    'border border-transparent px-5 text-[14.5px] font-bold tracking-tight shadow-sm ' +
+    'transition-all hover:-translate-y-px hover:shadow-lift active:translate-y-0 ' +
+    'motion-reduce:transition-none',
+  // The second, quieter action beside it — same height, outlined rather than
+  // filled, so the pair reads as one primary and one secondary.
+  outline:
+    'inline-flex h-12 shrink items-center justify-center gap-2 whitespace-nowrap rounded-full ' +
+    'border px-4 text-[14px] font-bold tracking-tight transition-colors ' +
+    'hover:bg-black/[0.04] dark:hover:bg-white/[0.06] motion-reduce:transition-none',
+}
+
+/**
+ * The hero's actions: the same scan button in every role, and one secondary
+ * beside it — a student's returns, staff's queue — on the routes they already
+ * have.
+ */
+function HeroScanAction({ secondary }) {
+  return (
+    <>
+      <Link to="/scan" className={HERO_ACTION.primary} style={HERO_ACTION_STYLE}>
+        <QrCode className="h-4 w-4 shrink-0" />
+        Scan to request
+      </Link>
+      {secondary}
+    </>
+  )
+}
 
 const ACTIVITY_TONE = {
   tool_borrowed: 'bg-blue-500',
@@ -94,46 +153,82 @@ const ACTIVITY_TONE = {
  * get a purely informational hero.
  */
 function DashboardHero({
-  eyebrow,
   title,
   subtitle,
   signals,
   actions,
+  role,
   compact = false,
   ...rest // `data-tour`, so the greeting can be a walkthrough target
 }) {
   return (
+    // The greeting now sits on the same surface as the statistic tiles below
+    // it — `.tile`, the same radius, hairline, background and padding — so the
+    // top of the dashboard is a card like everything under it rather than a
+    // band of loose type. Nothing inside it changes: the same text, the same
+    // buttons and the same figure, laid out exactly as before.
+    //
     // `compact` is the student's desktop: the greeting gives back the height it
     // was taking above the fold so the tiles and the loan list start higher.
-    // The staff hero is unchanged.
     <section
       className={cx(
-        'flex items-end justify-between gap-3 sm:gap-8 lg:gap-12',
+        // The greeting sits at the top of the card and the figure at the bottom
+        // of it, the way the reference reads.
+        // A deeper, rounder card than the tiles under it, with room of its own:
+        // the greeting is the one thing above the fold, so it is given padding
+        // on both a phone and a desktop rather than the tiles' tight 12px.
+        // Back on a surface of its own — the same `tile` as the statistics row
+        // below, with a deeper radius and its own padding, so the greeting reads
+        // as the page's first card while the figure keeps the size it has.
+        'tile relative flex items-start justify-between gap-3 rounded-3xl sm:gap-8 lg:gap-12',
+        'px-4 py-4 sm:px-6 sm:py-5 lg:px-8 lg:py-6',
+        // Only as tall as the figure standing in it needs.
+        'min-[360px]:min-h-[236px] sm:min-h-[248px] lg:min-h-[260px]',
         compact ? 'mb-4 sm:mb-5 lg:mb-6' : 'mb-6 sm:mb-8',
       )}
       {...rest}
     >
-      <div className="min-w-0 flex-1 lg:max-w-[65ch]">
-        {eyebrow && (
-          <p className="subtle truncate text-[10px] font-bold uppercase tracking-[0.16em]">
-            {eyebrow}
-          </p>
-        )}
+      {/* The text and the buttons keep the left of the card to themselves: the
+          reserved gutter on the right is the mascot's, so neither ever runs
+          under the other at any width. */}
+      <div className="flex min-w-0 flex-1 flex-col self-stretch pr-[104px] min-[360px]:pr-[116px] sm:pr-[164px] lg:max-w-[65ch] lg:pr-[196px]">
+        {/* The greeting opens on the name itself — the laboratory line above it
+            said the same thing on every dashboard and is gone. */}
         <h1
           className={cx(
-            'mt-2 font-extrabold leading-[1.12] tracking-tight [overflow-wrap:anywhere] sm:truncate',
-            compact ? 'text-[21px] sm:text-[26px] lg:text-[32px]' : 'text-[21px] sm:text-[30px] lg:text-[38px]',
+            // Wrapped rather than cut off: a staff greeting carries a longer
+            // name than a student's, and it stays at full size and readable by
+            // taking a second line instead of ending in an ellipsis.
+            'mt-1.5 break-words font-extrabold leading-[1.12] tracking-tight sm:mt-2',
+            compact ? 'text-[21px] sm:text-[28px] lg:text-[32px]' : 'text-[21px] sm:text-[32px] lg:text-[38px]',
           )}
         >
           {title}
         </h1>
         {subtitle && (
-          <p className="muted mt-2 text-[13px] leading-snug sm:text-[15px] lg:text-base">
+          <p className="muted mt-1 line-clamp-2 text-[13.5px] leading-[1.45] sm:mt-2 sm:text-[15px] lg:text-base">
             {subtitle}
           </p>
         )}
         {actions && (
-          <div className="mt-4 flex flex-wrap items-center gap-2.5 lg:mt-5">{actions}</div>
+          // One row for every role, at full size. The buttons keep their
+          // `btn-lg` height, their text size and their whole label; only the
+          // side padding tightens on a narrow phone, which is what lets both
+          // sit on one line without a scroll. If a screen is narrower still,
+          // the row wraps rather than being swiped.
+          // Pushed to the bottom of the card by `mt-auto`, so the space that was
+          // left under it is taken up and the row sits level with the mascot's
+          // feet. It stays on one line and only wraps if a screen is narrower
+          // than both labels together.
+          // Both buttons sit on the bottom of the card, aligned with the text
+          // above them rather than centred under it, and wrap onto a second line
+          // only where a phone is too narrow for the pair.
+          // Directly under the greeting rather than pushed to the floor of the
+          // band, so the title, its line of status and the two buttons read as
+          // one block.
+          <div className="mt-7 flex flex-wrap items-center justify-start gap-x-2 gap-y-1.5 sm:mt-8 sm:gap-x-2.5 lg:mt-9">
+            {actions}
+          </div>
         )}
       </div>
       {/* The assistant reports whichever figure below needs attention first — it
@@ -143,18 +238,23 @@ function DashboardHero({
           The wrapper sets the height; the SVG takes only the width it needs. */}
       <MascotGreeter
         signals={signals}
-        className={cx(
-          'hidden min-[360px]:flex',
-          // Sized against the text beside it, not against the screen. Both
-          // columns are bottom-aligned, so a figure taller than the text leaves
-          // dead space above the greeting — which is exactly what the staff
-          // hero, three lines and no button row, used to show.
-          compact
-            ? 'h-[100px] sm:h-[124px] lg:h-[150px] xl:h-[164px]'
-            : actions
-              ? 'h-[108px] sm:h-[152px] lg:h-[196px] xl:h-[220px]'
-              : 'h-[96px] sm:h-[132px] lg:h-[160px] xl:h-[176px]',
-        )}
+        role={role}
+        autoSpeak
+        // The assistant opens by pointing at the card's one button and saying
+        // what it is for, in the same words for every role.
+        intro={actions ? 'Tap Scan to request a tool.' : undefined}
+        // Sized against the text beside it, not against the screen — the same
+        // heights as before, now given to the figure itself so the bubble can
+        // sit above it or beside it without squashing it.
+        size={compact ? 190 : actions ? 200 : 184}
+        // Taken out of the flow and laid over the card's bottom-right corner, so
+        // the greeting text never shifts when the assistant speaks or when the
+        // bubble wraps to another line — the figure and its bubble simply sit on
+        // top of whatever is behind them.
+        // Set into the card's lower right rather than pinned to its edge: it
+        // stands a little in from the right with its feet resting just above the
+        // card's floor, and the bubble rises from over its head.
+        className="absolute bottom-1 right-4 z-20 hidden min-[360px]:flex sm:bottom-1.5 sm:right-7 lg:right-10"
       />
     </section>
   )
@@ -175,9 +275,9 @@ export default function DashboardPage() {
     return (
       <>
         <DashboardHero
-          eyebrow={`${settings.labName} · ${settings.labLocation}`}
           title={`Good ${greeting()}, ${firstName}`}
           signals={{ error: true }}
+          role={user?.role}
         />
         <div className="panel">
           <ErrorState
@@ -320,6 +420,23 @@ function StaffDashboard({
   const busy = loading && !dashboard
   const stats = dashboard?.stats
 
+  // What the assistant reports beyond the totals: the two queues this role
+  // works, and — for an administrator — the accounts waiting on them. All read
+  // from hooks the page already mounts, scoped by role as everywhere else.
+  const { requests } = useRequests()
+  const { transactions } = useTransactions()
+  const { users } = useUsers()
+  // Unread conversations, for the one signal the assistant reports that is not
+  // about tools at all.
+  const { unread: unreadMessages } = useInbox()
+  const pendingRequests = requests.filter((r) => r.status === REQUEST_STATUS.PENDING).length
+  const returnRequests = transactions.filter(
+    (t) => ACTIVE_TXN_STATUSES.includes(t.status) && !!t.returnRequestedAt,
+  ).length
+  const approvals = can(PERM.USER_MANAGE)
+    ? pendingAccounts(users).length + pendingProfileChanges(users).length
+    : 0
+
   // Once per account on this device, remembered separately from every other page.
   const tour = usePageTour('dashboard', userId)
   const tourSteps = useMemo(() => staffDashboardTour(isInstructor), [isInstructor])
@@ -346,7 +463,6 @@ function StaffDashboard({
         // instructor's and the student's do. Routes and guards are unchanged.
         actions={<CribActions can={can} />}
         data-tour="dash-hero"
-        eyebrow={`${settings.labName} · ${settings.labLocation}`}
         title={`Good ${greeting()}, ${firstName}`}
         subtitle={
           stats?.overdue
@@ -360,7 +476,14 @@ function StaffDashboard({
           maintenance: stats?.maintenance ?? 0,
           dueSoon: stats?.dueSoon ?? 0,
           activeLoans: stats?.activeLoans ?? 0,
+          availableTools: stats?.availableTools ?? null,
+          returnRequests,
+          pendingRequests,
+          approvals,
+          damaged: stats?.damaged ?? 0,
+          messages: unreadMessages,
         }}
+        role={isInstructor ? 'Instructor' : 'Admin'}
       />
 
       {/* ----------------------- what needs a decision ----------------------- */}
@@ -369,8 +492,12 @@ function StaffDashboard({
           something is actually waiting, so a quiet day costs no vertical space. */}
       <AttentionBand stats={stats} busy={busy} can={can} settings={settings} />
 
-      {/* --------------------------- inventory state --------------------------- */}
-      <SectionLabel>Inventory</SectionLabel>
+      {/* --------------------------- inventory state ---------------------------
+          The band's own card: the heading and the tiles it names sit on one
+          surface, the same way the hero above them does, rather than the label
+          floating loose over a row of boxes. The tiles themselves are
+          untouched. */}
+      <SectionBand title="Inventory">
       {busy ? (
         // The band gets tile-shaped placeholders rather than plain blocks — the
         // icon chip, label, figure and hint sit exactly where the real tile puts
@@ -444,8 +571,10 @@ function StaffDashboard({
         </div>
       )}
 
+      </SectionBand>
+
       {/* ------------------------------ operations ------------------------------ */}
-      <SectionLabel>Operations today</SectionLabel>
+      <SectionBand title="Operations today">
       {/* Same treatment as the inventory band above: while the figures are
           loading the whole tile is drawn in outline rather than only its value,
           so both bands read the same way. */}
@@ -494,7 +623,7 @@ function StaffDashboard({
         />
         <StatCard
           variant="tile"
-          label="Active loans"
+          label="Tools out"
           value={stats?.activeLoans ?? 0}
           icon={Repeat}
           tone="info"
@@ -513,6 +642,7 @@ function StaffDashboard({
         />
       </div>
       )}
+      </SectionBand>
 
       {/* ------------------------------- 12-column body -------------------------------
           Eight columns for the queues staff work through, four for the reference
@@ -639,7 +769,7 @@ function StaffDashboard({
                         </div>
                         <span className="mono shrink-0 text-xs font-bold">
                           {row.count}
-                          <span className="subtle font-medium"> loans</span>
+                          <span className="subtle font-medium"> borrowings</span>
                         </span>
                       </div>
                       <ProgressBar
@@ -863,32 +993,24 @@ function StaffDashboard({
 }
 
 /**
- * The instructor's three counter actions, on the hero.
+ * The crib's one hero action.
  *
- * Scan leads in the primary weight because it is how issuing and receiving
- * usually start; Borrow and Return follow as outlines. Same routes, same guards
- * as everywhere else — this only puts them where an instructor's hands are.
+ * The same button a student gets — same route, same icon, same size and the same
+ * wording — so the hero reads identically in every role and the mascot beside it
+ * can explain the one control there is.
  */
 function CribActions({ can }) {
   return (
-    <>
-      <Link to="/scan" className="btn btn-primary btn-lg">
-        <QrCode className="h-4 w-4" />
-        Scan a tool
-      </Link>
-      {can(PERM.BORROW) && (
-        <Link to="/borrow" className="btn btn-outline btn-lg">
-          <Repeat className="h-4 w-4" />
-          Borrow
-        </Link>
-      )}
-      {can(PERM.RETURN) && (
-        <Link to="/return" className="btn btn-outline btn-lg">
-          <Undo2 className="h-4 w-4" />
-          Return
-        </Link>
-      )}
-    </>
+    <HeroScanAction
+      secondary={
+        can(PERM.REQUEST_DECIDE) ? (
+          <Link to="/requests" className={HERO_ACTION.outline}>
+            <ClipboardList className="h-4 w-4 shrink-0" />
+            Requests
+          </Link>
+        ) : null
+      }
+    />
   )
 }
 
@@ -911,16 +1033,21 @@ function TileSkeleton() {
  * statistics strip and the panels under it read as two ranks of the same page
  * rather than as one long column of boxes.
  */
-function SectionLabel({ children, className }) {
+
+/**
+ * A statistics band, on its own card.
+ *
+ * The heading and the tiles it names share one surface — the same `.tile`
+ * treatment the hero above them uses — so the top of the dashboard reads as
+ * cards rather than as loose labels over rows of boxes. The tiles inside are
+ * unchanged; this only puts a card around them.
+ */
+function SectionBand({ title, children }) {
   return (
-    <h2
-      className={cx(
-        'subtle mb-2 mt-5 text-[10px] font-bold uppercase tracking-[0.14em] first:mt-0',
-        className,
-      )}
-    >
+    <section className="tile mb-4 p-3 sm:p-3.5 lg:p-4">
+      <h2 className="subtle mb-2.5 text-[10px] font-bold uppercase tracking-[0.14em]">{title}</h2>
       {children}
-    </h2>
+    </section>
   )
 }
 
@@ -971,8 +1098,7 @@ function AttentionBand({ stats, busy, can, settings }) {
   if (items.length === 0) return null
 
   return (
-    <>
-      <SectionLabel>Needs attention</SectionLabel>
+    <SectionBand title="Needs attention">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-tour="dash-attention">
         {items.map(({ key, icon: Icon, label, hint, to, tone }) => (
           <Link
@@ -992,7 +1118,7 @@ function AttentionBand({ stats, busy, can, settings }) {
           </Link>
         ))}
       </div>
-    </>
+    </SectionBand>
   )
 }
 
@@ -1104,11 +1230,6 @@ const STUDENT_DASHBOARD_TOUR = [
     text: 'Your own four totals: tools in your hands, due back soon, already overdue, and still free on the shelf. Tap a tile to open the records behind it.',
   },
   {
-    target: 'dash-loans',
-    title: 'Tools in your hands',
-    text: 'Every tool issued to you, soonest due first, with its tool ID and due date. Return is on the row, so handing one back never means looking it up again.',
-  },
-  {
     target: 'dash-history',
     title: 'Borrowed and returned',
     text: 'The records already logged against your account. Open one for its dates and condition notes, or View all for the full history.',
@@ -1137,6 +1258,25 @@ function StudentDashboard({
 
   // Alerts addressed to this student; the hook already scopes the read to them.
   const { unread } = useNotifications()
+  const { unread: unreadMessages } = useInbox()
+
+  // Their own requests — `useRequests` returns only what this role may read, so
+  // the card below is their asks and nobody else's.
+  const { requests, loading: loadingRequests } = useRequests()
+  const openRequests = useMemo(
+    () => requests.filter((r) => OPEN_REQUEST_STATUSES.includes(r.status)).slice(0, 4),
+    [requests],
+  )
+  // Waiting, approved and declined — the three states the Requests page shows,
+  // counted from the same rows.
+  const requestCounts = useMemo(
+    () => ({
+      open: requests.filter((r) => r.status === REQUEST_STATUS.PENDING).length,
+      approved: requests.filter((r) => r.status === REQUEST_STATUS.APPROVED).length,
+      rejected: requests.filter((r) => r.status === REQUEST_STATUS.REJECTED).length,
+    }),
+    [requests],
+  )
 
   return (
     <>
@@ -1147,16 +1287,18 @@ function StudentDashboard({
           borrow is a step this saves. */}
       <DashboardHero
         compact
-        eyebrow={`${settings.labName} · your tools and loans`}
         title={`Good ${greeting()}, ${firstName}`}
         subtitle={
+          // Kept as short as the staff heroes': a subtitle that wraps to two
+          // lines on a phone is what pushed the buttons down and stretched the
+          // row. The advice it used to carry is the assistant's job.
           busy
             ? undefined
             : data.overdue
-              ? `Please return your ${data.overdue} overdue tool${data.overdue === 1 ? '' : 's'} first.`
+              ? `${data.overdue} overdue tool${data.overdue === 1 ? '' : 's'}.`
               : data.activeLoans
-                ? `You are holding ${data.activeLoans} tool${data.activeLoans === 1 ? '' : 's'} right now.`
-                : 'Nothing out at the moment — scan a tool to borrow one.'
+                ? `${data.activeLoans} tool${data.activeLoans === 1 ? '' : 's'} in your hands.`
+                : 'Nothing out at the moment.'
         }
         signals={{
           online,
@@ -1164,19 +1306,21 @@ function StudentDashboard({
           overdue: data?.overdue ?? 0,
           dueSoon: data?.dueSoon ?? 0,
           activeLoans: data?.activeLoans ?? 0,
+          availableTools: data?.availableTools ?? null,
+          openRequests: openRequests.length,
+          messages: unreadMessages,
           unread,
         }}
+        role="Student"
         actions={
-          <>
-            <Link to="/scan" className="btn btn-primary btn-sm">
-              <QrCode className="h-4 w-4" />
-              Scan to borrow
-            </Link>
-            <Link to="/return" className="btn btn-outline btn-sm">
-              <Repeat className="h-4 w-4" />
-              Return a tool
-            </Link>
-          </>
+          <HeroScanAction
+            secondary={
+              <Link to="/return" className={HERO_ACTION.outline}>
+                <Repeat className="h-4 w-4 shrink-0" />
+                Return a tool
+              </Link>
+            }
+          />
         }
       />
 
@@ -1192,7 +1336,7 @@ function StudentDashboard({
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-5">
             <StatCard
               variant="tile"
-              label="Active loans"
+              label="Tools out"
               value={data.activeLoans}
               icon={Package}
               tone="info"
@@ -1217,14 +1361,21 @@ function StudentDashboard({
               hint={data.overdue ? 'Return these first' : 'Nothing late'}
               to="/transactions?status=Overdue"
             />
+            {/* The fourth tile is their own asks rather than the shelf count:
+                how many are still waiting on a decision, and how the decided
+                ones went. It opens the Requests page, where each one lives. */}
             <StatCard
               variant="tile"
-              label="Available tools"
-              value={data.availableTools}
-              icon={CheckCircle2}
+              label="Requests"
+              value={requestCounts.open}
+              icon={ClipboardList}
               tone="success"
-              hint={`of ${data.totalTools} in the laboratory`}
-              to="/tools?status=Available"
+              hint={
+                requestCounts.approved || requestCounts.rejected
+                  ? `${requestCounts.approved} approved · ${requestCounts.rejected} declined`
+                  : 'Nothing waiting on staff'
+              }
+              to="/requests"
             />
           </div>
         )}
@@ -1237,99 +1388,11 @@ function StudentDashboard({
           entirely rather than stacked underneath. */}
       <div className="grid gap-4 lg:grid-cols-12 lg:gap-6">
         <div className="min-w-0 space-y-4 lg:col-span-8 lg:space-y-6">
-          {/* The headline of the student screen: what is in their hands, at full
-              width, with the return action on every row. */}
-          <div data-tour="dash-loans">
-            <SectionCard
-              variant="panel"
-              title="Tools you have out"
-              description={
-                busy
-                  ? 'Everything you are holding right now'
-                  : data.loans.length === 0
-                    ? 'Nothing is checked out to you'
-                    : `${data.loans.length} tool${data.loans.length === 1 ? '' : 's'}, soonest due first`
-              }
-              bodyClassName="p-0"
-            >
-              {busy ? (
-                <SkeletonRows rows={3} columns={3} />
-              ) : data.loans.length === 0 ? (
-                /* The same character as the greeting above, standing in for the
-                   action button: an empty shelf is not a problem to fix, so the
-                   card shows the assistant rather than pushing a task. The
-                   markup mirrors `EmptyState compact` so the spacing matches
-                   every other empty panel. */
-                <div className="flex flex-col items-center justify-center px-4 py-8 text-center">
-                  <Mascot state="curious" size={96} className="mb-1" />
-                  <p className="text-sm font-bold">You have no tools out.</p>
-                  <p className="muted mt-1 max-w-sm text-sm">
-                    Scan a tool or open the borrow desk to check one out.
-                  </p>
-                </div>
-              ) : (
-                <ul className="divide-y">
-                  {data.loans.map((txn) => {
-                    const late = data.overdueLoans.includes(txn)
-                    return (
-                      <li
-                        key={txn.id}
-                        className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3"
-                      >
-                        <span
-                          className={cx(
-                            'grid h-9 w-9 shrink-0 place-items-center rounded-lg',
-                            late ? 'bg-red-500/10' : 'bg-blue-500/10',
-                          )}
-                        >
-                          {late ? (
-                            <AlertTriangle className="h-4 w-4 text-red-500" />
-                          ) : (
-                            <Wrench className="h-4 w-4 text-blue-500" />
-                          )}
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <Link
-                            to={`/tools/${txn.toolId}`}
-                            className="block truncate text-sm font-bold hover:underline"
-                          >
-                            {txn.toolName}
-                          </Link>
-                          <p
-                            className={cx(
-                              'truncate text-xs',
-                              late ? 'font-semibold text-red-600 dark:text-red-400' : 'muted',
-                            )}
-                          >
-                            <span className="mono">{txn.toolId}</span> · {dueLabel(txn.dueDate)}
-                          </p>
-                        </div>
-                        {/* `basis-full` drops the button onto its own line on a
-                            phone instead of squeezing the tool name down to
-                            "Torque Wrench 1…"; from `sm` it sits back on the
-                            row. Either way a return is one tap away — the old
-                            card hid this button entirely below `sm`. */}
-                        <div className="basis-full pl-12 sm:basis-auto sm:pl-0">
-                          <Link
-                            to={`/return?tool=${txn.toolId}`}
-                            className="btn btn-outline btn-sm shrink-0"
-                          >
-                            Return
-                          </Link>
-                        </div>
-                      </li>
-                    )
-                  })}
-                </ul>
-              )}
-            </SectionCard>
-          </div>
-
           <div data-tour="dash-history">
             <SectionCard
               variant="panel"
               title="Recent transactions"
-              description="The last two loans and returns"
+              description="The last two borrowings and returns"
               bodyClassName="p-0"
               action={
                 <Link to="/transactions" className="btn btn-ghost btn-sm">
@@ -1365,34 +1428,49 @@ function StudentDashboard({
             compact strip at the end of the page — see below. */}
         {!isPwa && (
           <aside className="min-w-0 space-y-4 lg:col-span-4 lg:space-y-6">
+            {/* The student's own open requests, read through the same hook the
+                Requests page uses — one ask per row, with its state, and the
+                page itself one tap away. Nothing is decided from here. */}
             <SectionCard
               variant="quiet"
-              title="Available tools"
-              description="What you can borrow right now"
+              title="Requests"
+              description="Your asks waiting on the laboratory"
+              bodyClassName="p-0"
             >
-              {busy ? (
+              {loadingRequests && !openRequests.length ? (
                 <SkeletonRows rows={2} columns={1} />
+              ) : openRequests.length === 0 ? (
+                <EmptyState
+                  icon={ClipboardList}
+                  title="No open requests."
+                  description="Ask for a tool from the inventory and it will appear here."
+                  compact
+                />
               ) : (
-                <div className="space-y-4">
-                  <div>
-                    <p className="mono text-[40px] font-extrabold leading-none tracking-tight">
-                      {data.availableTools}
-                    </p>
-                    <p className="subtle mt-2 text-xs">
-                      of {data.totalTools} tools in the laboratory
-                    </p>
-                  </div>
-                  <ProgressBar
-                    value={data.availableTools}
-                    max={data.totalTools}
-                    barClassName="bg-emerald-500"
-                  />
-                  <Link to="/tools?status=Available" className="btn btn-outline w-full">
-                    <Wrench className="h-4 w-4" />
-                    Browse available tools
-                  </Link>
-                </div>
+                <ul className="space-y-1 px-2 pb-2 sm:px-3">
+                  {openRequests.map((request) => (
+                    <li key={request.id}>
+                      <Link
+                        to={`/requests/${request.id}`}
+                        className="flex items-center gap-3 rounded-xl px-2 py-2.5 transition-colors
+                                   hover:bg-black/[0.03] dark:hover:bg-white/5"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-bold">{request.toolName}</p>
+                          <p className="muted mono truncate text-[11px]">{request.id}</p>
+                        </div>
+                        <RequestStatusBadge status={request.status} />
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
               )}
+              <div className="px-3 pb-3 sm:px-4">
+                <Link to="/requests" className="btn btn-outline w-full">
+                  <ClipboardList className="h-4 w-4" />
+                  Open requests page
+                </Link>
+              </div>
             </SectionCard>
 
             <SectionCard

@@ -152,6 +152,9 @@ export function usePageTour(page, userId) {
   return { open, close }
 }
 
+/** On the page and actually drawn — not merely present in the document. */
+const isVisible = (element) => !!element && element.getClientRects().length > 0
+
 const findTarget = (target) =>
   target ? document.querySelector(`[data-tour="${CSS.escape(target)}"]`) : null
 
@@ -233,7 +236,11 @@ export default function Walkthrough({
 
   useEffect(() => {
     if (!open) return
-    setLive(steps.filter((step) => !step.target || findTarget(step.target)))
+    // Present is not the same as visible: a control the layout hides at this
+    // width — a desktop-only button on a phone — is still in the document, and
+    // spotlighting it would point at a box with no size. `getClientRects()` is
+    // empty for exactly those, so they drop out with the absent ones.
+    setLive(steps.filter((step) => !step.target || isVisible(findTarget(step.target))))
     setIndex(0)
   }, [open, steps])
 

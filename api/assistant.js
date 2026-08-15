@@ -40,7 +40,7 @@ export default async function handler(req, res) {
   // endpoint and simply uses its written lines.
   if (!key) return res.status(503).json({ error: 'Text generation is not configured.' })
 
-  const { line, page } = req.body ?? {}
+  const { line, page, role } = req.body ?? {}
   if (typeof line !== 'string' || !line.trim() || line.length > 400) {
     return res.status(400).json({ error: 'A "line" to reword is required.' })
   }
@@ -63,7 +63,7 @@ export default async function handler(req, res) {
           { role: 'system', content: SYSTEM },
           {
             role: 'user',
-            content: `Screen: ${typeof page === 'string' ? page.slice(0, 40) : 'unknown'}\nLine: ${line}`,
+            content: `Screen: ${typeof page === 'string' ? page.slice(0, 40) : 'unknown'}\nRole: ${typeof role === 'string' ? role.slice(0, 20) : 'unknown'}\nLine: ${line}`,
           },
         ],
       }),

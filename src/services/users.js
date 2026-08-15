@@ -676,6 +676,81 @@ function changedFields(current, input) {
  * Nothing is applied here: the patch is parked and the account carries on
  * working exactly as before while it waits.
  */
+/* ------------------------------------------------------------------ *
+ * Profile photo
+ * ------------------------------------------------------------------ */
+
+/** Whether this database has the column `0022_profile_photos.sql` adds. */
+export const avatarsAvailable = () => db.supportsColumn(COLLECTIONS.users, 'avatarUrl')
+
+/**
+ * Set — or clear — an account's own picture.
+ *
+ * An administrator's own picture is written straight to their row: they are the
+ * reviewer, so there is nobody to ask. Everybody else's — a student's and an
+ * instructor's alike — is parked in the same `pendingProfile` patch a name
+ * change goes into and only reaches the account when an administrator approves
+ * it, alongside whatever else is waiting.
+ *
+ * @param {string} userId
+ * @param {string|null} avatarUrl  a public URL from `storage.uploadAvatar`, or
+ *                                 null to go back to the initials tile
+ * @param {object} actor
+ * @returns {Promise<{ saved: object, review: boolean }>}
+ */
+export async function setAvatar(userId, avatarUrl, actor) {
+  const own = userId === actor?.id
+  const admin = actor?.role === ROLE.ADMIN
+  if (!own && !admin) {
+    throw new Error('You can only change your own profile picture.')
+  }
+  if (!(await avatarsAvailable())) {
+    throw new Error(
+      'Profile photos are not set up on this database yet. Ask an administrator to apply the latest migration.',
+    )
+  }
+
+  const timestamp = nowISO()
+
+  // The reviewer, or an administrator clearing somebody else's: applied now.
+  if (admin) {
+    const saved = await db.update(COLLECTIONS.users, userId, {
+      avatarUrl: avatarUrl ?? null,
+      updatedAt: timestamp,
+    })
+    return { saved, review: false }
+  }
+
+  const current = await getById(userId)
+  if (!current) throw new Error('Your profile could not be loaded.')
+
+  const saved = await db.update(COLLECTIONS.users, userId, {
+    pendingProfile: { ...(current.pendingProfile ?? {}), avatarUrl: avatarUrl ?? null },
+    profileReviewStatus: PROFILE_REVIEW.PENDING,
+    profileSubmittedAt: timestamp,
+    profileReviewNote: null,
+    updatedAt: timestamp,
+  })
+
+  await activity
+    .log({
+      action: ACTIVITY.USER_UPDATED,
+      userId: actor.id,
+      userName: actor.fullName,
+      message: `${actor.fullName} submitted a profile picture for approval.`,
+      meta: { targetUserId: userId, fields: ['avatarUrl'] },
+    })
+    .catch(() => {})
+
+  return { saved, review: true }
+}
+
+/** The picture to draw for this account: the approved one, or the pending one to its owner. */
+export const effectiveAvatar = (user) =>
+  user?.pendingProfile && 'avatarUrl' in user.pendingProfile
+    ? user.pendingProfile.avatarUrl
+    : (user?.avatarUrl ?? null)
+
 export async function submitProfileChanges(input, actor) {
   if (!actor?.id) throw new Error('Sign in to edit your profile.')
   if (actor.role !== ROLE.STUDENT) {

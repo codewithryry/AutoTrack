@@ -228,10 +228,11 @@ export function DeviceAccessControl() {
 }
 
 /**
- * The install card, shown only when there is something to say: the app is
- * already running standalone, or the browser has offered to install it. It
- * holds the deferred `beforeinstallprompt` event the browser handed over, so a
- * dismissed install banner can still be completed from here.
+ * The install card, shown to every role as its own section under Device and
+ * app. It holds the deferred `beforeinstallprompt` event the browser handed
+ * over, so a dismissed install banner can still be completed from here — and
+ * when the browser never offered one (iOS Safari has no such event), it keeps
+ * the option alive with hand-done instructions instead of disappearing.
  */
 export function InstallAppCard() {
   const [installed, setInstalled] = useState(isStandalone())
@@ -262,29 +263,70 @@ export function InstallAppCard() {
     setDeferred(null)
   }
 
-  if (!installed && !deferred) return null
+  // iOS Safari never fires `beforeinstallprompt`, so the install has to be done
+  // by hand there — the instructions below are that fallback, and they keep the
+  // option available to students, instructors and administrators alike even when
+  // the install popup never appears.
+  const isIOS = typeof navigator !== 'undefined' && /iphone|ipad|ipod/i.test(navigator.userAgent)
 
   return (
     <SectionCard title="Install app" description="Running this app from your home screen">
-      <AccessRow
-        icon={Smartphone}
-        title="This device"
-        description="Runs full screen from your home screen, and keeps working offline."
-        state={installed ? 'granted' : 'prompt'}
-        stateLabel={installed ? 'Installed' : 'Available'}
-        action={
-          !installed && (
-            <button
-              type="button"
-              onClick={install}
-              className="btn btn-primary btn-sm shrink-0"
-            >
+      {installed ? (
+        <AccessRow
+          icon={Smartphone}
+          title="This device"
+          description="Runs full screen from your home screen, and keeps working offline."
+          state="granted"
+          stateLabel="Installed"
+        />
+      ) : deferred ? (
+        <AccessRow
+          icon={Smartphone}
+          title="This device"
+          description="Runs full screen from your home screen, and keeps working offline."
+          state="prompt"
+          stateLabel="Available"
+          action={
+            <button type="button" onClick={install} className="btn btn-primary btn-sm shrink-0">
               <Download className="h-3.5 w-3.5" />
               Install
             </button>
-          )
-        }
-      />
+          }
+        />
+      ) : (
+        <>
+          <AccessRow
+            icon={Smartphone}
+            title="Add to your home screen"
+            description="Run this app full screen from your home screen, and keep working offline."
+            state="prompt"
+            stateLabel="Not installed"
+          />
+          <div
+            className="mt-3 rounded-lg border px-3.5 py-3"
+            style={{ background: 'rgb(var(--surface-2))' }}
+          >
+            <p className="text-xs font-bold">
+              {isIOS ? 'Install from Safari' : 'Install from the browser menu'}
+            </p>
+            <ol className="subtle mt-1.5 space-y-1 text-xs leading-relaxed">
+              {isIOS ? (
+                <>
+                  <li>1. Tap the <strong>Share</strong> button in the browser bar.</li>
+                  <li>2. Choose <strong>Add to Home Screen</strong>.</li>
+                  <li>3. Tap <strong>Add</strong>.</li>
+                </>
+              ) : (
+                <>
+                  <li>1. Open the browser menu — the three dots (⋮).</li>
+                  <li>2. Choose <strong>Add to Home Screen</strong> or <strong>Install app</strong>.</li>
+                  <li>3. Confirm the install, then open it from your home screen.</li>
+                </>
+              )}
+            </ol>
+          </div>
+        </>
+      )}
     </SectionCard>
   )
 }

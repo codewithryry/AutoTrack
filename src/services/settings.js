@@ -95,6 +95,50 @@ export function validate(input) {
   return errors
 }
 
+/* ------------------------------------------------------------------ *
+ * What the settings table actually holds
+ *
+ * The document is written as one row, so a single key the table does not have
+ * fails the whole statement — and with it every other setting in the same save.
+ * That is what `updatedBy` did: nothing ever added an `updated_by` column, so
+ * an administrator's changes were rejected and the page reverted to the stored
+ * values on the next read.
+ *
+ * `SHARED_FIELDS` is therefore the explicit list of what may be sent, matched
+ * to `0001_schema.sql`, and `departmentUrl` — added later by `0010` — is asked
+ * for the same way every other post-0001 column is, so a database that has not
+ * had that migration applied still saves everything else.
+ * ------------------------------------------------------------------ */
+
+const SHARED_FIELDS = [
+  'id',
+  'labName',
+  'labLocation',
+  'institution',
+  'defaultBorrowDays',
+  'maxBorrowDays',
+  'dueSoonThresholdDays',
+  'maintenanceIntervalDays',
+  'notifyOverdue',
+  'notifyDueSoon',
+  'notifyReturns',
+  'notifyMaintenance',
+  'updatedAt',
+]
+
+const DEPARTMENT_URL_COLUMN = 'departmentUrl'
+
+/** Whether this database has had `0010_settings_department_page.sql` applied. */
+export const departmentUrlAvailable = () =>
+  db.supportsColumn(COLLECTIONS.settings, DEPARTMENT_URL_COLUMN)
+
+/** Drop anything the table does not have a column for. */
+async function writableDocument(document) {
+  const allowed = new Set(SHARED_FIELDS)
+  if (await departmentUrlAvailable()) allowed.add(DEPARTMENT_URL_COLUMN)
+  return Object.fromEntries(Object.entries(document).filter(([key]) => allowed.has(key)))
+}
+
 /**
  * Persist a patch. The theme is stored on the device; anything else needs the
  * settings permission and is written to the store.
@@ -121,19 +165,18 @@ export async function save(patch, actor) {
       rest.maintenanceIntervalDays ?? current.maintenanceIntervalDays,
     ),
     updatedAt: nowISO(),
-    updatedBy: actor?.id ?? null,
   }
 
   // The theme is not part of the shared document.
   const { theme: _local, ...document } = next
-  await db.upsert(COLLECTIONS.settings, document)
+  await db.upsert(COLLECTIONS.settings, await writableDocument(document))
   return { ...next, theme: theme ?? current.theme }
 }
 
 export async function reset(actor) {
   assertCan(actor, PERM.SETTINGS_EDIT, 'Only an administrator can reset the laboratory settings.')
   const { theme, ...document } = { ...DEFAULT_SETTINGS, updatedAt: nowISO() }
-  await db.upsert(COLLECTIONS.settings, document)
+  await db.upsert(COLLECTIONS.settings, await writableDocument(document))
   return { ...DEFAULT_SETTINGS, updatedAt: nowISO(), theme: loadTheme() }
 }
 

@@ -120,7 +120,6 @@ function buildTools() {
     return {
       id,
       name: entry.name,
-      toolCode: id,
       category: entry.category,
       description: entry.description ?? '',
       brand: entry.brand ?? '',
@@ -132,8 +131,9 @@ function buildTools() {
       status: TOOL_STATUS.AVAILABLE,
       currentBorrowerId: null,
       currentTransactionId: null,
-      quantity: 1,
-      imageUrl: null,
+      // `image_url` is left off entirely rather than sent as null: a database
+      // without `0011` applied has no such column, and an insert naming it
+      // would fail the whole seed. A tool without a picture is the default.
       purchaseDate: addDaysISO(new Date(), purchaseOffset),
       lastMaintenanceDate: addDaysISO(new Date(), lastMaintOffset),
       nextMaintenanceDate: addDaysISO(new Date(), lastMaintOffset + 90),
@@ -390,7 +390,6 @@ function buildMaintenance(tools, actor) {
       toolId: tool.id,
       toolName: tool.name,
       type: entry.type,
-      issue: entry.notes.split('—')[0].trim(),
       technician,
       date,
       nextDate,
@@ -398,7 +397,9 @@ function buildMaintenance(tools, actor) {
       notes: entry.notes,
       status: entry.status,
       completedAt: entry.status === MAINTENANCE_STATUS.COMPLETED ? date : null,
-      reportedBy: actor?.id ?? null,
+      // Only what `maintenance` actually has: `issue` and `reported_by` are not
+      // columns on that table, and naming them failed the whole insert — which
+      // is what stopped both "Seed demo data" and "Reset application".
       createdById: actor?.id ?? null,
       createdByName: actor?.fullName ?? null,
       createdAt: date,

@@ -64,4 +64,9 @@ export const TABLES = {
   maintenance: 'maintenance',
   activityLogs: 'activity_logs',
   settings: 'settings',
+  toolRequests: 'tool_requests',
+  reservations: 'reservations',
+  conversations: 'conversations',
+  conversationParticipants: 'conversation_participants',
+  messages: 'messages',
 }

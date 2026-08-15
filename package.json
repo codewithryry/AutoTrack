@@ -1,7 +1,7 @@
 {
   "name": "smart-tool-monitoring-pwa",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.2.1",
   "type": "module",
   "description": "ToolTrack AutoLab: QR-Based Automotive Laboratory Tool Monitoring System",
   "scripts": {
@@ -27,6 +27,7 @@
     "@electric-sql/pglite": "^0.5.5",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
+    "fake-indexeddb": "^6.2.5",
     "playwright": "^1.62.1",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",

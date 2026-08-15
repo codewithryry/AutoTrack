@@ -4,10 +4,17 @@ import { COLLECTIONS } from '../services/db'
 import * as authService from '../services/auth'
 import * as settingsService from '../services/settings'
 import * as offlineCache from '../services/offlineCache'
+import { syncPending } from '../services/sync'
 import { clearAsyncCache } from '../hooks/asyncCache'
+import { clearIdleStamp, useIdleTimeout } from '../hooks/useIdleTimeout'
 import * as transactionService from '../services/transactions'
 import * as maintenanceService from '../services/maintenance'
-import { DEFAULT_SETTINGS } from '../utils/constants'
+import {
+  DEFAULT_SETTINGS,
+  ROLE,
+  SESSION_IDLE_LIMIT_MINUTES,
+  SESSION_IDLE_LIMIT_MS,
+} from '../utils/constants'
 import { PERM, can as hasPermission, isStaff } from '../utils/permissions'
 
 /**
@@ -77,18 +84,37 @@ export function AppProvider({ children }) {
   )
   const online = connected && !offlineMode
 
-  const setOfflineMode = useCallback((value) => {
-    setOfflineModeState(value)
-    db.setOfflineMode(value)
-    try {
-      localStorage.setItem(OFFLINE_MODE_KEY, value ? '1' : '0')
-    } catch {
-      /* the preference simply does not survive a reload */
-    }
-  }, [])
   const [attempt, setAttempt] = useState(0)
 
   const bumpRevision = useCallback(() => setRevision((r) => r + 1), [])
+
+  /** Flush the outbox; only screens actually need re-reading when something moved. */
+  const runSync = useCallback(async () => {
+    try {
+      const result = await syncPending()
+      if (result?.synced > 0) bumpRevision()
+      return result
+    } catch (err) {
+      console.error('[app] background sync failed', err)
+      return { synced: 0, failed: 0, pending: 0, skipped: false }
+    }
+  }, [bumpRevision])
+
+  const setOfflineMode = useCallback(
+    (value) => {
+      setOfflineModeState(value)
+      db.setOfflineMode(value)
+      try {
+        localStorage.setItem(OFFLINE_MODE_KEY, value ? '1' : '0')
+      } catch {
+        /* the preference simply does not survive a reload */
+      }
+      // Turning the manual override off is the moment queued changes can leave
+      // the device — flush them before the screens re-read.
+      if (!value) void runSync()
+    },
+    [runSync],
+  )
 
   /* --------------------------- session --------------------------- */
 
@@ -204,9 +230,10 @@ export function AppProvider({ children }) {
   useEffect(() => {
     const goOnline = () => {
       setConnected(true)
-      // Back on the network: every open screen re-reads from the server, and
-      // the fresh rows replace the cached copy as they arrive.
-      bumpRevision()
+      // Back on the network: flush any queued changes first, then let every open
+      // screen re-read from the server — the fresh rows replace the cached copy
+      // as they arrive.
+      void runSync().finally(() => bumpRevision())
     }
     const goOffline = () => setConnected(false)
     window.addEventListener('online', goOnline)
@@ -215,7 +242,19 @@ export function AppProvider({ children }) {
       window.removeEventListener('online', goOnline)
       window.removeEventListener('offline', goOffline)
     }
-  }, [bumpRevision])
+  }, [runSync, bumpRevision])
+
+  /* ---------------------- outbox retry while online ---------------------- */
+  // A change that failed to reach the server (flaky connection, an op the server
+  // refused) is retried on a timer, not just on the online event — the device can
+  // be connected without the backend being reachable.
+  const SYNC_RETRY_MS = 20_000
+  useEffect(() => {
+    if (!user || !online) return
+    void runSync()
+    const timer = setInterval(() => void runSync(), SYNC_RETRY_MS)
+    return () => clearInterval(timer)
+  }, [user, online, runSync])
 
   /* --------------------------- theme --------------------------- */
   useEffect(() => {
@@ -288,12 +327,49 @@ export function AppProvider({ children }) {
     const uid = user?.id
     await authService.logout()
     clearAsyncCache()
+    clearIdleStamp(uid)
     setUser(null)
     setSessionError(null)
     // The records cached for reading offline belong to the account that read
-    // them, so they leave with it.
-    if (uid) void offlineCache.clearAccount(uid)
+    // them, so they leave with it — as do its queued, unsynced changes.
+    if (uid) {
+      void offlineCache.clearAccount(uid)
+      void offlineCache.clearAccountOutbox(uid)
+    }
   }, [user])
+
+  /* --------------------------- standby --------------------------- */
+
+  /**
+   * Close a session that has stood idle past the limit.
+   *
+   * The same `logout()` as the menu's: the session ends and this device's cache
+   * and queued changes go with it — the account itself, and everything it has
+   * recorded, is untouched. The reason is put on `sessionError`, which is the
+   * existing channel the login screen reads, so the person lands on a form that
+   * explains what happened rather than on a silent sign-out.
+   *
+   * Students and instructors only; an administrator's session is unchanged.
+   */
+  const expireIdleSession = useCallback(async () => {
+    try {
+      await logout()
+    } catch (err) {
+      console.warn('[app] the idle session could not be closed cleanly', err)
+      setUser(null)
+    }
+    setSessionError(
+      `You were signed out after ${SESSION_IDLE_LIMIT_MINUTES} minutes without activity. ` +
+        'Sign in again to continue — nothing on your account has changed.',
+    )
+  }, [logout])
+
+  useIdleTimeout({
+    enabled: !!user && user.role !== ROLE.ADMIN,
+    timeoutMs: SESSION_IDLE_LIMIT_MS,
+    uid: user?.id ?? null,
+    onExpire: expireIdleSession,
+  })
 
   /**
    * Delete the signed-in account. The service removes the credential and the

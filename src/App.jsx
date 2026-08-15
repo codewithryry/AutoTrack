@@ -3,9 +3,12 @@ import { AlertTriangle, ShieldOff } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import AppLayout, { useStandalonePage } from './layouts/AppLayout'
 import InstallPrompt from './components/InstallPrompt'
+import { BrandMark } from './components/Brand'
 import { ErrorState } from './components/ui'
 import { useApp } from './context/AppContext'
 import { PERM } from './utils/permissions'
+import { APP_VERSION } from './utils/constants'
+import { claimAppLaunch } from './utils/pwa'
 
 import LoginPage from './pages/LoginPage'
 import SignUpPage from './pages/SignUpPage'
@@ -24,6 +27,10 @@ import MaintenancePage from './pages/MaintenancePage'
 import ReportsPage from './pages/ReportsPage'
 import SettingsPage from './pages/SettingsPage'
 import ProfilePage from './pages/ProfilePage'
+import RequestsPage from './pages/RequestsPage'
+import NewRequestPage from './pages/NewRequestPage'
+import RequestDetailPage from './pages/RequestDetailPage'
+import MessagesPage from './pages/MessagesPage'
 
 /**
  * Blocks unauthenticated access and remembers where the user was heading.
@@ -98,26 +105,55 @@ function NotFound() {
 }
 
 /**
- * What a refresh shows while the stored session is read.
+ * The PWA's opening screen, shown while the stored session is read.
  *
- * The page's own shape, not a splash: the same padding the shell's `main` uses,
- * with placeholder blocks where the header and the first cards will be. It
- * lasts exactly as long as reading the session takes, and what replaces it lands
- * in the same place, so nothing jumps.
+ * It is a real splash rather than a page skeleton: the same navy the system
+ * launch screen paints (`#0B1220` in the manifest) so the hand-over from the
+ * OS splash to the first frame is one continuous colour, with the brand mark,
+ * the lockup, the version and a quiet footer centred like a modern app launch
+ * screen. It lasts exactly as long as reading the session takes and is drawn
+ * in plain markup — no images to load and no timers — so it adds nothing to
+ * the boot path.
  */
-function BootSkeleton() {
+function BootSplash() {
   return (
-    <div className="min-w-0 px-3 pb-28 pt-4 sm:px-5 lg:px-8 lg:pb-12 lg:pt-6" aria-busy="true">
-      <div className="skeleton mb-5 h-8 w-48" />
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="skeleton h-24" />
-        ))}
+    <div
+      className="fixed inset-0 z-50 flex flex-col items-center justify-center px-6"
+      style={{ background: 'rgb(11 18 32)' }}
+      role="status"
+      aria-busy="true"
+    >
+      <div className="flex flex-col items-center text-center">
+        <BrandMark size={76} className="rounded-2xl shadow-lift" />
+        <p className="mt-5 text-[19px] font-extrabold uppercase tracking-wide text-white">
+          Smart Tool
+        </p>
+        <p className="mt-1.5 text-[11px] font-bold uppercase tracking-[0.22em] text-amberline-400">
+          Monitoring System
+        </p>
+        <p className="mt-4 text-xs font-semibold text-navy-300">Version {APP_VERSION}</p>
       </div>
-      <div className="skeleton mt-4 h-64" />
+
+      {/* A quiet footer, clear of the iOS home indicator. */}
+      <p
+        className="absolute left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium tracking-wide text-navy-400"
+        style={{ bottom: 'calc(2rem + var(--sab))' }}
+      >
+        Made by heart
+      </p>
     </div>
   )
 }
+
+/**
+ * Whether this document is the installed app opening.
+ *
+ * Resolved once when the module is evaluated — that is once per document, so it
+ * survives every remount of `App` and every in-app navigation, and a refresh
+ * re-evaluates it against the same app session and gets `false`. A browser tab
+ * is never a launch.
+ */
+const IS_APP_LAUNCH = claimAppLaunch()
 
 export default function App() {
   const { booting, bootError, retryBoot, continueWithoutBoot, isAuthenticated } = useApp()
@@ -148,9 +184,11 @@ export default function App() {
   }
 
   // Routing is still held until the stored session has been read — that is what
-  // stops a refresh bouncing a signed-in user to the login page — but the wait
-  // now shows the page skeleton rather than a full-screen splash.
-  if (booting) return <BootSkeleton />
+  // stops a refresh bouncing a signed-in user to the login page. The opening
+  // screen is only drawn over that wait when the installed app is actually
+  // opening; a refresh, an in-app navigation or a browser tab waits on the
+  // manifest's own background colour instead.
+  if (booting) return IS_APP_LAUNCH ? <BootSplash /> : null
 
   return (
     <>
@@ -199,6 +237,12 @@ export default function App() {
               </RequirePermission>
             }
           />
+          {/* One tool's borrowing history, opened from that tool's record.
+              Whoever may read the tool may open it: the page itself is already
+              scoped by role — staff get the laboratory's activity timeline, a
+              student only their own borrowings of this tool, through the same
+              policies and the same `visibleTransactions` filter as everywhere
+              else. No permission changes. */}
           <Route
             path="/tools/:id/history"
             element={
@@ -209,10 +253,14 @@ export default function App() {
           />
 
           <Route path="/scan" element={<ScanPage />} />
+          {/* The crib's counter: issuing a tool to somebody, and the approved
+              requests waiting to be released. Staff only — a student's own
+              borrowing runs through /requests, which is where their one ask
+              lives from Pending to Approved to checked out. */}
           <Route
             path="/borrow"
             element={
-              <RequirePermission permission={PERM.BORROW}>
+              <RequirePermission permission={PERM.BORROW_FOR_OTHERS}>
                 <BorrowPage />
               </RequirePermission>
             }
@@ -229,6 +277,52 @@ export default function App() {
           {/* Scoped by role in the data layer: a student's query only ever
               returns their own transactions. */}
           <Route path="/transactions" element={<TransactionsPage />} />
+
+          {/* One Requests page for everybody, scoped by role in the data layer:
+              staff work the queue of everyone's asks, a student sees their own
+              and their states. `/requests/new` is the single place a borrowing
+              request is created, for either. */}
+          <Route
+            path="/requests"
+            element={
+              <RequirePermission permission={PERM.REQUEST_CREATE}>
+                <RequestsPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="/requests/new"
+            element={
+              <RequirePermission permission={PERM.REQUEST_CREATE}>
+                <NewRequestPage />
+              </RequirePermission>
+            }
+          />
+          <Route path="/requests/:id" element={<RequestDetailPage />} />
+          {/* A reservation is the internal hold an approved request creates,
+              not a place of its own — it is shown on the request it belongs to,
+              so there is no standalone route for it. The table and the service
+              are unchanged. */}
+
+          {/* A conversation is readable only through membership, so both paths
+              share one page and one guard. */}
+          <Route
+            path="/messages"
+            element={
+              <RequirePermission permission={PERM.MESSAGE_SEND}>
+                <MessagesPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="/messages/:id"
+            element={
+              <RequirePermission permission={PERM.MESSAGE_SEND}>
+                <MessagesPage />
+              </RequirePermission>
+            }
+          />
+
           <Route
             path="/users"
             element={

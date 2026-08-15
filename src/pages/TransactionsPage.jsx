@@ -19,6 +19,7 @@ import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import { useDebounced, useMediaQuery, useTools, useTransactions, useUsers } from '../hooks'
 import * as txnService from '../services/transactions'
+import { cx } from '../utils/helpers'
 import { canReturnTransaction, isInstructor, isStudent, PERM } from '../utils/permissions'
 import { ACTIVE_TXN_STATUSES, TXN_STATUS, TXN_STATUSES } from '../utils/constants'
 import { formatDate, fromDateInput, toDateInput } from '../utils/dates'
@@ -55,7 +56,7 @@ const transactionsTour = (student) =>
     ? [
         {
           title: 'Your borrowing history',
-          text: 'Every tool you have taken out and handed back, newest first. Only your own loans appear here.',
+          text: 'Every tool you have taken out and handed back, newest first. Only your own borrowings appear here.',
         },
         {
           target: 'txn-summary',
@@ -64,7 +65,7 @@ const transactionsTour = (student) =>
         },
         {
           target: 'txn-search',
-          title: 'Find a loan',
+          title: 'Find a borrowing',
           text: 'Search by tool name or transaction ID to pull up a single record.',
         },
         {
@@ -85,7 +86,7 @@ const transactionsTour = (student) =>
         {
           target: 'txn-summary',
           title: 'At a glance',
-          text: 'The tiles show total records, tools currently out, overdue loans and returns.',
+          text: 'The tiles show total records, tools currently out, overdue borrowings and returns.',
         },
         {
           target: 'txn-search',
@@ -99,7 +100,7 @@ const transactionsTour = (student) =>
         },
         {
           title: 'Open a transaction',
-          text: 'Select a row to see the full record, extend a loan, or report a tool lost.',
+          text: 'Select a row to see the full record, extend a borrowing, or report a tool lost.',
         },
       ]
 
@@ -268,11 +269,18 @@ export default function TransactionsPage() {
           Report lost
         </button>
       )}
+      {/* Returning is reached from the borrowing it closes: Return is no longer
+          a bottom-bar slot for a student, so this record is the way to it —
+          for staff as it always was, and for the borrower themselves.
+          `canReturnTransaction` is the existing rule, unchanged. */}
       {ACTIVE_TXN_STATUSES.includes(selected.status) &&
         canReturnTransaction(user, selected) && (
-          <Link to={`/return?tool=${selected.toolId}`} className="btn btn-success">
+          <Link
+            to={`/return?tool=${selected.toolId}`}
+            className={cx('btn', txnService.returnRequested(selected) ? 'btn-outline' : 'btn-success')}
+          >
             <Undo2 className="h-4 w-4" />
-            Return tool
+            {txnService.returnRequested(selected) ? 'Return requested' : 'Return tool'}
           </Link>
         )}
     </>
@@ -300,45 +308,47 @@ export default function TransactionsPage() {
       )}
 
       {/* -------------------------------- filters -------------------------------- */}
-      <div className="card mb-4 p-3">
-        <div className="space-y-3">
-          <div data-tour="txn-search">
-            <SearchInput
-              value={search}
-              onChange={setSearch}
-              placeholder="Search by transaction ID, tool, borrower or purpose…"
-            />
-          </div>
-
-          {/* Phones get the same chip toolbar as the Tools page — one chip per
-              filter, plus one holding the date range; the desktop keeps its
-              inline dropdowns and date fields. */}
-          <div data-tour="txn-filters" className="sm:hidden">
-            <MobileFilterBar
-              filters={mobileFilters}
-              hasFilters={hasFilters}
-              onClear={resetFilters}
-              extra={{
-                label: from || to ? 'Dates set' : 'Dates',
-                active: !!from || !!to,
-                children: (
-                  <div className="space-y-3">
-                    <TextField
-                      label="From"
-                      type="date"
-                      value={from}
-                      onChange={(e) => setFrom(e.target.value)}
-                    />
-                    <TextField
-                      label="To"
-                      type="date"
-                      value={to}
-                      onChange={(e) => setTo(e.target.value)}
-                    />
-                  </div>
-                ),
-              }}
-            />
+      <div className="card mb-3 p-2.5 sm:mb-4 sm:p-3">
+        <div className="space-y-2 sm:space-y-3">
+          {/* On a phone the filters — the date range included — live at the
+              end of the search row as one square control, so the card stays a
+              single line. The desktop keeps its inline dropdowns and dates. */}
+          <div className="flex items-center gap-2" data-tour="txn-search">
+            <div className="min-w-0 flex-1">
+              <SearchInput
+                value={search}
+                onChange={setSearch}
+                placeholder="Search by transaction ID, tool, borrower or purpose…"
+              />
+            </div>
+            <div data-tour="txn-filters" className="sm:hidden">
+              <MobileFilterBar
+                iconOnly
+                filters={mobileFilters}
+                hasFilters={hasFilters}
+                onClear={resetFilters}
+                extra={{
+                  label: from || to ? 'Dates set' : 'Dates',
+                  active: !!from || !!to,
+                  children: (
+                    <div className="space-y-3">
+                      <TextField
+                        label="From"
+                        type="date"
+                        value={from}
+                        onChange={(e) => setFrom(e.target.value)}
+                      />
+                      <TextField
+                        label="To"
+                        type="date"
+                        value={to}
+                        onChange={(e) => setTo(e.target.value)}
+                      />
+                    </div>
+                  ),
+                }}
+              />
+            </div>
           </div>
 
           <div className="no-scrollbar -mx-1 hidden gap-2 overflow-x-auto px-1 pb-0.5 sm:flex">
@@ -493,7 +503,7 @@ function ExtendDueDate({ transaction, value, onChange, onSubmit, busy }) {
         />
         <button type="button" onClick={onSubmit} className="btn btn-primary" disabled={busy}>
           <CalendarClock className="h-4 w-4" />
-          Extend loan
+          Extend borrowing
         </button>
       </div>
       <p className="subtle mt-1.5 text-xs">

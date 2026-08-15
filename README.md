@@ -37,9 +37,11 @@ npm run verify           # logic + access-control checks; no network, no emulato
 npm run verify:browser   # real Chromium against a running server (see Verification)
 ```
 
-Install the PWA from the browser's install button or the in-app prompt. Note that the app needs a
-connection: unlike the previous backend there is no offline read cache or write queue, so records
-are unavailable while the workshop Wi-Fi is down.
+Install the PWA from the browser's install button or the in-app prompt. The app keeps working when
+the workshop Wi-Fi drops: every collection that has been read once is cached on the device, and a
+write made offline is queued and replayed when the connection returns (`services/offlineCache.js`
+and `services/sync.js`, checked by `npm run verify` — the offline suite). A collection that has
+never been downloaded reports itself as unavailable rather than as an empty laboratory.
 
 ### Supabase project
 
@@ -64,9 +66,14 @@ the browser.
    ```
    supabase/migrations/0001_schema.sql   tables, keys, indexes, constraints
    supabase/migrations/0002_rls.sql      row level security policies
+   supabase/migrations/0003…0025         everything added since, in number order
    ```
 
-   They create the seven tables and their policies and insert nothing at all.
+   Run every file in `supabase/migrations/`, in number order — they create the tables and their
+   policies and insert nothing at all. The later ones add the pieces the current app depends on:
+   tool images and profile photos (`0011`, `0022`), requests, reservations and messaging (`0012`),
+   return requests (`0019`), request batches (`0020`), Realtime on the core tables (`0021`) and
+   conversation deletion for the people in a thread (`0025`).
 
 3. **Create the first administrator.** Every later account is created from the Users page, but the
    first one is a chicken-and-egg problem: only an administrator may write another profile, and
@@ -92,7 +99,7 @@ registrations arrive as **Pending** and appear for approval on the admin Users p
 ### A second project for testing
 
 There is no local emulator here. To exercise destructive actions or policy changes safely, create a
-second Supabase project, apply the same two migrations to it, and point `.env` at that one.
+second Supabase project, apply the same migrations to it, and point `.env` at that one.
 
 ---
 
@@ -100,7 +107,7 @@ second Supabase project, apply the same two migrations to it, and point `.env` a
 
 | Route | Access | Notes |
 | --- | --- | --- |
-| `/` | public | Landing page. Reachable signed in too — it just offers the dashboard instead of Sign in / Sign up. |
+| `/` | public | Redirects to `/login`, in a browser tab and in the installed app alike. The landing page (`pages/HomePage.jsx`) is kept but not routed. |
 | `/signup` | public | Self-registration. Redirects to the dashboard if already signed in. |
 | `/login` | public | Redirects to the dashboard if already signed in. |
 | everything else | protected | `RequireAuth` sends a signed-out visitor to `/login`. |
@@ -154,13 +161,23 @@ layers enforce it, and all three are required:
 
 | | Admin | Instructor | Student |
 | --- | --- | --- | --- |
-| Sidebar | Dashboard, Tools, Scan, Borrow/Return, Transactions, Users, Maintenance, Notifications, Reports, Settings | Dashboard, Tools, Scan, Borrow/Return, Transactions, Maintenance, Notifications | Dashboard, Tools, Scan, Borrow/Return, Transactions, Notifications |
+| Navigation | Dashboard, Inventory, Scan, Transactions, Requests, Messages, Users, Maintenance, Notifications, Reports, Settings | Dashboard, Inventory, Requests, Transactions, Maintenance, Messages, Notifications (Scan is a raised quick action, not a list item) | Dashboard, Inventory, Requests, Scan, Return, Messages, Transactions, Notifications |
 | Tools | full control | edit, change status | view only |
 | Transactions | all | all, plus corrections | own only |
+| Requests | view all, approve, reject, manage holds | view all, approve, reject, manage holds | raise their own and follow them |
+| Messages | send; delete any thread they are in; clear messaging entirely | send; delete any thread they are in | send to laboratory staff; delete a thread they are in |
 | Users | create, edit, deactivate, delete | read the directory to pick a borrower | own profile only |
 | Maintenance | full | full | none |
-| Reports / Settings | yes | no | no |
+| Reports | yes | no | no |
+| Settings | own preferences **and** the laboratory configuration and data tools | own preferences | own preferences |
 | Dashboard | laboratory-wide statistics | laboratory-wide operations | own loans only |
+
+`/settings` is open to every role because everyone has preferences of their own there; the
+laboratory configuration, the seeding and export tools and the destructive actions inside the page
+are gated on `SETTINGS_VIEW`, `SETTINGS_EDIT` and `DATA_MANAGE`, which only an administrator holds.
+The counter (`/borrow`) is no longer a destination in anybody's navigation — staff reach it from the
+approved request it belongs to, so the same hand-over is never offered from two places — and its
+`BORROW_FOR_OTHERS` guard still refuses a student who types the URL.
 
 `src/components/navigation.js` is the single navigation definition; `src/utils/permissions.js` is
 the single permission matrix. `npm run verify` fails if the two disagree, if an admin-only route
@@ -169,6 +186,59 @@ loses its guard, or if the three sidebars stop being distinct.
 **A student's dashboard asks different questions rather than showing restricted answers.** Their
 queries only return their own records, so a "total users" figure would be quietly wrong rather than
 merely hidden. They see: my active loans, due soon, my overdue, my transactions, available tools.
+
+---
+
+## Workflows
+
+### Borrowing — one request, followed to the counter
+
+A student never issues a tool to themselves. Scanning a free tool, or opening it from the
+inventory, offers **Request to borrow**, which raises one request on `/requests/new`. Staff work the
+queue on `/requests`: approving one places a reservation holding the tool, and the hand-over itself
+is recorded at the counter (`/borrow?tool=…`), reached from the request. Returning is the mirror —
+a student asks for the hand-back from the loan, staff receive it on `/return`.
+
+Every request opens a conversation of its own, carrying the requester and the staff who may decide
+it, so the discussion and the decision sit in one place. The thread is reused if the request is
+submitted twice; it is never duplicated.
+
+### Scanning — one round trip
+
+The scanner resolves a label to the canonical tool id (`TOOL-00014`, `tool-14` and `14` all resolve
+to the same tool), then looks up the tool record and its open loan **together** rather than one
+after the other, so a scan settles in one round trip. The camera is released on the first successful
+read, and a page that is navigated away from while the camera is still opening hands the device
+straight back — the next page that needs it is never told the camera is already in use. If the
+camera is denied, missing, in use or the page is not on HTTPS, manual Tool ID entry takes over.
+
+### Messaging
+
+Two shapes of thread and no more: a direct one between two people, and one attached to a request.
+Both are private to their participants — a conversation is readable only through membership, so
+staff have no back door into a thread they are not part of. Alongside them are two standing rooms,
+the general one and the staff one, where membership *is* the role. Students may open a thread with
+laboratory staff; two students have no thread to open. Unread counts are derived from how far each
+participant has read, never stored, so there is nothing to fall out of step.
+
+**Anybody in a thread can delete it** — a student, an instructor or an administrator. The people in
+a conversation own it, so the boundary is membership rather than role: the conversation row goes and
+Postgres cascades its participant and message rows off it, the alerts that pointed at it go too, and
+`conversations_delete` applies the same `in_conversation()` test the read policy does, so a
+hand-rolled API call cannot touch a thread the caller is not in. It is a shared row, so this is a
+deletion for everyone in the thread rather than a private hide — the confirmation says so before it
+is done. The thread leaves the inbox on the same frame and the open pane closes. The two standing
+rooms cannot be deleted; every account with the role is expected to have them.
+
+The order matters and is deliberate: the thread first, its rows after. Deleting the participant rows
+first would end the caller's own membership, and membership is what `conversations_select` is — so
+the `delete … returning` that followed came back empty and the application reported a failure for a
+row that had in fact been removed.
+
+Beside the inbox search there is also **Delete all conversations**, which stays with the
+administrator (`DATA_MANAGE`) because it clears messaging for the whole laboratory: every thread and
+every message goes, the alerts pointing at them go, and the two standing rooms are emptied rather
+than removed. It asks for the word `DELETE` first, because it cannot be undone.
 
 ---
 
@@ -185,6 +255,12 @@ src/
     tools.js      inventory, validation, status transitions
     transactions.js  borrow / return / overdue engine
     users.js      directory + account provisioning (no credentials stored)
+    requests.js   tool requests: raise, decide, batch
+    reservations.js  the hold an approved request places on a tool
+    messages.js   conversations, messages, attachments, admin deletion
+    presence.js   who is on the app right now
+    storage.js    tool images and profile photos (private buckets, signed links)
+    offlineCache.js sync.js  the device copy and the queue that replays writes
     notifications.js maintenance.js reports.js activity.js settings.js
   hooks/          useAsyncData + the domain hooks bound to it
   context/        AppContext (session, settings, revision), ToastContext
@@ -211,10 +287,13 @@ narrows the query the client sends — a student's `list('transactions')` adds `
 that is an optimisation, not the boundary: the same rows come back with or without it. Collections a
 role cannot read at all resolve to `[]` without a request.
 
-**Screens refresh on write, within one client.** Every write bumps a revision counter the hooks
-watch, so a borrow updates every screen in that browser immediately. Unlike the previous backend
-there are no live listeners: a change made on another device is picked up on the next read, not
-pushed. Supabase Realtime would restore that and is the natural next step.
+**Screens refresh on write, and on somebody else's write too.** Every write bumps a revision counter
+the hooks watch, so a borrow updates every screen in that browser immediately. Changes made on
+another device arrive over Supabase Realtime (`0021_realtime_core_tables.sql`), which only re-raises
+the same change signal — the data still comes through the ordinary read, so the cache, the offline
+path and the policies all apply exactly as they do everywhere else. Under that sits a quiet
+revalidation while the tab is being looked at, and one the moment it is looked at again, for the
+case where a sleeping phone dropped the socket.
 
 **A borrow cannot leave the records inconsistent.** `db.runAtomic()` journals each write and undoes
 them in reverse if any step fails, so a loan record and the tool's status never drift apart. It is
@@ -261,6 +340,16 @@ activityLogs/{id}        action, toolId, userId, userName, transactionId, messag
                          meta, createdAt          (append-only, staff-readable)
 settings/app-settings    labName, labLocation, defaultBorrowDays, maxBorrowDays,
                          dueSoonThresholdDays, notify*, maintenanceIntervalDays
+toolRequests/{reqId}     toolId, toolName, userId, userName, status, purpose,
+                         neededFrom, neededUntil, decidedBy, decidedAt, batchId,
+                         collectionLocation, createdAt, updatedAt
+reservations/{id}        requestId, toolId, userId, status, holdUntil, fulfilledAt
+conversations/{cnvId}    kind (direct · request · general · staff), requestId,
+                         subject, createdBy, lastMessageAt, lastMessagePreview
+conversationParticipants/{cnvId:uid}  conversationId, userId, userName, userRole,
+                         lastReadAt         (a standing room has no rows: the role is the membership)
+messages/{msgId}         conversationId, senderId, senderName, senderRole, body,
+                         attachmentUrl/Name/Type/Size, createdAt
 ```
 
 The **id of a profile row is the Supabase Auth uuid**, which is what lets a policy compare
@@ -286,7 +375,7 @@ database's snake_case columns, so neither side has to bend to the other.
 
 `supabase/migrations/0002_rls.sql` is the access-control boundary. Highlights:
 
-- **Deny by default.** RLS is enabled on all seven tables, and a request with no matching policy is
+- **Deny by default.** RLS is enabled on every table, and a request with no matching policy is
   refused. `anon` is revoked outright, so nothing is readable without a session.
 - **The role is read from the caller's own row.** The helpers (`is_admin()`, `is_staff()`, …) are
   `SECURITY DEFINER` with a pinned `search_path`, because a policy on `profiles` that reads
@@ -309,7 +398,9 @@ database's snake_case columns, so neither side has to bend to the other.
   else is gated on.
 - **The activity log is append-only.** There is no UPDATE policy at all, so every update is refused.
 
-Storage is not used yet. When it is, the bucket needs policies of its own built on the same helpers.
+Storage follows the same boundary. The tool-image, avatar and message-attachment buckets are
+private; an object is written into a folder named after its owner, which is what the storage policy
+checks, and a link to it is minted on demand and expires. Nothing is served from a public URL.
 
 ### Verifying the policies
 

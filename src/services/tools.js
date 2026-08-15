@@ -118,6 +118,22 @@ export async function nextToolId() {
 }
 
 /* ------------------------------------------------------------------ *
+ * Pictures
+ * ------------------------------------------------------------------ */
+
+/** Column added by `0011_tool_images.sql`. */
+const IMAGE_COLUMN = 'imageUrl'
+
+/**
+ * Whether this database has had the tool-image migration applied.
+ *
+ * Until it has, the picture is skipped and every other part of adding or
+ * editing a tool behaves exactly as it did before — an un-migrated project
+ * loses the new field, never the working ones.
+ */
+export const toolImagesAvailable = () => db.supportsColumn(COLLECTIONS.tools, IMAGE_COLUMN)
+
+/* ------------------------------------------------------------------ *
  * Validation
  * ------------------------------------------------------------------ */
 
@@ -172,6 +188,16 @@ export async function validate(input, { isEdit = false } = {}) {
 
   if (input.notes && input.notes.length > 1000) errors.notes = 'Notes are too long (max 1000).'
 
+  // The picture is optional; when there is one it must be the storage URL the
+  // upload returned, matching the column's own constraint.
+  if (input.imageUrl != null && input.imageUrl !== '') {
+    if (typeof input.imageUrl !== 'string' || !/^https?:\/\//i.test(input.imageUrl)) {
+      errors.imageUrl = 'The tool image could not be read. Upload it again.'
+    } else if (input.imageUrl.length > 2048) {
+      errors.imageUrl = 'That image address is too long.'
+    }
+  }
+
   return errors
 }
 
@@ -210,6 +236,9 @@ export async function create(input, actor) {
     notes: input.notes?.trim() ?? '',
     createdAt: timestamp,
     updatedAt: timestamp,
+    // Omitted entirely when the migration is not applied, so the insert never
+    // names a column this database does not have.
+    ...((await toolImagesAvailable()) ? { imageUrl: input.imageUrl ?? null } : {}),
   }
 
   await db.insert(COLLECTIONS.tools, tool)
@@ -239,6 +268,9 @@ export async function updateTool(id, input, actor) {
   delete patch.id
   delete patch.createdAt
   delete patch.qrCode
+  // Same rule as the insert: an un-migrated database keeps saving every other
+  // field rather than failing on a column it does not have.
+  if ('imageUrl' in patch && !(await toolImagesAvailable())) delete patch.imageUrl
 
   if (patch.status && patch.status !== current.status) {
     const active = await hasActiveTransaction(id)

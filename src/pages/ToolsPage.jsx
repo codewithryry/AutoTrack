@@ -16,6 +16,7 @@ import {
   ShieldAlert,
   RotateCcw,
   PackageSearch,
+  Repeat,
 } from 'lucide-react'
 import Walkthrough, { usePageTour } from '../components/Walkthrough'
 import {
@@ -33,6 +34,7 @@ import {
   TableWrap,
 } from '../components/ui'
 import ToolForm from '../components/ToolForm'
+import ToolImage from '../components/ToolImage'
 import { QRCodeModal } from '../components/QRCodeDisplay'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
@@ -102,7 +104,7 @@ const toolsTour = (isCrib) => [
     title: 'Open a tool',
     text: isCrib
       ? 'Tap any tool for its full record and history. The ⋮ menu edits it, shows its QR code, or updates its status.'
-      : 'Tap any tool for its full record — status, condition, where it is kept, and whether you can borrow it.',
+      : 'Tap any tool for its full record — status, condition and where it is kept — or use Borrow to identify it at the borrow desk and request it.',
   },
 ]
 
@@ -122,7 +124,24 @@ export default function ToolsPage() {
   const [condition, setCondition] = useState('all')
   const [location, setLocation] = useState('all')
   const [sort, setSort] = useState('name-asc')
-  const [view, setView] = useLocalStorage('stms.tools.view', 'grid')
+
+  // The inventory can grow large and this is a PWA, so a student's default is
+  // the compact list; staff keep the card/table pair they had. The preference
+  // is stored per role, so one account's choice never leaks onto another's.
+  const studentViewer = isStudent(user)
+  const [view, setView] = useLocalStorage(
+    `stms.tools.view.${studentViewer ? 'student' : 'staff'}`,
+    studentViewer ? 'list' : 'grid',
+  )
+  const VIEW_OPTIONS = studentViewer
+    ? [
+        { value: 'list', label: 'List', icon: List, title: 'List view' },
+        { value: 'grid', label: 'Card', icon: Grid3x3, title: 'Card view' },
+      ]
+    : [
+        { value: 'grid', label: 'Card', icon: Grid3x3, title: 'Card view' },
+        { value: 'table', label: 'Table', icon: List, title: 'Table view' },
+      ]
 
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState(null)
@@ -152,13 +171,16 @@ export default function ToolsPage() {
     () =>
       toolService.filterTools(tools, {
         search: debouncedSearch,
-        status,
+        // A student's inventory is what they can actually ask for: the tools
+        // on the shelf right now. Everything out on loan, under maintenance or
+        // out of service belongs to the staff view of the room.
+        status: studentViewer ? TOOL_STATUS.AVAILABLE : status,
         category,
         condition,
         location,
         sort,
       }),
-    [tools, debouncedSearch, status, category, condition, location, sort],
+    [tools, debouncedSearch, status, category, condition, location, sort, studentViewer],
   )
 
   const hasFilters =
@@ -168,15 +190,21 @@ export default function ToolsPage() {
     condition !== 'all' ||
     location !== 'all'
 
-  // The same filters the desktop row holds, described once for the phone's chips.
+  // The same filters the desktop row holds, described once for the phone's
+  // chips. A student's list is pinned to Available, so the status chip would be
+  // a control with one setting — it is left out of their bar entirely.
   const MOBILE_FILTERS = [
-    {
-      key: 'status',
-      label: 'Status',
-      value: status,
-      onChange: setStatus,
-      options: [{ value: 'all', label: 'All statuses' }, ...TOOL_STATUSES],
-    },
+    ...(studentViewer
+      ? []
+      : [
+          {
+            key: 'status',
+            label: 'Status',
+            value: status,
+            onChange: setStatus,
+            options: [{ value: 'all', label: 'All statuses' }, ...TOOL_STATUSES],
+          },
+        ]),
     {
       key: 'category',
       label: 'Category',
@@ -308,38 +336,54 @@ export default function ToolsPage() {
         </div>
       )}
 
-      {/* ------------------------------ filters ------------------------------ */}
-      <div className="card mb-4 p-3">
-        <div className="flex flex-col gap-3">
-          {/* The search box takes the full first row, the way the Transactions
-              and Maintenance filter cards open — the view switch moves down to
-              the end of the filter row below it. */}
-          <div data-tour="tools-search">
-            <SearchInput
-              value={search}
-              onChange={setSearch}
-              placeholder="Search by name, ID, brand, serial or location…"
-            />
+      {/* ------------------------------ toolbar ------------------------------
+          One card carrying everything above the results, laid out for the width
+          it has rather than crammed into a single row:
+
+            phone    search (its own row, with the filter sheet's button at the
+                     end of it) · then the count and the view switch facing each
+                     other on a compact second row
+            desktop  search beside the inline dropdowns, with the count and the
+                     view switch closing the same row — so the width is used and
+                     nothing floats in its own band of empty space.
+
+          Every control, filter and handler is the page's own, unchanged. */}
+      <div className="card mb-3 p-2.5 sm:mb-4 sm:p-3">
+        <div className="flex flex-col gap-2 sm:gap-3">
+          {/* The search takes the full width of the card at every size — the
+              same opening row the Transactions and Maintenance cards use — so
+              nothing is left hanging beside it on a wide screen. */}
+          <div className="flex items-center gap-2" data-tour="tools-search">
+            <div className="min-w-0 flex-1">
+              <SearchInput
+                value={search}
+                onChange={setSearch}
+                placeholder="Search by name, ID, brand, serial or location…"
+              />
+            </div>
+            {/* The phone's filters: one square control at the end of the search
+                row, opening every filter in a sheet. */}
+            <div data-tour="tools-filters" className="sm:hidden">
+              <MobileFilterBar
+                iconOnly
+                filters={MOBILE_FILTERS}
+                hasFilters={hasFilters}
+                onClear={resetFilters}
+              />
+            </div>
           </div>
 
-          {/* Phones get a scrollable row of filter chips, each opening its own
-              options; the desktop keeps its inline dropdowns exactly as they
-              were. */}
-          <div data-tour="tools-filters" className="sm:hidden">
-            <MobileFilterBar
-              filters={MOBILE_FILTERS}
-              hasFilters={hasFilters}
-              onClear={resetFilters}
-            />
-          </div>
-
-          <div className="no-scrollbar -mx-1 hidden gap-2 overflow-x-auto px-1 pb-0.5 sm:flex">
-            <FilterSelect
-              label="Status"
-              value={status}
-              onChange={setStatus}
-              options={[{ value: 'all', label: 'All statuses' }, ...TOOL_STATUSES]}
-            />
+          {/* The desktop row: dropdowns that wrap rather than scroll, then the
+              count and the view switch pushed to the far end of the same row. */}
+          <div className="hidden flex-wrap items-center gap-2 sm:flex">
+            {!studentViewer && (
+              <FilterSelect
+                label="Status"
+                value={status}
+                onChange={setStatus}
+                options={[{ value: 'all', label: 'All statuses' }, ...TOOL_STATUSES]}
+              />
+            )}
             <FilterSelect
               label="Category"
               value={category}
@@ -364,34 +408,26 @@ export default function ToolsPage() {
                 Clear
               </button>
             )}
-            <div className="ml-auto flex shrink-0 items-center gap-1 rounded-lg border p-0.5">
-              <button
-                type="button"
-                onClick={() => setView('grid')}
-                className={cx('btn btn-sm btn-icon', view === 'grid' ? 'btn-dark' : 'btn-ghost')}
-                aria-label="Grid view"
-                aria-pressed={view === 'grid'}
-              >
-                <Grid3x3 className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setView('table')}
-                className={cx('btn btn-sm btn-icon', view === 'table' ? 'btn-dark' : 'btn-ghost')}
-                aria-label="Table view"
-                aria-pressed={view === 'table'}
-              >
-                <List className="h-4 w-4" />
-              </button>
+
+            <div className="ml-auto flex shrink-0 items-center gap-2">
+              <ResultCount loading={loading} shown={filtered.length} total={tools.length} />
+              <ViewSwitch view={view} onChange={setView} options={VIEW_OPTIONS} />
             </div>
           </div>
-        </div>
-      </div>
 
-      <div className="mb-3 flex items-center justify-between">
-        <p className="subtle text-xs font-semibold uppercase tracking-wider">
-          {loading ? 'Loading…' : `${filtered.length} of ${tools.length} tools`}
-        </p>
+          {/* The phone's second row: two separate controls, but the count
+              stretches across whatever the switch does not take, so the row is
+              used end to end rather than leaving a gap between them. */}
+          <div className="flex items-center gap-2 sm:hidden">
+            <ResultCount
+              loading={loading}
+              shown={filtered.length}
+              total={tools.length}
+              className="min-w-0 flex-1"
+            />
+            <ViewSwitch view={view} onChange={setView} options={VIEW_OPTIONS} />
+          </div>
+        </div>
       </div>
 
       {/* ------------------------------ results ------------------------------
@@ -415,27 +451,35 @@ export default function ToolsPage() {
         ) : filtered.length === 0 ? (
           <div className="card">
             <EmptyState
+              // Adding the first tool is the raised "+" in the bottom bar and
+              // the button above the list on the desktop, so it is not offered
+              // a third time here.
               icon={PackageSearch}
               title="No tools found."
               description={
                 hasFilters
                   ? 'No tools match the current search and filters.'
-                  : 'The inventory is empty. Add the first tool to generate its QR code.'
+                  : 'The inventory is empty. The first tool added generates its own QR code.'
               }
               action={
                 hasFilters ? (
                   <button type="button" onClick={resetFilters} className="btn btn-outline">
                     Clear filters
                   </button>
-                ) : can(PERM.TOOL_CREATE) ? (
-                  <button type="button" onClick={openCreate} className="btn btn-primary">
-                    <Plus className="h-4 w-4" />
-                    Add the first tool
-                  </button>
                 ) : null
               }
             />
           </div>
+        ) : view === 'list' ? (
+          <ToolList
+            tools={filtered}
+            can={can}
+            onEdit={openEdit}
+            onQR={setQrTool}
+            onDelete={requestDelete}
+            onStatus={runStatusAction}
+            user={user}
+          />
         ) : view === 'table' ? (
           <ToolTable
             tools={filtered}
@@ -718,7 +762,12 @@ function ToolCard({ tool, ...actions }) {
   return (
     <article className="card group flex flex-col p-4 transition-all hover:shadow-lift">
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
+        {/* The picture leads the card at the same size as the status tiles
+            elsewhere; a tool without one keeps the icon tile. */}
+        <Link to={`/tools/${tool.id}`} className="shrink-0">
+          <ToolImage tool={tool} className="h-12 w-12" />
+        </Link>
+        <div className="min-w-0 flex-1">
           <Link
             to={`/tools/${tool.id}`}
             className="block truncate text-sm font-bold leading-tight hover:underline"
@@ -762,6 +811,15 @@ function ToolCard({ tool, ...actions }) {
         <Link to={`/tools/${tool.id}`} className="btn btn-outline btn-sm flex-1">
           Details
         </Link>
+        {/* The inventory's way into borrowing: it lands on the request form
+            with this tool selected, which is the only place a request record
+            is created. A student's list is available tools only. */}
+        {isStudent(actions.user) && tool.status === TOOL_STATUS.AVAILABLE && (
+          <Link to={`/requests/new?tool=${tool.id}`} className="btn btn-primary btn-sm flex-1">
+            <Repeat className="h-3.5 w-3.5" />
+            Request
+          </Link>
+        )}
         {/* The QR panel downloads and prints the shelf label — staff work, and
             the same rule the tool page applies. */}
         {isStaff(actions.user) && (
@@ -776,6 +834,61 @@ function ToolCard({ tool, ...actions }) {
         )}
       </div>
     </article>
+  )
+}
+
+/**
+ * The student's compact list view.
+ *
+ * One row per tool, sized for a phone and the PWA's narrow layouts: image,
+ * name, id, category and shelf in two lines, badges on the right, and the two
+ * actions that matter — the tool record and Borrow, which opens the borrow
+ * desk with this tool selected. It reads the same `filtered` list as the card
+ * view, so search, filters, sorting and the tour all behave identically.
+ */
+function ToolList({ tools, ...actions }) {
+  return (
+    <div className="card divide-y overflow-hidden p-0">
+      {tools.map((tool) => (
+        <div key={tool.id} className="flex items-center gap-3 px-3 py-2.5">
+          <Link to={`/tools/${tool.id}`} className="shrink-0">
+            <ToolImage tool={tool} className="h-10 w-10" rounded="rounded-md" />
+          </Link>
+          <div className="min-w-0 flex-1">
+            <Link
+              to={`/tools/${tool.id}`}
+              className="block truncate text-sm font-bold leading-tight hover:underline"
+            >
+              {tool.name}
+            </Link>
+            <p className="subtle mt-0.5 flex items-center gap-1 truncate text-xs">
+              <span className="mono shrink-0">{tool.id}</span>
+              <span>·</span>
+              <span className="truncate">{tool.category}</span>
+              <span>·</span>
+              <MapPin className="h-3 w-3 shrink-0 opacity-60" />
+              <span className="truncate">{tool.location}</span>
+            </p>
+          </div>
+          <div className="hidden shrink-0 items-center gap-1.5 sm:flex">
+            <ConditionBadge condition={tool.condition} />
+            <StatusBadge status={tool.status} />
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <Link to={`/tools/${tool.id}`} className="btn btn-outline btn-sm">
+              Details
+            </Link>
+            {isStudent(actions.user) && tool.status === TOOL_STATUS.AVAILABLE && (
+              <Link to={`/requests/new?tool=${tool.id}`} className="btn btn-primary btn-sm">
+                <Repeat className="h-3.5 w-3.5" />
+                Request
+              </Link>
+            )}
+            {isStaff(actions.user) && <ActionMenu tool={tool} {...actions} />}
+          </div>
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -798,9 +911,12 @@ function ToolTable({ tools, ...actions }) {
             {tools.map((tool) => (
               <tr key={tool.id}>
                 <td>
-                  <Link to={`/tools/${tool.id}`} className="block min-w-0 hover:underline">
-                    <span className="block truncate font-semibold">{tool.name}</span>
-                    <span className="subtle mono block text-xs">{tool.id}</span>
+                  <Link to={`/tools/${tool.id}`} className="flex min-w-0 items-center gap-2.5 hover:underline">
+                    <ToolImage tool={tool} className="h-9 w-9" rounded="rounded-md" />
+                    <span className="min-w-0">
+                      <span className="block truncate font-semibold">{tool.name}</span>
+                      <span className="subtle mono block text-xs">{tool.id}</span>
+                    </span>
                   </Link>
                 </td>
                 <td className="whitespace-nowrap text-xs">{tool.category}</td>
@@ -820,5 +936,70 @@ function ToolTable({ tools, ...actions }) {
         </table>
       </TableWrap>
     </SectionCard>
+  )
+}
+
+/**
+ * How much of the inventory is on screen — a pill rather than loose type, so it
+ * sits on the toolbar as deliberately as the switch beside it.
+ */
+function ResultCount({ loading, shown, total, className }) {
+  return (
+    <p
+      className={cx(
+        'subtle inline-flex min-h-[34px] items-center rounded-xl border px-3',
+        'text-[11px] font-bold uppercase tracking-wider',
+        className ?? 'shrink-0',
+      )}
+      style={{ background: 'rgb(var(--surface-2))' }}
+    >
+      {loading ? 'Loading…' : `${shown} of ${total} tools`}
+    </p>
+  )
+}
+
+/**
+ * List or grid. A segmented control: one tinted track with the chosen half
+ * filled, so it reads as a switch rather than as two loose icon buttons.
+ * Switching is state, not a route — the search and every filter stay put.
+ */
+function ViewSwitch({ view, onChange, options, bare = false }) {
+  return (
+    <div
+      // `bare` drops the track: the phone's toolbar puts the switch inside the
+      // same pill as the count, and a border within a border reads as clutter.
+      className={cx(
+        'flex shrink-0 items-center gap-0.5',
+        !bare && 'rounded-xl border p-0.5',
+      )}
+      style={bare ? undefined : { background: 'rgb(var(--surface-2))' }}
+      role="group"
+      aria-label="View"
+    >
+      {options.map((option) => {
+        const Icon = option.icon
+        const active = view === option.value
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onChange(option.value)}
+            // Named, not just drawn: two unlabelled glyphs are a guess, and the
+            // words cost a few pixels on the one row that has them to spare.
+            className={cx(
+              'flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-bold',
+              'uppercase tracking-wide transition-colors',
+              active ? 'btn-dark shadow-sm' : 'muted hover:bg-black/[0.04] dark:hover:bg-white/5',
+            )}
+            aria-label={option.title}
+            aria-pressed={active}
+            title={option.title}
+          >
+            <Icon className="h-4 w-4 shrink-0" />
+            {option.label}
+          </button>
+        )
+      })}
+    </div>
   )
 }

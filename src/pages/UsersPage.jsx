@@ -16,6 +16,7 @@ import {
   EmptyState,
   ErrorState,
   FilterSelect,
+  MobileFilterBar,
   Modal,
   PageHeader,
   RoleBadge,
@@ -30,6 +31,7 @@ import {
 } from '../components/ui'
 import TransactionTable from '../components/TransactionTable'
 import Walkthrough, { usePageTour } from '../components/Walkthrough'
+import AccountAvatar from '../components/Avatar'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import { useDebounced, useTransactions, useUsers } from '../hooks'
@@ -46,7 +48,7 @@ import {
   USER_STATUSES,
   YEAR_LEVELS,
 } from '../utils/constants'
-import { cx, initials } from '../utils/helpers'
+import { cx } from '../utils/helpers'
 import { formatDate } from '../utils/dates'
 
 export const USERS_CSV_COLUMNS = [
@@ -62,6 +64,13 @@ export const USERS_CSV_COLUMNS = [
   { key: 'contact', label: 'Contact' },
   { key: 'status', label: 'Status' },
   { key: 'createdAt', label: 'Registered', format: (v) => formatDate(v, '') },
+]
+
+const SORT_OPTIONS = [
+  { value: 'name-asc', label: 'Name (A–Z)' },
+  { value: 'name-desc', label: 'Name (Z–A)' },
+  { value: 'role', label: 'Role' },
+  { value: 'newest', label: 'Newest first' },
 ]
 
 /**
@@ -135,6 +144,33 @@ export default function UsersPage() {
     () => userService.filterUsers(users, { search: debouncedSearch, role, status, sort }),
     [users, debouncedSearch, role, status, sort],
   )
+
+  const hasFilters = !!debouncedSearch || role !== 'all' || status !== 'all'
+
+  const resetFilters = () => {
+    setSearch('')
+    setRole('all')
+    setStatus('all')
+  }
+
+  /** The same filters the desktop row holds, described once for the phone's sheet. */
+  const MOBILE_FILTERS = [
+    {
+      key: 'role',
+      label: 'Role',
+      value: role,
+      onChange: setRole,
+      options: [{ value: 'all', label: 'All roles' }, ...ROLES],
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      value: status,
+      onChange: setStatus,
+      options: [{ value: 'all', label: 'All statuses' }, ...USER_STATUSES],
+    },
+    { key: 'sort', label: 'Sort', value: sort, onChange: setSort, options: SORT_OPTIONS },
+  ]
 
   /** Self-registered accounts waiting for a decision. */
   const pending = useMemo(() => userService.pendingAccounts(users), [users])
@@ -271,7 +307,7 @@ export default function UsersPage() {
             {pendingProfiles.map((row) => (
               <li key={row.id} className="px-4 py-3">
                 <div className="flex flex-wrap items-center gap-3">
-                  <Avatar name={row.fullName} size="sm" />
+                  <Avatar name={row.fullName} url={row.avatarUrl} size="sm" />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-bold">{row.fullName}</p>
                     <p className="subtle truncate text-xs">
@@ -308,10 +344,27 @@ export default function UsersPage() {
                       <dt className="subtle text-[11px] font-bold uppercase tracking-wider">
                         {field.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())}
                       </dt>
+                      {/* A picture is decided by looking at it, so the two are
+                          drawn rather than printed as URLs. Every other field
+                          reads as before. */}
                       <dd className="mt-0.5 flex flex-wrap items-center gap-2 text-sm">
-                        <span className="subtle line-through">{row[field] || '—'}</span>
-                        <span aria-hidden="true">→</span>
-                        <span className="font-semibold">{value || '—'}</span>
+                        {field === 'avatarUrl' ? (
+                          <>
+                            <Avatar name={row.fullName} url={row.avatarUrl} size="sm" />
+                            <span aria-hidden="true">→</span>
+                            {value ? (
+                              <Avatar name={row.fullName} url={value} size="sm" />
+                            ) : (
+                              <span className="font-semibold">Removed</span>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <span className="subtle line-through">{row[field] || '—'}</span>
+                            <span aria-hidden="true">→</span>
+                            <span className="font-semibold">{value || '—'}</span>
+                          </>
+                        )}
                       </dd>
                     </div>
                   ))}
@@ -334,7 +387,7 @@ export default function UsersPage() {
           <ul className="divide-y">
             {pending.map((row) => (
               <li key={row.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
-                <Avatar name={row.fullName} size="sm" />
+                <Avatar name={row.fullName} url={row.avatarUrl} size="sm" />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-bold">{row.fullName}</p>
                   <p className="subtle truncate text-xs">
@@ -368,15 +421,33 @@ export default function UsersPage() {
         </SectionCard>
       )}
 
-      {/* -------------------------------- filters -------------------------------- */}
-      <div className="card mb-4 p-3" data-tour="users-filters">
-        <div className="space-y-3">
-          <SearchInput
-            value={search}
-            onChange={setSearch}
-            placeholder="Search by name, email, student ID or department…"
-          />
-          <div className="no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1 pb-0.5">
+      {/* -------------------------------- filters --------------------------------
+          The inventory's card, exactly: the search takes the full width of its
+          own row with the phone's filter sheet at the end of it, and the
+          dropdowns wrap along a desktop row that the result count closes. Every
+          control, filter and handler is this page's own, unchanged — only the
+          arrangement is now the one the rest of the app uses. */}
+      <div className="card mb-3 p-2.5 sm:mb-4 sm:p-3" data-tour="users-filters">
+        <div className="flex flex-col gap-2 sm:gap-3">
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <SearchInput
+                value={search}
+                onChange={setSearch}
+                placeholder="Search by name, email, student ID or department…"
+              />
+            </div>
+            <div className="sm:hidden">
+              <MobileFilterBar
+                iconOnly
+                filters={MOBILE_FILTERS}
+                hasFilters={hasFilters}
+                onClear={resetFilters}
+              />
+            </div>
+          </div>
+
+          <div className="hidden flex-wrap items-center gap-2 sm:flex">
             <FilterSelect
               label="Role"
               value={role}
@@ -389,24 +460,38 @@ export default function UsersPage() {
               onChange={setStatus}
               options={[{ value: 'all', label: 'All statuses' }, ...USER_STATUSES]}
             />
-            <FilterSelect
-              label="Sort"
-              value={sort}
-              onChange={setSort}
-              options={[
-                { value: 'name-asc', label: 'Name (A–Z)' },
-                { value: 'name-desc', label: 'Name (Z–A)' },
-                { value: 'role', label: 'Role' },
-                { value: 'newest', label: 'Newest first' },
-              ]}
+            <FilterSelect label="Sort" value={sort} onChange={setSort} options={SORT_OPTIONS} />
+            {hasFilters && (
+              <button type="button" onClick={resetFilters} className="btn btn-ghost btn-sm shrink-0">
+                Clear
+              </button>
+            )}
+            <ResultCount
+              loading={loading}
+              shown={filtered.length}
+              total={users.length}
+              className="ml-auto shrink-0"
+            />
+          </div>
+
+          {/* The phone's second row: the same count, stretched across the width
+              rather than left floating at one end. */}
+          <div className="flex sm:hidden">
+            <ResultCount
+              loading={loading}
+              shown={filtered.length}
+              total={users.length}
+              className="min-w-0 flex-1"
             />
           </div>
         </div>
       </div>
 
-      {/* --------------------------------- list --------------------------------- */}
+      {/* --------------------------------- list ---------------------------------
+          The count moved into the filter card above, as it is on the inventory,
+          so the list is named rather than numbered twice. */}
       <SectionCard
-        title={`${filtered.length} accounts`}
+        title="Directory"
         bodyClassName="p-0"
         data-tour="users-list"
       >
@@ -435,7 +520,7 @@ export default function UsersPage() {
                     onClick={() => setViewing(row)}
                     className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left"
                   >
-                    <Avatar name={row.fullName} />
+                    <Avatar name={row.fullName} url={row.avatarUrl} />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-bold">{row.fullName}</p>
                       <p className="subtle truncate text-xs">
@@ -503,7 +588,7 @@ export default function UsersPage() {
                       <tr key={row.id} className="cursor-pointer" onClick={() => setViewing(row)}>
                         <td>
                           <div className="flex min-w-0 items-center gap-2.5">
-                            <Avatar name={row.fullName} size="sm" />
+                            <Avatar name={row.fullName} url={row.avatarUrl} size="sm" />
                             <div className="min-w-0">
                               <p className="truncate font-semibold">{row.fullName}</p>
                               <p className="subtle truncate text-xs">
@@ -634,18 +719,19 @@ export default function UsersPage() {
   )
 }
 
-function Avatar({ name, size = 'md' }) {
+// The directory's own square tile, now carrying the account's picture when it
+// has one. The shared component draws the initials otherwise, exactly as this
+// did before.
+function Avatar({ name, url, size = 'md' }) {
   return (
-    <span
+    <AccountAvatar
+      name={name}
+      url={url}
       className={cx(
-        'grid shrink-0 place-items-center rounded-lg font-extrabold',
+        '!rounded-lg',
         size === 'sm' ? 'h-8 w-8 text-[10px]' : 'h-10 w-10 text-xs',
       )}
-      style={{ background: 'rgb(var(--rail))', color: 'rgb(var(--accent))' }}
-      aria-hidden="true"
-    >
-      {initials(name)}
-    </span>
+    />
   )
 }
 
@@ -718,7 +804,7 @@ function UserDetail({
     >
       <div className="space-y-5">
         <div className="flex items-center gap-3">
-          <Avatar name={user.fullName} />
+          <Avatar name={user.fullName} url={user.avatarUrl} />
           <div className="flex flex-wrap gap-1.5">
             <RoleBadge role={user.role} />
             <UserStatusBadge status={user.status} />
@@ -1092,5 +1178,24 @@ function UserForm({ open, user, onClose, currentUser }) {
         )}
       </form>
     </Modal>
+  )
+}
+
+/**
+ * How much of the directory is on screen — the inventory's control, worded for
+ * accounts, so the two pages report their results the same way.
+ */
+function ResultCount({ loading, shown, total, className }) {
+  return (
+    <p
+      className={cx(
+        'subtle inline-flex min-h-[34px] items-center rounded-xl border px-3',
+        'text-[11px] font-bold uppercase tracking-wider',
+        className ?? 'shrink-0',
+      )}
+      style={{ background: 'rgb(var(--surface-2))' }}
+    >
+      {loading ? 'Loading…' : `${shown} of ${total} accounts`}
+    </p>
   )
 }

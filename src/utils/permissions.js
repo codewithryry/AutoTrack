@@ -30,6 +30,15 @@ export const PERM = {
   TXN_VIEW_ALL: 'txn:view-all',
   TXN_EDIT: 'txn:edit',
 
+  // Requests and reservations
+  REQUEST_CREATE: 'request:create', // ask for a tool
+  REQUEST_VIEW_ALL: 'request:view-all', // the queue, not just your own
+  REQUEST_DECIDE: 'request:decide', // approve or reject
+  RESERVATION_MANAGE: 'reservation:manage', // hold, release, mark fulfilled
+
+  // Messaging
+  MESSAGE_SEND: 'message:send',
+
   // Users
   USER_VIEW: 'user:view', // read the directory (borrower pickers, loan owners)
   USER_MANAGE: 'user:manage', // reach the Users page at all
@@ -63,6 +72,14 @@ const INSTRUCTOR_PERMS = [
   PERM.RETURN_ANY,
   PERM.TXN_VIEW_ALL,
   PERM.TXN_EDIT, // extend due dates, write off a lost tool
+  // The crib decides what goes out, so the request queue and its holds are
+  // theirs to work: read every request, approve or reject one, and manage the
+  // reservations approvals create.
+  PERM.REQUEST_CREATE,
+  PERM.REQUEST_VIEW_ALL,
+  PERM.REQUEST_DECIDE,
+  PERM.RESERVATION_MANAGE,
+  PERM.MESSAGE_SEND,
   PERM.USER_VIEW,
   PERM.MAINTENANCE_VIEW,
   PERM.MAINTENANCE_MANAGE,
@@ -73,7 +90,15 @@ const INSTRUCTOR_PERMS = [
  * else. They cannot change a tool's status, read the directory, or open
  * maintenance, reports or settings.
  */
-const STUDENT_PERMS = [PERM.TOOL_VIEW, PERM.BORROW, PERM.RETURN]
+const STUDENT_PERMS = [
+  PERM.TOOL_VIEW,
+  PERM.BORROW,
+  PERM.RETURN,
+  // A student may ask for a tool and talk to the crib about it. Deciding a
+  // request, and seeing anybody else's, stays with staff.
+  PERM.REQUEST_CREATE,
+  PERM.MESSAGE_SEND,
+]
 
 const ROLE_PERMISSIONS = {
   [ROLE.ADMIN]: Object.values(PERM), // full access

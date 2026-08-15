@@ -38,6 +38,127 @@ import { formatDateTime } from '../utils/dates'
  * actually means and saying plainly that the gaps between them are unknown.
  * ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ *
+ * Automatic capture
+ * ------------------------------------------------------------------ */
+
+/**
+ * How stale a fix may be before a flow asks the device for a new one.
+ *
+ * The browser answers from its own cache within this window, so a form that
+ * pre-fetched on mount and submits a moment later does not pay for a second fix
+ * — and one left open for ten minutes does.
+ */
+const FRESH_MS = 60_000
+
+/**
+ * How long a submit will wait for a fix before going ahead without one.
+ *
+ * Shorter than the standing 15s default because this one is in the way of a
+ * button the person has already pressed: a loan that cannot be created because
+ * the sky is cloudy would be a worse failure than a loan with no point on it.
+ */
+const SUBMIT_TIMEOUT_MS = 8000
+
+/**
+ * One reading, taken for a flow that needs it, without anybody pressing for it.
+ *
+ * Still one reading per action — this is not a watch and nothing here runs on a
+ * timer. What changes against `LocationCaptureField` is only *who asks*: the
+ * flow does, at the two moments it actually needs coordinates.
+ *
+ *   - On mount, **only if the permission is already granted**, so a return trip
+ *     through a form has its point ready and the device is never prompted by a
+ *     screen merely being opened.
+ *   - In the submit handler, via `ensure()`, which is what guarantees the point
+ *     belongs to the action being saved rather than to whenever the page loaded.
+ *
+ * A refusal, a timeout or a device that cannot answer all resolve to `null` —
+ * the same value these flows have always stored for "not captured", so every
+ * existing validation, toast and display keeps working untouched.
+ */
+export function useAutoLocation({ enabled = true } = {}) {
+  const [location, setLocation] = useState(null)
+  const [failure, setFailure] = useState(null)
+  // Shared so a submit that lands while the mount-time fix is still in flight
+  // joins that one instead of asking the device twice.
+  const inFlight = useRef(null)
+
+  const ensure = useCallback(async () => {
+    if (!enabled) return null
+    if (inFlight.current) return inFlight.current
+
+    const run = captureLocation({ timeoutMs: SUBMIT_TIMEOUT_MS, maximumAgeMs: FRESH_MS })
+      .then((reading) => {
+        setLocation(reading)
+        setFailure(null)
+        return reading
+      })
+      .catch((err) => {
+        // Deliberately not re-thrown. The caller is mid-submit and the action
+        // itself does not depend on a location, so the failure is recorded for
+        // the UI and the flow carries on with `null`.
+        setLocation(null)
+        setFailure({ reason: err.reason ?? GEO_ERROR.UNAVAILABLE, message: err.message })
+        return null
+      })
+      .finally(() => {
+        inFlight.current = null
+      })
+
+    inFlight.current = run
+    return run
+  }, [enabled])
+
+  // The head start, and the reason a granted permission never prompts again:
+  // asked only when the answer is already yes, so this cannot be what puts a
+  // permission dialog on screen.
+  const primed = useRef(false)
+  useEffect(() => {
+    if (!enabled || primed.current) return
+    primed.current = true
+    let alive = true
+    locationPermissionState().then((state) => {
+      if (alive && state === 'granted') void ensure()
+    })
+    return () => {
+      alive = false
+    }
+  }, [enabled, ensure])
+
+  return { location, failure, ensure }
+}
+
+/**
+ * The one line a form shows about all this.
+ *
+ * Not a control and not a progress indicator — there is nothing to press and
+ * nothing to wait for. It exists so that a screen which quietly reads the
+ * device's position still says on its face that it does, which is the least a
+ * form taking a location without being asked owes the person filling it in.
+ */
+export function AutoLocationNotice({ location, failure, className }) {
+  return (
+    <p className={cx('subtle flex items-start gap-1.5 text-[11px] leading-relaxed', className)}>
+      <MapPin className="mt-px h-3 w-3 shrink-0" />
+      {isLocation(location) ? (
+        <span>
+          Location recorded automatically —{' '}
+          <span className="mono font-semibold">{formatCoords(location)}</span> ·{' '}
+          {formatAccuracy(location)}. One reading, stored with this record only.
+        </span>
+      ) : failure ? (
+        <span>{failure.message} This will be saved without a location.</span>
+      ) : (
+        <span>
+          Your location is recorded once with this record, when you submit it. Nothing is tracked
+          before or after.
+        </span>
+      )}
+    </p>
+  )
+}
+
 /**
  * A single opt-in reading attached to a form.
  *

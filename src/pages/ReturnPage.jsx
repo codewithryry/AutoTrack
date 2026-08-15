@@ -21,7 +21,7 @@ import {
   TextAreaField,
   TxnStatusBadge,
 } from '../components/ui'
-import { LocationCaptureField } from '../components/LocationCapture'
+import { AutoLocationNotice, useAutoLocation } from '../components/LocationCapture'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import { useDebounced, useTransactions } from '../hooks'
@@ -71,7 +71,11 @@ export default function ReturnPage() {
   const [submitting, setSubmitting] = useState(false)
   // Where the tool is being handed back. Independent of the collection point —
   // the two are stored and shown as separate readings, never as a route.
-  const [returnLocation, setReturnLocation] = useState(null)
+  const {
+    location: returnLocation,
+    failure: locationFailure,
+    ensure: ensureLocation,
+  } = useAutoLocation()
 
   const openLoans = useMemo(
     () =>
@@ -115,11 +119,36 @@ export default function ReturnPage() {
     try {
       // A student asks; the crib confirms. Same record, same service, two
       // steps — nothing is closed here for a borrower.
+      // Where the person is as they hand the tool over — taken now, for this
+      // action, whichever of the two steps below it turns out to be.
+      const captured = await ensureLocation()
+
       if (asksOnly) {
         await txnService.requestReturn(
           { transactionId: selected.id, condition, notes },
           user,
         )
+        // `requestReturn` opens no location column of its own — the loan is
+        // still open at this point, and the reading belongs on it as one more
+        // point taken while the tool was out. So it goes through the existing
+        // checkpoint API, unchanged, and shows up in the trail staff already
+        // read. Best effort: the request itself has already succeeded, and a
+        // refused or failed reading must not undo it.
+        if (captured) {
+          try {
+            await txnService.addLocationCheckpoint(
+              {
+                transactionId: selected.id,
+                location: captured,
+                note: 'Return requested here',
+              },
+              user,
+            )
+          } catch {
+            // Not surfaced: the return request stands either way, and the
+            // location was never the point of this action.
+          }
+        }
         toast.success(
           `Staff have been asked to receive ${selected.toolName}. Hand it in at the crib.`,
           { title: 'Return requested' },
@@ -127,16 +156,15 @@ export default function ReturnPage() {
         setSelectedId('')
         setNotes('')
         setCondition(CONDITION.GOOD)
-        setReturnLocation(null)
         return
       }
 
       await txnService.returnTool(
-        { transactionId: selected.id, condition, notes, returnLocation },
+        { transactionId: selected.id, condition, notes, returnLocation: captured },
         user,
       )
 
-      const where = returnLocation
+      const where = captured
         ? 'The return location was recorded.'
         : 'No return location was recorded.'
 
@@ -152,7 +180,6 @@ export default function ReturnPage() {
       setSelectedId('')
       setNotes('')
       setCondition(CONDITION.GOOD)
-      setReturnLocation(null)
       navigate(`/tools/${selected.toolId}`)
     } catch (err) {
       if (err instanceof ValidationError) {
@@ -405,17 +432,10 @@ export default function ReturnPage() {
                     rows={3}
                   />
 
-                  {/* The return point is recorded when the tool is actually
-                      received, so only the counter captures it. */}
-                  {!asksOnly && (
-                    <LocationCaptureField
-                      value={returnLocation}
-                      onChange={setReturnLocation}
-                      title="Where is this tool being handed back?"
-                      description="One reading, taken now, stored as the borrowing's return point. It is kept separately from where the tool was collected."
-                      disabled={submitting}
-                    />
-                  )}
+                  {/* Both steps record a point now: the counter's becomes the
+                      borrowing's return location, a student's is kept on the
+                      still-open loan as a checkpoint. */}
+                  <AutoLocationNotice location={returnLocation} failure={locationFailure} />
 
                   <button
                     type="submit"

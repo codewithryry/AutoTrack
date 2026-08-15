@@ -39,7 +39,7 @@ import { useToast } from '../context/ToastContext'
 import { useTool, useToolMaintenance, useToolTransactions } from '../hooks'
 import * as toolService from '../services/tools'
 import * as txnService from '../services/transactions'
-import { LocationCaptureField, LocationTrail } from '../components/LocationCapture'
+import { AutoLocationNotice, LocationTrail, useAutoLocation } from '../components/LocationCapture'
 import { canReturnTransaction, isStaff, isStudent, PERM } from '../utils/permissions'
 import { TOOL_STATUS, SERIAL_CRITICAL_CATEGORIES } from '../utils/constants'
 import { cx } from '../utils/helpers'
@@ -701,7 +701,7 @@ function StatusAction({ icon: Icon, label, description, onClick, disabled, tone 
  * ------------------------------------------------------------------ */
 function ToolLocationCheckpoint({ loan, actor, onRecorded }) {
   const toast = useToast()
-  const [reading, setReading] = useState(null)
+  const { location: reading, failure: locationFailure, ensure: ensureLocation } = useAutoLocation()
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
   // The loan as last written, so a checkpoint appears in the list immediately
@@ -715,7 +715,29 @@ function ToolLocationCheckpoint({ loan, actor, onRecorded }) {
   // or defaulted. Null when the loan has none, which is a state, not a value.
   const known = txnService.lastKnownLocation(record)
 
-  const save = async (location = reading, noteText = note) => {
+  /**
+   * Save a checkpoint from a reading this device has just taken.
+   *
+   * The capture happens here rather than behind a button of its own, so the
+   * point saved is the one the device could see at the moment of saving.
+   */
+  const saveCurrent = async () => {
+    setSaving(true)
+    try {
+      const location = await ensureLocation()
+      if (!location) {
+        toast.error(
+          locationFailure?.message ?? 'No location fix was available, so nothing was recorded.',
+        )
+        return
+      }
+      await save(location, note)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const save = async (location, noteText = note) => {
     if (!location) return
     setSaving(true)
     try {
@@ -730,7 +752,6 @@ function ToolLocationCheckpoint({ loan, actor, onRecorded }) {
         actor,
       )
       setRecord(updated)
-      setReading(null)
       setNote('')
       toast.success('Location checkpoint recorded.', {
         title: `Checkpoint ${txnService.checkpointsOf(updated).length}`,
@@ -792,33 +813,22 @@ function ToolLocationCheckpoint({ loan, actor, onRecorded }) {
       </div>
 
       <div className="mt-3 space-y-3">
-        <LocationCaptureField
-          value={reading}
-          onChange={setReading}
-          title="Take a reading now"
-          description="Stored as a usage checkpoint on this loan, in addition to where the tool was collected."
-          disabled={saving}
+        <TextField
+          label="What is it being used for here? (optional)"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="e.g. Engine bay 3, brake bleed practical"
         />
-
-        {reading && (
-          <>
-            <TextField
-              label="What is it being used for here? (optional)"
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="e.g. Engine bay 3, brake bleed practical"
-            />
-            <button
-              type="button"
-              onClick={() => save()}
-              className="btn btn-primary w-full"
-              disabled={saving}
-            >
-              {saving ? <Spinner /> : <MapPin className="h-4 w-4" />}
-              {saving ? 'Saving checkpoint…' : 'Save location checkpoint'}
-            </button>
-          </>
-        )}
+        <button
+          type="button"
+          onClick={saveCurrent}
+          className="btn btn-primary w-full"
+          disabled={saving}
+        >
+          {saving ? <Spinner /> : <MapPin className="h-4 w-4" />}
+          {saving ? 'Saving checkpoint…' : 'Save location checkpoint'}
+        </button>
+        <AutoLocationNotice location={reading} failure={locationFailure} />
       </div>
 
       {checkpoints.length > 0 && (

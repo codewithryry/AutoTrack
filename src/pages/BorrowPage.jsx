@@ -31,7 +31,7 @@ import {
   TextField,
 } from '../components/ui'
 import Walkthrough, { usePageTour } from '../components/Walkthrough'
-import { LocationCaptureField } from '../components/LocationCapture'
+import { AutoLocationNotice, useAutoLocation } from '../components/LocationCapture'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import { useDebounced, useRequests, useReservations, useTools, useUsers } from '../hooks'
@@ -138,7 +138,13 @@ export default function BorrowPage() {
   // Where the tool is being collected. Null until the borrower asks for a
   // reading, and null again if they refuse or the fix fails — the loan is
   // created either way.
-  const [borrowLocation, setBorrowLocation] = useState(null)
+  // The collection point, taken by the flow rather than by a button. `ensure()`
+  // in the submit handler is what ties the reading to the loan being created.
+  const {
+    location: borrowLocation,
+    failure: locationFailure,
+    ensure: ensureLocation,
+  } = useAutoLocation()
 
   // Default the borrower and the due date once settings and the session are known.
   useEffect(() => {
@@ -265,13 +271,18 @@ export default function BorrowPage() {
       // One loan per tool, through the same service the scanner uses: it
       // refuses a tool that is not available, and closes the hold an approval
       // left behind, so the same approval cannot be checked out twice.
+      // Taken here, not on mount, so the point is where the handover actually
+      // happens. Resolves to null if it is refused or cannot be had, which is
+      // exactly what this field has always stored for "not captured".
+      const captured = await ensureLocation()
+
       const details = {
         userId: form.userId,
         borrowDate: fromDateInput(form.borrowDate),
         dueDate: fromDateInput(form.dueDate),
         purpose: form.purpose,
         notes: form.notes,
-        borrowLocation,
+        borrowLocation: captured,
       }
       const created = []
       for (const tool of selectedTools) {
@@ -285,7 +296,7 @@ export default function BorrowPage() {
       // Said plainly either way, so nobody has to guess afterwards whether the
       // pin was stored.
       toast.success(
-        borrowLocation
+        captured
           ? `${count} tool${count === 1 ? '' : 's'} borrowed. The collection location was recorded.`
           : `${count} tool${count === 1 ? '' : 's'} borrowed. No collection location was recorded.`,
         { title: count === 1 ? 'Transaction created' : 'Transactions created' },
@@ -600,15 +611,9 @@ export default function BorrowPage() {
                     rows={2}
                   />
 
-                  {/* Where the handover happens, which is not necessarily where
-                      the counter is standing — so it stays a button. */}
-                  <LocationCaptureField
-                    value={borrowLocation}
-                    onChange={setBorrowLocation}
-                    title="Where is this tool being collected?"
-                    description="One reading, taken now, stored as the loan's collection point. It records where the tool changed hands — not where it goes afterwards."
-                    disabled={submitting}
-                  />
+                  {/* No control: the collection point is taken by the flow when
+                      the loan is created. This line only says so. */}
+                  <AutoLocationNotice location={borrowLocation} failure={locationFailure} />
 
                   <button
                     type="submit"

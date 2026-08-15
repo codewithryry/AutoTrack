@@ -9,7 +9,7 @@ import {
   TextAreaField,
   TextField,
 } from '../components/ui'
-import { LocationCaptureField } from '../components/LocationCapture'
+import { AutoLocationNotice, useAutoLocation } from '../components/LocationCapture'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import { useDebounced, useRequests, useTools, useTransactions } from '../hooks'
@@ -80,7 +80,11 @@ export default function NewRequestPage() {
   const [search, setSearch] = useState('')
   // Where the tool will be collected. Optional: a refusal or a failed fix
   // leaves the request without a collection point and sends it anyway.
-  const [collectionLocation, setCollectionLocation] = useState(null)
+  const {
+    location: collectionLocation,
+    failure: locationFailure,
+    ensure: ensureLocation,
+  } = useAutoLocation()
 
   // The tools this person already has an open request on — asking again would
   // be the same ask, so they are not offered.
@@ -213,12 +217,17 @@ export default function NewRequestPage() {
       // decide them in one action and every loan they become carries it. Each
       // tool still gets its own record — that is what a hold, a checkout and a
       // return each work on.
+      // The collection point, taken as the request is sent rather than when the
+      // form opened. Null when refused or unavailable, which the service
+      // already treats as "none supplied".
+      const captured = await ensureLocation()
+
       const batchId = toolIds.length > 1 ? requestService.newBatchId() : null
       const saved = []
       for (const toolId of toolIds) {
         saved.push(
           await requestService.create(
-            { toolId, ...window, collectionLocation, batchId },
+            { toolId, ...window, collectionLocation: captured, batchId },
             user,
             { maxDays },
           ),
@@ -426,17 +435,10 @@ export default function NewRequestPage() {
             {/* The collection point, captured once with the request — the same
                 reading the borrow desk takes, kept on the request so staff know
                 where to have the tool ready. */}
-            {/* Optional, and never in the way: a refusal, a failure or a
-                device that cannot report one all leave `null`, which is what
-                "no location" is stored as — the request still sends. */}
-            <LocationCaptureField
-              value={collectionLocation}
-              onChange={setCollectionLocation}
-              auto={student}
-              compact
-              title="Collection point (optional)"
-              disabled={busy}
-            />
+            {/* Never in the way: a refusal, a failure or a device that cannot
+                report one all leave `null`, which is what "no location" is
+                stored as — the request still sends. */}
+            <AutoLocationNotice location={collectionLocation} failure={locationFailure} />
           </div>
         </SectionCard>
 

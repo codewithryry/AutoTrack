@@ -16,6 +16,13 @@
 /** Why a reading could not be taken. The UI maps these to its own copy. */
 export const GEO_ERROR = {
   UNSUPPORTED: 'unsupported',
+  /**
+   * A secure context is a precondition, not an error the device produced: over
+   * plain http (and only there — `localhost` counts as secure, which is why a
+   * dev machine can be misleading) the browser never even asks. Kept apart from
+   * `unsupported` so a deployment problem never reads as a device limitation.
+   */
+  INSECURE: 'insecure',
   DENIED: 'denied',
   UNAVAILABLE: 'unavailable',
   TIMEOUT: 'timeout',
@@ -31,6 +38,8 @@ export class GeolocationCaptureError extends Error {
 
 const MESSAGES = {
   [GEO_ERROR.UNSUPPORTED]: 'This device or browser cannot report a location.',
+  [GEO_ERROR.INSECURE]:
+    'Location needs a secure (https) connection. Open this site over https and try again.',
   [GEO_ERROR.DENIED]:
     'Location permission was refused. You can still continue — the location simply will not be recorded.',
   [GEO_ERROR.UNAVAILABLE]:
@@ -63,8 +72,18 @@ export const isApproximate = (location) =>
  */
 export function captureLocation({ timeoutMs = 15000, maximumAgeMs = 0 } = {}) {
   return new Promise((resolve, reject) => {
-    if (typeof navigator === 'undefined' || !navigator.geolocation) {
-      reject(new GeolocationCaptureError(GEO_ERROR.UNSUPPORTED, MESSAGES[GEO_ERROR.UNSUPPORTED]))
+    // Client only. On a server render there is no `navigator` to ask, and the
+    // call must not be treated as a device that refused.
+    if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+      reject(fail(GEO_ERROR.UNSUPPORTED))
+      return
+    }
+    if (window.isSecureContext === false) {
+      reject(fail(GEO_ERROR.INSECURE))
+      return
+    }
+    if (!navigator.geolocation) {
+      reject(fail(GEO_ERROR.UNSUPPORTED))
       return
     }
 
@@ -72,12 +91,7 @@ export function captureLocation({ timeoutMs = 15000, maximumAgeMs = 0 } = {}) {
       (position) => {
         const { latitude, longitude, accuracy } = position.coords
         if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-          reject(
-            new GeolocationCaptureError(
-              GEO_ERROR.UNAVAILABLE,
-              MESSAGES[GEO_ERROR.UNAVAILABLE],
-            ),
-          )
+          reject(fail(GEO_ERROR.UNAVAILABLE, { detail: 'coords were not finite numbers' }))
           return
         }
         resolve({
@@ -98,11 +112,43 @@ export function captureLocation({ timeoutMs = 15000, maximumAgeMs = 0 } = {}) {
             : error?.code === 3
               ? GEO_ERROR.TIMEOUT
               : GEO_ERROR.UNAVAILABLE
-        reject(new GeolocationCaptureError(reason, MESSAGES[reason]))
+        reject(
+          fail(reason, {
+            code: error?.code,
+            // The browser's own text is the only thing that separates a person
+            // tapping Block from the document being denied the feature by a
+            // Permissions-Policy header — both arrive as PERMISSION_DENIED.
+            detail: error?.message,
+          }),
+        )
       },
       { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: maximumAgeMs },
     )
   })
+}
+
+/** Names for the numeric codes the API rejects with, so a log reads as English. */
+const CODE_NAMES = { 1: 'PERMISSION_DENIED', 2: 'POSITION_UNAVAILABLE', 3: 'TIMEOUT' }
+
+/**
+ * Build the rejection, and say on the console why it happened.
+ *
+ * A location that silently does not appear is the same to a user whether the
+ * device refused, the fix timed out, or the page was served without permission
+ * to ask at all — and the last of those is a deployment fault that no amount of
+ * tapping Allow can fix. The line below carries the one distinguishing detail
+ * (the browser's own message, plus whether the context was secure) so the real
+ * cause can be read off a phone's remote inspector.
+ */
+function fail(reason, { code, detail } = {}) {
+  const secure = typeof window !== 'undefined' ? window.isSecureContext : 'n/a'
+  console.warn(
+    `[geo] capture failed: ${reason}` +
+      (code ? ` (${CODE_NAMES[code] ?? `code ${code}`})` : '') +
+      ` — secureContext=${secure}` +
+      (detail ? ` — ${detail}` : ''),
+  )
+  return new GeolocationCaptureError(reason, MESSAGES[reason] ?? MESSAGES[GEO_ERROR.UNAVAILABLE])
 }
 
 /** Six decimal places — about 0.1m, far finer than any consumer GPS fix. */

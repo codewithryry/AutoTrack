@@ -456,7 +456,10 @@ password-reset and confirmation links point back at it.
   would pin users to an old build forever. Hashed assets get `immutable` instead.
 - **`"framework": "vite"`** is pinned explicitly so Vercel cannot mis-detect the project.
 - **HTTPS comes free**, which the QR scanner needs — browsers refuse camera access on plain HTTP
-  outside `localhost`. `Permissions-Policy: camera=(self)` is set for the same reason.
+  outside `localhost`. `Permissions-Policy: camera=(self), geolocation=(self)` is set for the same
+  reason — both must be `(self)`, not `()`. An empty allowlist disables the feature for the page
+  itself, so `getCurrentPosition` fails with `PERMISSION_DENIED` in production while `localhost`
+  (which sends no such header) keeps working.
 
 ---
 

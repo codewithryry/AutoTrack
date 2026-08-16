@@ -301,7 +301,11 @@ function PushNotificationRow() {
           : 'This browser cannot deliver alerts while the app is closed. The notification centre inside the app still works.'
       }
       state={available ? state : 'unsupported'}
-      stateLabel={available && state === 'granted' ? 'On' : undefined}
+      // Notifications are on for this device or they are not — there is no
+      // third state worth naming. `Not set`, which the camera and location rows
+      // use for a permission the browser has never been asked for, would say
+      // the same thing as `Off` here and give two names to one state.
+      stateLabel={available && state !== 'denied' ? (state === 'granted' ? 'On' : 'Off') : undefined}
       action={
         available &&
         state !== 'denied' &&

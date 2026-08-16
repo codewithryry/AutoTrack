@@ -325,16 +325,16 @@ export default function LoginPage() {
               </button>
             </div>
 
-            <p className="subtle mt-4 text-xs leading-relaxed">
-              No account yet?{' '}
-              <Link
-                to="/signup"
-                className="font-bold text-amberline-700 hover:underline dark:text-amberline-400"
-              >
-                Create one
-              </Link>
-              . Students and instructors can sign in as soon as they register.
-            </p>
+          <p className="subtle mt-4 text-xs leading-relaxed">
+            No account yet?{' '}
+            <Link
+              to="/signup"
+              className="font-bold text-amberline-700 hover:underline dark:text-amberline-400"
+            >
+              Create one
+            </Link>
+            . Students can sign in as soon as they register. Instructor accounts require verification before signing in.
+          </p>
           </div>
 
           {/* Kept with the form column so it centres under it at every width and

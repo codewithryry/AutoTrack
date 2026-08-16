@@ -35,9 +35,11 @@ import {
   usePresence,
   useRequests,
   useTransactions,
+  useUsers,
 } from '../hooks'
 import { cx } from '../utils/helpers'
 import * as txnService from '../services/transactions'
+import { pendingAccounts } from '../services/users'
 import {
   ACTIVE_TXN_STATUSES,
   APP_NAME,
@@ -90,6 +92,11 @@ export default function AppLayout() {
   // Open loans, for the half of the Requests queue that is returns waiting to
   // be confirmed. Scoped by role like every other read.
   const { transactions } = useTransactions()
+  // The directory, for the Users badge below. Read through the same live hook
+  // the Users page itself uses, so both share one cache entry and one
+  // subscription — approving or rejecting an account ticks the revision counter
+  // and the badge follows the page without anything extra here.
+  const { users } = useUsers()
   // Presence is announced for as long as the app is open, not only while the
   // inbox is on screen — otherwise a signed-in account reads as offline to
   // everyone until it happens to be looking at its own messages. The channel is
@@ -124,6 +131,15 @@ export default function AppLayout() {
       transactions.filter(
         (txn) => ACTIVE_TXN_STATUSES.includes(txn.status) && txnService.returnRequested(txn),
       ).length
+
+  // The Users count is the accounts sitting at `Pending` — a self-registered
+  // instructor waiting to be verified is the one that puts a number here — and
+  // it is read with `pendingAccounts()`, the same helper the Users page and the
+  // dashboard already count with, off the live directory. Administrator only:
+  // approving an account is theirs to do, and a badge nobody else can act on is
+  // a number with nothing behind it. Separate from `requestCount` above, which
+  // is untouched.
+  const userCount = isAdmin ? pendingAccounts(users).length : 0
 
   // One navigation definition, filtered by the authenticated user's stored
   // role — the sidebar, the drawer and the bottom bar all read from it.
@@ -354,6 +370,7 @@ export default function AppLayout() {
             unread={unread}
             messageUnread={unreadMessages}
             requestCount={requestCount}
+            userCount={userCount}
             spacious={isStudent}
           />
         </nav>
@@ -990,11 +1007,14 @@ function SidebarLinks({
   unread,
   messageUnread = 0,
   requestCount = 0,
+  userCount = 0,
   showDescriptions = false,
   spacious = false,
 }) {
-  // Three rails carry a count: alerts, unread messages and open requests. Same
-  // badge, same rules.
+  // Four rails carry a count: alerts, unread messages, open requests and
+  // accounts waiting to be approved. Same badge, same rules — each reads its own
+  // number, so none of them affects another. A zero renders nothing, which is
+  // what hides the badge on every rail that has no work waiting.
   const badgeFor = (to) =>
     to === '/notifications'
       ? unread
@@ -1002,7 +1022,9 @@ function SidebarLinks({
         ? messageUnread
         : to === '/requests'
           ? requestCount
-          : 0
+          : to === '/users'
+            ? userCount
+            : 0
 
   return (
     <ul className={spacious ? 'space-y-1.5' : 'space-y-1'}>

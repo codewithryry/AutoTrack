@@ -20,8 +20,16 @@ import {
 import { SelectField, Spinner, TextField } from '../components/ui'
 import { useToast } from '../context/ToastContext'
 import * as userService from '../services/users'
+import { logout } from '../services/auth'
 import { ValidationError } from '../services/tools'
-import { APP_VERSION, DEPARTMENTS, OTHER_OPTION, PROGRAMMES, ROLE } from '../utils/constants'
+import {
+  APP_VERSION,
+  DEPARTMENTS,
+  OTHER_OPTION,
+  PROGRAMMES,
+  ROLE,
+  USER_STATUS,
+} from '../utils/constants'
 import { cx } from '../utils/helpers'
 
 /**
@@ -56,7 +64,7 @@ const ROLE_CHOICES = [
     icon: ShieldCheck,
     title: 'Instructor',
     text: 'Issue and receive tools for students and oversee laboratory operations.',
-    note: 'Full access to the tool crib.',
+    note: 'Needs administrator approval before you can sign in.',
   },
 ]
 
@@ -121,15 +129,29 @@ export default function SignUpPage() {
       // Never leave credentials in component state.
       setForm((f) => ({ ...f, password: '', confirmPassword: '' }))
 
+      // An instructor registers into `Pending` and cannot use the app yet.
+      // Registration signs the account in to write the profile, so the session
+      // is dropped here rather than left for the session check to reject a
+      // moment later — the person lands on the login screen already knowing
+      // why, instead of watching a dashboard flash and disappear.
+      if (account.status === USER_STATUS.PENDING) {
+        await logout().catch(() => {})
+        toast.success(
+          'An administrator will review your instructor account. You can sign in once it is approved.',
+          { title: 'Registration received' },
+        )
+        navigate('/login', { replace: true })
+        return
+      }
+
       toast.success('Account created successfully.', {
         title: `Welcome, ${account.fullName.split(' ')[0]}`,
       })
 
-      // Registration signs the account in and it starts Active, so there is
-      // nothing to wait for and nothing to type again: straight to the
-      // dashboard, which renders the view for the role just created. An account
-      // an administrator has since set to Pending is caught by the session
-      // check on the way in, exactly as it is for any other sign-in.
+      // A student starts Active, so there is nothing to wait for and nothing to
+      // type again: straight to the dashboard. An account an administrator has
+      // since set to Pending is caught by the session check on the way in,
+      // exactly as it is for any other sign-in.
       navigate('/dashboard', { replace: true })
     } catch (err) {
       if (err instanceof ValidationError) {
@@ -436,8 +458,8 @@ export default function SignUpPage() {
               >
                 <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 opacity-60" />
                 <p className="subtle text-xs leading-relaxed">
-                  Instructor accounts are active straight away — sign in as soon as you have
-                  registered.
+                  Instructor accounts are checked by an administrator first. You can register now,
+                  but you will not be able to sign in until your account is approved.
                 </p>
               </div>
             )}

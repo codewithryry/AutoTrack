@@ -18,7 +18,7 @@ import { useToast } from '../context/ToastContext'
 import * as userService from '../services/users'
 import * as storage from '../services/storage'
 import { ValidationError } from '../services/tools'
-import { ROLE, YEAR_LEVELS } from '../utils/constants'
+import { ROLE, YEAR_LEVELS, PROGRAMMES, DEPARTMENTS, OTHER_OPTION } from '../utils/constants'
 import { cx } from '../utils/helpers'
 import { formatDate } from '../utils/dates'
 
@@ -223,6 +223,7 @@ export default function ProfilePage() {
   const tourSteps = useMemo(() => accountTour(isStudent, isInstructor), [isStudent, isInstructor])
 
   const [form, setForm] = useState(initial)
+  const [departmentOther, setDepartmentOther] = useState('')
   const [errors, setErrors] = useState({})
   const [saving, setSaving] = useState(false)
 
@@ -230,7 +231,9 @@ export default function ProfilePage() {
 
   const setField = (name) => (value) => {
     setForm((f) => ({ ...f, [name]: value?.target?.value ?? value }))
-    setErrors((e) => ({ ...e, [name]: undefined }))
+    // The typed `Other` value is validated as `department`, so clear that error.
+    const shown = name === 'departmentOther' ? 'department' : name
+    setErrors((e) => ({ ...e, [name]: undefined, [shown]: undefined }))
   }
 
   const submit = async (event) => {
@@ -238,14 +241,35 @@ export default function ProfilePage() {
     setErrors({})
     setSaving(true)
     try {
-      await userService.submitProfileChanges(form, user)
-      await refreshUser()
-      // Placed against the form the change was submitted from, so the notice
-      // reads as an answer to that action rather than a banner in the shell.
-      toast.success('Your changes were sent to an instructor for approval.', {
-        title: 'Submitted for approval',
-        anchor: '[data-tour="account-form"]',
-      })
+      // If department is "Other", use the typed value instead
+      const isOther = form.department === OTHER_OPTION
+      const submitForm = isOther ? { ...form, department: departmentOther } : form
+      
+      if (isStudent) {
+        await userService.submitProfileChanges(submitForm, user)
+        await refreshUser()
+        // Placed against the form the change was submitted from, so the notice
+        // reads as an answer to that action rather than a banner in the shell.
+        toast.success('Your changes were sent to an instructor for approval.', {
+          title: 'Submitted for approval',
+          anchor: '[data-tour="account-form"]',
+        })
+      } else if (isInstructor) {
+        await userService.updateOwnProfile(submitForm, user)
+        await refreshUser()
+        toast.success('Your profile was updated.', {
+          title: 'Profile saved',
+          anchor: '[data-tour="account-form"]',
+        })
+      } else {
+        // Admin - would normally edit from Users page, but allow direct save if editing own profile
+        await userService.updateOwnProfile(submitForm, user)
+        await refreshUser()
+        toast.success('Your profile was updated.', {
+          title: 'Profile saved',
+          anchor: '[data-tour="account-form"]',
+        })
+      }
     } catch (err) {
       if (err instanceof ValidationError) setErrors(err.errors ?? {})
       else if (err?.name === 'NoChangesError')
@@ -363,14 +387,14 @@ export default function ProfilePage() {
                 value={form.firstName ?? ''}
                 onChange={setField('firstName')}
                 error={errors.firstName}
-                disabled={!isStudent}
+                disabled={isAdmin}
               />
               <TextField
                 label="Last name"
                 value={form.lastName ?? ''}
                 onChange={setField('lastName')}
                 error={errors.lastName}
-                disabled={!isStudent}
+                disabled={isAdmin}
               />
               {/* A student number is a student's field — an instructor has none,
                   so the row would only ever read as an empty box on their page. */}
@@ -395,6 +419,16 @@ export default function ProfilePage() {
                   disabled={!isStudent}
                 />
               )}
+              {isInstructor && (
+                <TextField
+                  label="Contact number"
+                  value={form.contact ?? ''}
+                  onChange={setField('contact')}
+                  error={errors.contact}
+                  placeholder="0917 000 0000"
+                  disabled={false}
+                />
+              )}
               <div className="col-span-2">
                 <TextField
                   label="Email address"
@@ -412,12 +446,14 @@ export default function ProfilePage() {
               a student's form with two boxes greyed out. */}
           <SectionCard title={isStaffAccount ? 'Department' : 'Academic information'}>
             <div className={cx('grid gap-3', !isStaffAccount && 'grid-cols-2')}>
-              <TextField
+              <SelectField
                 label={isStaffAccount ? 'Department' : 'Programme'}
                 value={form.department ?? ''}
                 onChange={setField('department')}
-                error={errors.department}
-                disabled={!isStudent}
+                error={form.department === OTHER_OPTION ? undefined : errors.department}
+                options={isStaffAccount ? DEPARTMENTS : PROGRAMMES}
+                placeholder={`Select a ${isStaffAccount ? 'department' : 'programme'}`}
+                disabled={isAdmin}
               />
               {!isStaffAccount && (
                 <SelectField
@@ -431,6 +467,19 @@ export default function ProfilePage() {
                 />
               )}
             </div>
+            {form.department === OTHER_OPTION && (
+              <TextField
+                label={isStaffAccount ? 'Department (please specify)' : 'Programme (please specify)'}
+                value={departmentOther}
+                onChange={(e) => {
+                  setDepartmentOther(e.target.value)
+                  setErrors((e) => ({ ...e, department: undefined }))
+                }}
+                error={errors.department}
+                placeholder={isStaffAccount ? 'e.g. Automotive Technology' : 'e.g. Automotive Technology'}
+                className="mt-3"
+              />
+            )}
           </SectionCard>
 
           {/* The action area, deliberately outside the field cards: the
@@ -444,6 +493,17 @@ export default function ProfilePage() {
               <button type="submit" className="btn btn-primary btn-lg mt-3 w-full" disabled={saving}>
                 {saving && <Spinner />}
                 Submit for approval
+              </button>
+            </div>
+          )}
+          {isInstructor && (
+            <div className="card p-4">
+              <p className="subtle text-xs leading-relaxed">
+                Your changes are saved immediately to your account.
+              </p>
+              <button type="submit" className="btn btn-primary btn-lg mt-3 w-full" disabled={saving}>
+                {saving && <Spinner />}
+                Save changes
               </button>
             </div>
           )}
@@ -486,20 +546,18 @@ export default function ProfilePage() {
             </SectionCard>
           )}
 
-          {/* An instructor cannot open the Users page, so telling them their
-              details are edited there sent them to a route that answers
-              "Restricted area". They are told who does hold the record instead,
-              and given the operational summary that makes this page worth
-              opening — read-only, and with nothing from user management on it. */}
+          {/* An instructor can edit their own details on this page, but cannot
+              view other accounts or manage students — that's the Users page.
+              They are told what they can do from here, and what tools exist. */}
           {isInstructor && (
             <>
               <SectionCard title="About this page">
                 <p className="muted flex gap-2 text-sm leading-relaxed">
                   <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 opacity-60" />
-                  These are the details the laboratory holds for you. Edit them — and every
-                  student record — from the Users page; other staff accounts stay with the
-                  administrators. The approval flow applies to student accounts only, and you are
-                  one of the people who reviews them.
+                  These are your account details. Edit your personal information above and save
+                  directly. To manage student records, head to the Users page; other staff accounts
+                  stay with the administrators. The approval flow applies to student accounts only,
+                  and you are one of the people who reviews them.
                 </p>
               </SectionCard>
 

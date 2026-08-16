@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Send, X } from 'lucide-react'
 import {
   ErrorState,
@@ -39,6 +39,14 @@ import { cx, matchesQuery } from '../utils/helpers'
  */
 /** How many matches the student's picker shows at once. */
 const MAX_RESULTS = 20
+
+/**
+ * The one refusal that is not the requester's mistake: the tool is already
+ * spoken for by another account. Matched by text so it can be told apart from
+ * an ordinary field complaint on the same `toolId` key; the service is where it
+ * is written (`requests.create`).
+ */
+const CONFLICT_MESSAGE = 'This tool has already been requested by another student.'
 
 export default function NewRequestPage() {
   const navigate = useNavigate()
@@ -108,7 +116,12 @@ export default function NewRequestPage() {
           t.userId === request.userId &&
           new Date(t.borrowDate) >= new Date(request.decidedAt),
       )
-      return loans.length > 0 && loans.every((t) => !ACTIVE_TXN_STATUSES.includes(t.status))
+      // Handed back, or in a state that no longer has the tool out of the room:
+      // the borrowing is over, so the tool is tickable again.
+      return (
+        loans.length > 0 &&
+        loans.every((t) => !!t.returnDate || !ACTIVE_TXN_STATUSES.includes(t.status))
+      )
     }
     return new Set(mine.filter((r) => !spent(r)).map((r) => r.toolId))
   }, [requests, transactions, user?.id])
@@ -240,8 +253,20 @@ export default function NewRequestPage() {
       )
       navigate(saved.length === 1 ? `/requests/${saved[0].id}` : '/requests', { replace: true })
     } catch (err) {
-      if (err.errors) setErrors(err.errors)
-      toast.error(err.message ?? 'That request could not be sent.')
+      if (err.errors?.toolId === CONFLICT_MESSAGE) {
+        // The conflict is not an ordinary "fill this in" — the tool is spoken
+        // for by somebody else, and the answer came back from the server after
+        // the form was already filled. It is announced the same way every other
+        // request outcome is, in the notification area by the account menu, and
+        // nowhere else: the picker keeps no copy of it, so the reader is never
+        // told the same thing twice.
+        toast.error(CONFLICT_MESSAGE)
+      } else if (err.errors?.toolId) {
+        setErrors({ toolId: err.errors.toolId })
+      } else {
+        if (err.errors) setErrors(err.errors)
+        toast.error(err.message ?? 'That request could not be sent.')
+      }
     } finally {
       setBusy(false)
     }
@@ -445,9 +470,6 @@ export default function NewRequestPage() {
         {/* The actions sit under the card and clear of the bottom bar on a
             phone, where the shell already reserves the room. */}
         <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <Link to="/requests" className="btn btn-outline">
-            Cancel
-          </Link>
           <button type="submit" className="btn btn-primary" disabled={busy}>
             {busy ? <Spinner /> : <Send className="h-4 w-4" />}
             Send request

@@ -61,7 +61,17 @@ export async function loadProfile(sessionUser) {
       // table names, column names and policy details, and the person reading it
       // can act on none of them.
       console.warn('[auth] the profile could not be read', err)
-      throw new AuthError('Your profile could not be loaded. Please try again.')
+      // In practice this is what a newly registered instructor sees. The account
+      // is created and then signed straight back out because it is `Pending`,
+      // and a read that races that sign-out runs as `anon` — which 0002 revokes
+      // from every table, so it fails here rather than returning the row that
+      // would have produced the pending message below. Leading with the account
+      // status says the true thing to the instructor who is waiting, and the
+      // second sentence still fits the rarer case of a genuine read failure.
+      throw new AuthError(
+        'Your account is pending approval. Please wait for an administrator to approve your ' +
+          'account. If you have signed in before, this may be a temporary problem — please try again.',
+      )
     }
   }
 

@@ -605,6 +605,7 @@ export default function ToolDetailPage() {
             </SectionCard>
           )}
 
+          {isStaff(user) && (
           <SectionCard title="Where it lives" description="Laboratory storage" data-tour="detail-location">
             <div className="flex items-start gap-3">
               <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-amberline-400/15">
@@ -618,6 +619,7 @@ export default function ToolDetailPage() {
               </div>
             </div>
           </SectionCard>
+          )}
         </div>
       </div>
 

@@ -46,7 +46,9 @@ import {
 } from '../utils/permissions'
 import {
   ACTIVE_TXN_STATUSES,
-  COURSES,
+  DEPARTMENTS,
+  OTHER_OPTION,
+  PROGRAMMES,
   ROLE,
   ROLES,
   TXN_STATUS,
@@ -272,6 +274,37 @@ export default function UsersPage() {
     }
   }
 
+  /**
+   * Turn down a self-registered instructor.
+   *
+   * Confirmed rather than immediate: it is the one decision on this card that
+   * shuts somebody out. The profile is kept and set inactive, so a rejection
+   * made in error is undone with "Activate account" in the detail panel.
+   */
+  const rejectAccount = (target) =>
+    setConfirm({
+      title: `Reject ${target.fullName}?`,
+      message:
+        'The account is kept but set inactive, so they cannot sign in. You can activate it later ' +
+        'from the directory if this was a mistake.',
+      confirmLabel: 'Reject account',
+      onConfirm: async () => {
+        setBusy(true)
+        try {
+          await userService.reject(target.id, currentUser)
+          toast.success(`${target.fullName}'s account was not approved.`, {
+            title: 'Account rejected',
+          })
+          setConfirm(null)
+          setViewing((v) => (v && v.id === target.id ? { ...v, status: USER_STATUS.INACTIVE } : v))
+        } catch (err) {
+          toast.error(err.message ?? 'Unable to reject the account.')
+        } finally {
+          setBusy(false)
+        }
+      },
+    })
+
   const toggleStatus = async (target) => {
     const next = target.status === USER_STATUS.ACTIVE ? USER_STATUS.INACTIVE : USER_STATUS.ACTIVE
     setBusy(true)
@@ -414,6 +447,15 @@ export default function UsersPage() {
                     className="btn btn-ghost btn-sm"
                   >
                     Review
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => rejectAccount(row)}
+                    className="btn btn-outline btn-sm"
+                    disabled={busy}
+                  >
+                    <UserX className="h-3.5 w-3.5" />
+                    Reject
                   </button>
                   <button
                     type="button"
@@ -586,7 +628,6 @@ export default function UsersPage() {
                     <th>Role</th>
                     <th>Course / Year</th>
                     <th>Contact</th>
-                    <th>Tools out</th>
                     <th>Status</th>
                     <th className="w-24" />
                   </tr>
@@ -628,23 +669,6 @@ export default function UsersPage() {
                         <td className="text-xs">
                           <p className="truncate">{row.email || '—'}</p>
                           <p className="subtle mono">{row.contact || ''}</p>
-                        </td>
-                        <td>
-                          {loans?.active ? (
-                            <span
-                              className={cx(
-                                'badge',
-                                loans.overdue
-                                  ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300'
-                                  : 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300',
-                              )}
-                            >
-                              {loans.active} out
-                              {loans.overdue ? ` · ${loans.overdue} late` : ''}
-                            </span>
-                          ) : (
-                            <span className="subtle text-xs">None</span>
-                          )}
                         </td>
                         <td>
                           <UserStatusBadge status={row.status} />
@@ -716,6 +740,7 @@ export default function UsersPage() {
         onResetPassword={() => sendReset(viewing)}
         onToggleStatus={() => toggleStatus(viewing)}
         onApprove={() => approveAccount(viewing)}
+        onReject={() => rejectAccount(viewing)}
       />
 
       <Walkthrough steps={usersTour} open={tour.open} onClose={tour.close} />
@@ -763,6 +788,7 @@ function UserDetail({
   onResetPassword,
   onToggleStatus,
   onApprove,
+  onReject,
   canManage,
   canDelete,
   canReset,
@@ -808,10 +834,16 @@ function UserDetail({
             </button>
           )}
           {canManage && isPending && (
-            <button type="button" className="btn btn-primary" onClick={onApprove} disabled={busy}>
-              <ShieldCheck className="h-4 w-4" />
-              Approve account
-            </button>
+            <>
+              <button type="button" className="btn btn-outline" onClick={onReject} disabled={busy}>
+                <UserX className="h-4 w-4" />
+                Reject
+              </button>
+              <button type="button" className="btn btn-primary" onClick={onApprove} disabled={busy}>
+                <ShieldCheck className="h-4 w-4" />
+                Approve account
+              </button>
+            </>
           )}
         </>
       }
@@ -893,7 +925,10 @@ function UserDetail({
             {user.role} permissions
           </p>
           <p className="subtle mt-1 text-xs leading-relaxed">{ROLE_SUMMARY[user.role]}</p>
-          {canManage && (
+          {/* A waiting account is decided with Approve/Reject in the footer, not
+              with the activate toggle — going straight to Active here would skip
+              the approval record (`approvedAt`/`approvedBy`) the decision writes. */}
+          {canManage && !isPending && (
             <button
               type="button"
               onClick={onToggleStatus}
@@ -935,6 +970,7 @@ const BLANK_USER = {
   yearLevel: 'N/A',
   employeeId: '',
   department: '',
+  departmentOther: '',
   contact: '',
   email: '',
   status: USER_STATUS.ACTIVE,
@@ -966,7 +1002,9 @@ function UserForm({ open, user, onClose, currentUser }) {
   const setField = (field) => (event) => {
     const value = event?.target ? event.target.value : event
     setForm((f) => ({ ...f, [field]: value }))
-    setErrors((e) => ({ ...e, [field]: undefined }))
+    // The typed `Other` value is validated as `department`, so clear that error.
+    const shown = field === 'departmentOther' ? 'department' : field
+    setErrors((e) => ({ ...e, [field]: undefined, [shown]: undefined }))
   }
 
   const submit = async (event) => {
@@ -980,6 +1018,12 @@ function UserForm({ open, user, onClose, currentUser }) {
         delete payload.password
         delete payload.confirmPassword
       }
+      // If department is "Other", use the typed value instead
+      const isOtherDept = payload.department === OTHER_OPTION
+      if (isOtherDept) {
+        payload.department = payload.departmentOther
+      }
+      delete payload.departmentOther
       const saved = isEdit
         ? await userService.updateUser(user.id, payload, currentUser)
         : await userService.create(payload, currentUser)
@@ -1004,6 +1048,7 @@ function UserForm({ open, user, onClose, currentUser }) {
   }
 
   const isStudent = form.role === ROLE.STUDENT
+  const isOther = form.department === OTHER_OPTION
 
   return (
     <Modal
@@ -1105,16 +1150,26 @@ function UserForm({ open, user, onClose, currentUser }) {
                 className="mono"
               />
               <SelectField
-                label="Course"
+                label="Programme"
                 required
                 value={form.course}
                 onChange={setField('course')}
-                options={COURSES}
-                placeholder="Select a course"
-                error={errors.course}
+                options={PROGRAMMES}
+                placeholder="Select a programme"
+                error={isOther ? undefined : errors.course}
                 className="sm:col-span-2"
               />
             </div>
+            {isOther && form.role === ROLE.STUDENT && (
+              <TextField
+                label="Programme (please specify)"
+                required
+                value={form.course}
+                onChange={setField('course')}
+                error={errors.course}
+                placeholder="e.g. Automotive Technology"
+              />
+            )}
             <SelectField
               label="Year level"
               value={form.yearLevel}
@@ -1137,14 +1192,24 @@ function UserForm({ open, user, onClose, currentUser }) {
                 placeholder="e.g. EMP-2019-0142"
                 className="mono"
               />
-              <TextField
+              <SelectField
                 label="Department"
                 value={form.department}
                 onChange={setField('department')}
+                options={DEPARTMENTS}
+                placeholder="Select a department"
+                error={isOther ? undefined : errors.department}
+              />
+            </div>
+            {isOther && form.role !== ROLE.STUDENT && (
+              <TextField
+                label="Department (please specify)"
+                value={form.departmentOther}
+                onChange={setField('departmentOther')}
                 error={errors.department}
                 placeholder="e.g. Automotive Technology"
               />
-            </div>
+            )}
           </fieldset>
         )}
 

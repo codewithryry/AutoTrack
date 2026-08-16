@@ -108,14 +108,43 @@ export async function listPending() {
   return sortBy(rows, 'createdAt', 'asc')
 }
 
-/** Next free sequential id, e.g. `REQ-00007`. */
-async function nextId() {
+/**
+ * Next free sequential id, e.g. `REQ-00007`.
+ *
+ * Read from what this caller can see — which, for a student, is their own rows
+ * and nothing else (`0012`). So the number this returns is only a *guess* at the
+ * next free one: every request another account has ever raised, live or long
+ * finished, already holds an id this scan cannot see. `insertWithFreeId` below
+ * is what turns the guess into a free id.
+ */
+async function nextId(offset = 0) {
   const rows = await db.list(COLLECTIONS.toolRequests)
   const highest = rows.reduce((max, row) => {
     const n = Number(String(row.id).replace(/^REQ-/, ''))
     return Number.isFinite(n) && n > max ? n : max
   }, 0)
-  return padId('REQ', highest + 1)
+  return padId('REQ', highest + 1 + offset)
+}
+
+/**
+ * Insert a request, stepping past ids already taken.
+ *
+ * A primary-key clash (`23505`) means only that some other account's row — of
+ * any age and any status — already carries that id, which RLS hid from
+ * `nextId`. It is never a duplicate *request*: whether this person may ask
+ * again has already been decided above, against status. So the id is bumped and
+ * the insert retried, leaving every historical row exactly where it is.
+ */
+async function insertWithFreeId(record) {
+  for (let attempt = 0; attempt < 25; attempt++) {
+    const id = attempt === 0 ? record.id : await nextId(attempt)
+    try {
+      return { ...record, id, saved: await db.insert(COLLECTIONS.toolRequests, { ...record, id }) }
+    } catch (err) {
+      if (err?.code !== '23505') throw err
+    }
+  }
+  throw new Error('Could not allocate a request id. Try again.')
 }
 
 /* ------------------------------------------------------------------ *
@@ -143,6 +172,29 @@ export function validate({ toolId, neededFrom, neededTo, purpose }, { maxDays = 
   }
   if (purpose && purpose.length > 300) errors.purpose = 'Keep the purpose under 300 characters.'
   return errors
+}
+
+/**
+ * Is another account already asking for this tool?
+ *
+ * Not answerable from the client: reads on `tool_requests` are scoped to the
+ * caller (the data layer filters to `user_id`, and the `0012` policy hides
+ * everyone else's rows), so a local scan can never prove another student asked
+ * first. The question is answered server-side by a `SECURITY DEFINER` function
+ * (`0030`) that counts the open requests for a tool other than this requester's
+ * own and returns only a boolean — never a row — so nothing about another
+ * account leaks. A failed call fails open (never blocks a legitimate request)
+ * rather than letting a flaky network turn into a refusal.
+ */
+async function anotherRequestForTool(toolId, requesterId) {
+  try {
+    return !!(await db.rpc('tool_request_conflict', {
+      p_tool_id: toolId,
+      p_requester_id: requesterId,
+    }))
+  } catch {
+    return false
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -203,8 +255,17 @@ export async function create(input, actor, { maxDays = 30 } = {}) {
   }
   if (twin) return twin
 
+  // Check whether ANY OTHER account has an active/pending request for this tool,
+  // so a tool is not asked for by two people at once. Asked on the server (see
+  // `anotherRequestForTool`): a student cannot read another student's rows, so a
+  // local scan can never prove someone else asked first.
+  if (await anotherRequestForTool(tool.id, requester.id)) {
+    const errors = { toolId: 'This tool has already been requested by another student.' }
+    throw new ValidationError(errors)
+  }
+
   const timestamp = nowISO()
-  const id = await nextId()
+  let id = await nextId()
 
   // Where the requester will collect the tool, if they chose to give a reading
   // and the database has a column to keep it in — a refusal or a pending
@@ -243,9 +304,9 @@ export async function create(input, actor, { maxDays = 30 } = {}) {
     ...(collectionLocation ? { collectionLocation } : {}),
   }
 
-  await db.insert(COLLECTIONS.toolRequests, record)
-
-  const saved = record
+  const placed = await insertWithFreeId(record)
+  const saved = { ...record, id: placed.id }
+  id = placed.id
 
   await afterWrite('request follow-up', async () => {
     await activity.log({
@@ -306,8 +367,9 @@ async function isSpent(request, userId) {
     (t) => new Date(t.borrowDate) >= new Date(request.decidedAt),
   )
   if (!collected.length) return false
-  // Every borrowing this approval produced is closed.
-  return collected.every((t) => !ACTIVE_TXN_STATUSES.includes(t.status))
+  // Every borrowing this approval produced is closed — handed back, or in a
+  // state that no longer has the tool out of the room.
+  return collected.every((t) => !!t.returnDate || !ACTIVE_TXN_STATUSES.includes(t.status))
 }
 
 async function afterWrite(label, fn) {

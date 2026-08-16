@@ -267,15 +267,25 @@ export const SIGNUP_ROLES = [ROLE.STUDENT, ROLE.INSTRUCTOR]
 /**
  * The status a self-registered account starts in.
  *
- * Both self-service roles are usable immediately: there is no approval step.
- * `Pending` remains a valid status an administrator can set by hand, and any
- * account already sitting at it still waits — this only decides what a *new*
- * registration starts as.
+ * A student is usable immediately — it is the least privileged role in the
+ * system, and the public sign-up form exists so a class can get going without
+ * an administrator typing every name in. An **instructor** is not: the role
+ * issues and receives tools for other people, so the account waits at `Pending`
+ * until an administrator approves it. Until then `loadProfile()` refuses the
+ * session and, in the database, `current_role_name()` only answers for an
+ * `Active` row — so `is_instructor()` is false and every instructor-scoped
+ * policy is closed to it.
+ *
+ * This mirrors the `profiles_insert` policy exactly (0028, unchanged here):
+ * a self-insert may be `Student`/`Active` or `Instructor`/`Pending`, nothing
+ * else. Only *new* registrations are decided here — an account already sitting
+ * at a status keeps it.
  *
  * `Admin` is not a self-service role and never has been; `SIGNUP_ROLES` and the
  * `profiles_insert` policy both refuse it.
  */
-export const signupStatusFor = () => USER_STATUS.ACTIVE
+export const signupStatusFor = (role) =>
+  role === ROLE.INSTRUCTOR ? USER_STATUS.PENDING : USER_STATUS.ACTIVE
 
 const SIGNUP_MIN_PASSWORD = 8
 
@@ -452,6 +462,60 @@ export async function approve(id, actor) {
       message: `Your ${user.role.toLowerCase()} account has been approved. You can now sign in.`,
       userId: id,
       dedupeKey: `approval:${id}`,
+    })
+    .catch(() => {})
+
+  return saved
+}
+
+/**
+ * Reject a pending account — the other decision an administrator can take.
+ *
+ * The row is kept and set `Inactive` rather than deleted: the sign-in account
+ * behind it still exists, the person may have been rejected in error, and a
+ * deleted profile would let the same address register again and land back in
+ * the queue. `Inactive` is refused at sign-in by `loadProfile()` and is not
+ * `Active`, so `current_role_name()` — and with it `is_instructor()` — stays
+ * closed. An administrator can still activate the account later from the
+ * directory, which is the same one-click path a mistaken rejection needs.
+ *
+ * No new status value is introduced: `Inactive` is the existing "account exists,
+ * account cannot be used" state, and the `profiles.status` CHECK constraint is
+ * untouched.
+ */
+export async function reject(id, actor) {
+  assertCan(actor, PERM.USER_EDIT, 'You are not allowed to reject accounts.')
+
+  const user = await getById(id)
+  if (!user) throw new Error('User not found.')
+  // Only a waiting account is a rejection. Anything else is already decided,
+  // and quietly deactivating it here would be a different action entirely.
+  if (user.status !== USER_STATUS.PENDING) return user
+
+  const saved = await db.update(COLLECTIONS.users, id, {
+    status: USER_STATUS.INACTIVE,
+    updatedAt: nowISO(),
+  })
+
+  await activity
+    .log({
+      action: ACTIVITY.USER_UPDATED,
+      userId: actor?.id,
+      userName: actor?.fullName,
+      message: `${user.fullName}'s ${user.role.toLowerCase()} account was rejected.`,
+      meta: { targetUserId: id, status: USER_STATUS.INACTIVE },
+    })
+    .catch(() => {})
+
+  await notifications
+    .create({
+      type: NOTIF_TYPE.SYSTEM,
+      title: 'Account not approved',
+      message:
+        `Your ${user.role.toLowerCase()} account was not approved. ` +
+        'Contact the laboratory administrator if you think this is a mistake.',
+      userId: id,
+      dedupeKey: `rejection:${id}`,
     })
     .catch(() => {})
 
@@ -831,6 +895,80 @@ export async function submitProfileChanges(input, actor) {
       userId: actor.id,
       userName: actor.fullName,
       message: `${actor.fullName} submitted profile changes for approval.`,
+      meta: { targetUserId: actor.id, fields: Object.keys(patch) },
+    })
+    .catch(() => {})
+
+  return saved
+}
+
+/**
+ * Update staff (instructor/admin) profile directly — no review queue.
+ *
+ * Instructors may edit their own personal details but not role/status.
+ * Administrators may edit their own details.
+ * Email is read-only (handled by auth layer).
+ */
+export async function updateOwnProfile(input, actor) {
+  if (!actor?.id) throw new Error('Sign in to edit your profile.')
+  if (actor.role === ROLE.STUDENT) {
+    throw new Error('Students must submit profile changes for approval.')
+  }
+
+  const current = await getById(actor.id)
+  if (!current) throw new Error('Your profile could not be loaded.')
+
+  // Build the update, preserving role and status
+  const patch = {}
+  const UPDATABLE_FIELDS = ['firstName', 'lastName', 'department', 'contact']
+
+  for (const field of UPDATABLE_FIELDS) {
+    if (input[field] !== undefined) {
+      const newValue = String(input[field] ?? '').trim()
+      if (newValue !== String(current[field] ?? '').trim()) {
+        patch[field] = newValue
+      }
+    }
+  }
+
+  if (!Object.keys(patch).length) {
+    const err = new Error('Nothing has changed.')
+    err.name = 'NoChangesError'
+    throw err
+  }
+
+  // Validate the merged result
+  const merged = { ...current, ...patch }
+  const fullName = `${patch.firstName ?? current.firstName} ${patch.lastName ?? current.lastName}`.trim()
+  const errors = await validate(
+    { ...merged, fullName, email: current.email },
+    { isEdit: true, currentId: actor.id, current },
+  )
+  
+  // Filter to only updatable fields
+  const relevant = Object.fromEntries(
+    Object.entries(errors).filter(([field]) => UPDATABLE_FIELDS.includes(field)),
+  )
+  if (Object.keys(relevant).length) throw new ValidationError(relevant)
+
+  // Prepare the update with derived fullName and displayName
+  const update = { ...patch }
+  if (patch.firstName !== undefined || patch.lastName !== undefined) {
+    const firstName = patch.firstName ?? current.firstName
+    const lastName = patch.lastName ?? current.lastName
+    update.fullName = `${firstName} ${lastName}`.trim()
+    update.displayName = update.fullName
+  }
+  update.updatedAt = nowISO()
+
+  const saved = await db.update(COLLECTIONS.users, actor.id, update)
+
+  await activity
+    .log({
+      action: ACTIVITY.USER_UPDATED,
+      userId: actor.id,
+      userName: actor.fullName,
+      message: `${actor.fullName} updated their profile.`,
       meta: { targetUserId: actor.id, fields: Object.keys(patch) },
     })
     .catch(() => {})

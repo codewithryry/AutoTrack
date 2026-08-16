@@ -242,27 +242,26 @@ export function DeviceAccessControl() {
 function PushNotificationRow() {
   const toast = useToast()
   const { user } = useApp()
-  const [state, setState] = useState('unknown')
+  const [state, setState] = useState('prompt')
   const [busy, setBusy] = useState(false)
 
   const available = pushService.isAvailable()
 
   useEffect(() => {
-    let active = true
-    if (!pushService.isSupported()) {
+    if (!available) {
       setState('unsupported')
       return
     }
-    pushService.isSubscribed().then((on) => {
-      if (!active) return
-      // `granted` on this device but not subscribed is still something to
-      // switch on, so the row reports the subscription, not just the permission.
-      setState(on ? 'granted' : pushService.permissionState() === 'denied' ? 'denied' : 'prompt')
-    })
-    return () => {
-      active = false
+
+    const syncState = () => {
+      const permission = pushService.permissionState()
+      setState(
+        permission === 'granted' ? 'granted' : permission === 'denied' ? 'denied' : 'prompt',
+      )
     }
-  }, [])
+
+    syncState()
+  }, [available])
 
   const enable = async () => {
     setBusy(true)
@@ -271,21 +270,10 @@ function PushNotificationRow() {
       setState('granted')
       toast.success('Notifications are on for this device.')
     } catch (err) {
-      if (pushService.permissionState() === 'denied') setState('denied')
+      const permission = pushService.permissionState()
+      if (permission === 'denied') setState('denied')
+      else setState('prompt')
       toast.info(err.message ?? 'Notifications could not be turned on.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const disable = async () => {
-    setBusy(true)
-    try {
-      await pushService.unsubscribe()
-      setState('prompt')
-      toast.info('Notifications are off for this device.')
-    } catch (err) {
-      toast.info(err.message ?? 'Notifications could not be turned off.')
     } finally {
       setBusy(false)
     }
@@ -301,22 +289,20 @@ function PushNotificationRow() {
           : 'This browser cannot deliver alerts while the app is closed. The notification centre inside the app still works.'
       }
       state={available ? state : 'unsupported'}
-      // Notifications are on for this device or they are not — there is no
-      // third state worth naming. `Not set`, which the camera and location rows
-      // use for a permission the browser has never been asked for, would say
-      // the same thing as `Off` here and give two names to one state.
-      stateLabel={available && state !== 'denied' ? (state === 'granted' ? 'On' : 'Off') : undefined}
+      // All three permission rows use the same shared labels — `Allowed`,
+      // `Blocked`, `Not set` — so Notifications reads exactly like Location
+      // and Camera. (The old `On`/`Off` names were dropped for that reason.)
       action={
         available &&
-        state !== 'denied' &&
-        state !== 'unknown' && (
+        state !== 'granted' &&
+        state !== 'unsupported' && (
           <button
             type="button"
-            onClick={state === 'granted' ? disable : enable}
+            onClick={enable}
             className="btn btn-outline btn-sm shrink-0"
             disabled={busy}
           >
-            {state === 'granted' ? 'Turn off' : 'Enable'}
+            Enable
           </button>
         )
       }

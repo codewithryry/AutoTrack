@@ -46,11 +46,12 @@ const {
   visibleNavItems,
   mobileNavForRole,
   studentRailItems,
+  instructorRailItems,
   ADMIN_MOBILE_NAV,
   INSTRUCTOR_MOBILE_NAV,
 } = await import('../src/components/navigation.js')
 const perms = await import('../src/utils/permissions.js')
-const { ROLE } = await import('../src/utils/constants.js')
+const { ROLE, ROLES } = await import('../src/utils/constants.js')
 
 const labels = (items) => items.map((i) => i.label)
 const can = (role) => (permission) => perms.can({ role }, permission)
@@ -75,7 +76,9 @@ check('admin sidebar has every destination', () => {
   ])
 })
 
-check('instructor sidebar excludes users, reports and settings', () => {
+check('instructor sidebar reaches every staff destination', () => {
+  // Settings is reachable but read-only for them: `SETTINGS_VIEW` opens the
+  // page, `SETTINGS_EDIT` — checked above — is what actually writes it.
   assert.deepEqual(labels(navItemsForRole(ROLE.INSTRUCTOR)), [
     'Dashboard',
     'Inventory',
@@ -83,8 +86,11 @@ check('instructor sidebar excludes users, reports and settings', () => {
     'Transactions',
     'Requests',
     'Messages',
+    'Users',
     'Maintenance',
     'Notifications',
+    'Reports',
+    'Settings',
   ])
 })
 
@@ -138,11 +144,30 @@ check('the student bottom bar is the lifecycle, with Scan in the middle', () => 
   assert.ok(!INSTRUCTOR_MOBILE_NAV.includes('/tools'), 'staff bars keep their own layout')
 })
 
-check('the three sidebars are genuinely different', () => {
-  const sets = [ROLE.ADMIN, ROLE.INSTRUCTOR, ROLE.STUDENT].map((r) =>
-    labels(navItemsForRole(r)).join('|'),
+check('staff share the destinations; the student list is their own', () => {
+  const admin = labels(navItemsForRole(ROLE.ADMIN))
+  const instructor = labels(navItemsForRole(ROLE.INSTRUCTOR))
+  const student = labels(navItemsForRole(ROLE.STUDENT))
+
+  // Staff reach the same places — the difference between the two roles is what
+  // they may *do* once there (see the permission checks above), not where they
+  // may go. Settings is the clearest case: both open it, only one can write it.
+  assert.deepEqual(instructor, admin, 'staff must reach the same destinations')
+
+  // A student's navigation is genuinely their own, and carries none of the
+  // laboratory-management destinations.
+  assert.notDeepEqual(student, admin, 'a student must not get the staff navigation')
+  for (const label of ['Users', 'Maintenance', 'Reports', 'Settings']) {
+    assert.ok(!student.includes(label), `a student must not see ${label}`)
+  }
+
+  // The two staff rails are still ordered differently: an instructor's leads
+  // with the room, and lifts Scan into its own action block.
+  assert.notDeepEqual(
+    labels(instructorRailItems(navItemsForRole(ROLE.INSTRUCTOR))),
+    admin,
+    'the instructor rail must keep its own order',
   )
-  assert.equal(new Set(sets).size, 3, 'each role must get its own navigation')
 })
 
 check('navigation and the permission matrix agree', () => {
@@ -214,13 +239,32 @@ check('clearing every conversation stays with the administrator', () => {
 })
 
 check('admin-only routes are denied for instructors and students', () => {
+  // What is left of "system" once the laboratory belongs to the instructor:
+  // writing the configuration, and the data tools.
   for (const permission of [
-    perms.PERM.USER_MANAGE,
-    perms.PERM.REPORTS_VIEW,
-    perms.PERM.SETTINGS_VIEW,
+    perms.PERM.SETTINGS_EDIT,
+    perms.PERM.DATA_MANAGE,
   ]) {
     assert.equal(perms.can({ role: ROLE.INSTRUCTOR }, permission), false, permission)
     assert.equal(perms.can({ role: ROLE.STUDENT }, permission), false, permission)
+    assert.equal(perms.can({ role: ROLE.ADMIN }, permission), true, permission)
+  }
+})
+
+check('staff routes are denied for students', () => {
+  for (const permission of [
+    perms.PERM.USER_MANAGE,
+    perms.PERM.USER_CREATE,
+    perms.PERM.USER_EDIT,
+    perms.PERM.USER_DELETE,
+    perms.PERM.TOOL_CREATE,
+    perms.PERM.TOOL_DELETE,
+    perms.PERM.REPORTS_VIEW,
+    perms.PERM.REPORTS_EXPORT,
+    perms.PERM.SETTINGS_VIEW,
+  ]) {
+    assert.equal(perms.can({ role: ROLE.STUDENT }, permission), false, permission)
+    assert.equal(perms.can({ role: ROLE.INSTRUCTOR }, permission), true, permission)
     assert.equal(perms.can({ role: ROLE.ADMIN }, permission), true, permission)
   }
 })
@@ -394,10 +438,26 @@ check('Admin is a normal role: no account is hardcoded anywhere', () => {
       `${path} singles out one administrator`,
     )
   }
-  // Every role is offered to an administrator editing a profile, Admin included,
-  // which is how a second one is promoted.
+  // Every role is still offered to an administrator editing a profile, Admin
+  // included, which is how a second one is promoted. The picker is filtered by
+  // `canAssignRole` rather than hardcoded, so the filter is checked here and the
+  // rule it applies is checked below.
   const usersPage = read(join('src', 'pages', 'UsersPage.jsx'))
-  assert.match(usersPage, /options=\{ROLES\}/, 'the role picker must offer every role')
+  assert.match(
+    usersPage,
+    /options=\{roleOptions\}/,
+    'the role picker must be built from the assignable roles',
+  )
+  assert.match(
+    usersPage,
+    /ROLES\.filter\(\(role\) => canAssignRole\(currentUser, role\)\)/,
+    'the role picker must start from every role and filter by permission',
+  )
+  assert.deepEqual(
+    ROLES.filter((role) => perms.canAssignRole({ role: ROLE.ADMIN }, role)),
+    ROLES,
+    'an administrator must still be offered every role',
+  )
 })
 
 check('the displayed app version matches package.json', () => {

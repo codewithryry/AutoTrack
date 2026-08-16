@@ -70,6 +70,15 @@ export function validate(input) {
     errors.departmentUrl = 'Enter a full address beginning with https:// or http://.'
   }
 
+  // The name the link is shown under. Optional — without one the address is
+  // shown instead — but a name with no address has nothing to open.
+  const name = String(input.departmentName ?? '').trim()
+  if (name.length > 80) {
+    errors.departmentName = 'Keep the page name under 80 characters.'
+  } else if (name && !url) {
+    errors.departmentName = 'Add the address this name should open.'
+  }
+
   const days = Number(input.defaultBorrowDays)
   if (!Number.isInteger(days) || days < 1 || days > 90) {
     errors.defaultBorrowDays = 'Enter a whole number of days between 1 and 90.'
@@ -127,15 +136,22 @@ const SHARED_FIELDS = [
 ]
 
 const DEPARTMENT_URL_COLUMN = 'departmentUrl'
+const DEPARTMENT_NAME_COLUMN = 'departmentName'
 
 /** Whether this database has had `0010_settings_department_page.sql` applied. */
 export const departmentUrlAvailable = () =>
   db.supportsColumn(COLLECTIONS.settings, DEPARTMENT_URL_COLUMN)
 
+/** Whether this database has had `0029_settings_department_name.sql` applied. */
+export const departmentNameAvailable = () =>
+  db.supportsColumn(COLLECTIONS.settings, DEPARTMENT_NAME_COLUMN)
+
 /** Drop anything the table does not have a column for. */
 async function writableDocument(document) {
   const allowed = new Set(SHARED_FIELDS)
   if (await departmentUrlAvailable()) allowed.add(DEPARTMENT_URL_COLUMN)
+  // Asked for the same way, so a database without 0029 still saves the rest.
+  if (await departmentNameAvailable()) allowed.add(DEPARTMENT_NAME_COLUMN)
   return Object.fromEntries(Object.entries(document).filter(([key]) => allowed.has(key)))
 }
 

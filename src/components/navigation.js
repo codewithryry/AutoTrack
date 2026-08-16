@@ -121,7 +121,7 @@ export const NAV_ITEMS = [
     label: 'Users',
     icon: Users,
     description: 'Directory',
-    roles: ADMIN_ONLY,
+    roles: STAFF,
     permission: PERM.USER_MANAGE,
   },
   {
@@ -144,7 +144,7 @@ export const NAV_ITEMS = [
     label: 'Reports',
     icon: BarChart3,
     description: 'Analytics and exports',
-    roles: ADMIN_ONLY,
+    roles: STAFF,
     permission: PERM.REPORTS_VIEW,
   },
   {
@@ -152,7 +152,7 @@ export const NAV_ITEMS = [
     label: 'Settings',
     icon: Settings,
     description: 'Configuration',
-    roles: ADMIN_ONLY,
+    roles: STAFF,
     permission: PERM.SETTINGS_VIEW,
   },
 ]
@@ -237,11 +237,18 @@ const INSTRUCTOR_RAIL_ORDER = [
   '/requests',
   '/transactions',
   '/maintenance',
+  '/users',
+  '/reports',
   '/messages',
   '/notifications',
+  '/settings',
 ]
 
-/** Routes an instructor reaches from the quick-action block, not from the list. */
+/**
+ * Routes an instructor reaches from the quick-action block above the rail
+ * rather than from the list itself. Settings is *not* one of them: it is a
+ * destination on the rail, and only the account dropdown drops it on desktop.
+ */
 const INSTRUCTOR_RAIL_EXCLUDED = new Set(['/scan', '/borrow'])
 
 /**
@@ -306,8 +313,10 @@ export function instructorRailItems(items = []) {
 
 /** Bottom-bar route list for one role. */
 export function mobileNavForRole(role) {
-  if (role === ROLE.INSTRUCTOR) return INSTRUCTOR_MOBILE_NAV
-  if (role === ROLE.ADMIN) return ADMIN_MOBILE_NAV
+  // Staff share one bar: four destinations plus the Menu slot the shell adds,
+  // which opens the drawer carrying the rest. An instructor now reaches the
+  // same places an administrator does, so they get the same shape.
+  if (role === ROLE.ADMIN || role === ROLE.INSTRUCTOR) return ADMIN_MOBILE_NAV
   return MOBILE_NAV
 }
 
@@ -327,11 +336,14 @@ export const ACCOUNT_NAV = {
   description: 'Your account and borrowing records',
 }
 
-/** Role-appropriate name for the account section. */
-export function accountNavLabel(role) {
-  if (role === ROLE.STUDENT) return ACCOUNT_NAV.studentLabel
-  if (role === ROLE.INSTRUCTOR) return ACCOUNT_NAV.instructorLabel
-  if (role === ROLE.ADMIN) return ACCOUNT_NAV.adminLabel
+/**
+ * The name of the account section — `My account`, for every role.
+ *
+ * It used to be named after the role ("Student account", "Admin account"), but
+ * the role is already on the badge in the same menu, and the destination is the
+ * same page whoever opens it. One label, so the menu reads the same everywhere.
+ */
+export function accountNavLabel() {
   return ACCOUNT_NAV.label
 }
 

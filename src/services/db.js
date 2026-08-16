@@ -227,6 +227,13 @@ function scopedQuery(name, query) {
   if (name === COLLECTIONS.notifications && scope.role === ROLE.INSTRUCTOR && scope.uid) {
     return query.or(`user_id.eq.${scope.uid},user_id.is.null`)
   }
+  // An instructor's directory is the students in it, plus their own row. The
+  // `profiles_select` policy says exactly the same and is what actually refuses
+  // an administrator's or another instructor's record; this only keeps the work
+  // near the data instead of asking for rows the server would drop anyway.
+  if (name === COLLECTIONS.users && scope.role === ROLE.INSTRUCTOR && scope.uid) {
+    return query.or(`role.eq.${ROLE.STUDENT},id.eq.${scope.uid}`)
+  }
   if (isStaff() || !scope.role || !scope.uid) return query
 
   switch (name) {
@@ -365,9 +372,14 @@ export async function get(name, id) {
 
 /** One record out of the cached collection, or `null` if it was never stored. */
 async function cachedRecord(name, id) {
-  const rows = await offlineCache.getCollection(name, scope.uid)
+  return cachedRecordFor(name, id, scope.uid)
+}
+
+/** The same, under an account id given explicitly rather than from the scope. */
+async function cachedRecordFor(name, id, uid) {
+  const rows = await offlineCache.getCollection(name, uid)
   if (!rows) return null
-  const overlaid = await offlineCache.overlayPendingRows(scope.uid, name, rows)
+  const overlaid = await offlineCache.overlayPendingRows(uid, name, rows)
   return overlaid.find((row) => row.id === id) ?? null
 }
 
@@ -380,6 +392,11 @@ async function cachedRecord(name, id) {
  */
 export async function getDirect(name, id) {
   if (id == null) return null
+  // Offline, the copy on this device is the answer. The scope is not set yet at
+  // sign-in — that is the whole reason this function exists — so the cache is
+  // read under the record's own id, which for the signed-in user's profile *is*
+  // their account id, the key the cache is partitioned by.
+  if (isOffline()) return cachedRecordFor(name, id, id)
   try {
     const { data, error } = await supabase
       .from(tableFor(name))
@@ -387,8 +404,31 @@ export async function getDirect(name, id) {
       .eq('id', id)
       .maybeSingle()
     if (error) throw error
-    return toDoc(data) ?? null
+    const doc = toDoc(data) ?? null
+    // Keep a copy against the next launch without a connection. This is the one
+    // read every session makes before anything else, and for a student it is
+    // the only one that ever touches their own profile row — without this the
+    // cache would have nothing to answer with offline.
+    if (doc) {
+      // `putServerRecord` only updates a collection the cache already holds, and
+      // a student never lists the directory, so seed it here rather than relying
+      // on one having been stored.
+      try {
+        const rows = (await offlineCache.getCollection(name, id)) ?? []
+        await offlineCache.putCollection(name, id, [
+          ...rows.filter((row) => row.id !== doc.id),
+          doc,
+        ])
+      } catch {
+        // No IndexedDB on this device: the app still works online, and offline
+        // it will simply have nothing to restore from.
+      }
+    }
+    return doc
   } catch (err) {
+    // The connection went while the app was open, or the device came back
+    // reporting online before it really was. Same answer as above.
+    if (isNetworkError(err)) return cachedRecordFor(name, id, id)
     throw wrap(err, `read ${name}/${id}`)
   }
 }
@@ -874,6 +914,31 @@ export async function updateDirect(name, id, patch) {
   // `null` means the server has no such row; the caller treats that as a
   // completed no-op rather than a failure.
   return toDoc(data) ?? null
+}
+
+/* ------------------------------------------------------------------ *
+ * Push subscriptions
+ *
+ * Kept out of `COLLECTIONS` deliberately: a subscription is keyed by the
+ * endpoint the push service issues rather than by an id, it is never streamed,
+ * cached offline or exported, and nothing renders it. These two calls are the
+ * whole surface, so the rule that only this module talks to the database holds
+ * for them as it does for everything else. The rows themselves are protected by
+ * RLS — a caller can only ever write or delete its own.
+ * ------------------------------------------------------------------ */
+
+const PUSH_SUBSCRIPTIONS = 'push_subscriptions'
+
+export async function savePushSubscription(row) {
+  const { error } = await supabase
+    .from(PUSH_SUBSCRIPTIONS)
+    .upsert(row, { onConflict: 'endpoint' })
+  if (error) throw wrap(error, 'save the push subscription')
+}
+
+export async function removePushSubscription(endpoint) {
+  const { error } = await supabase.from(PUSH_SUBSCRIPTIONS).delete().eq('endpoint', endpoint)
+  if (error) throw wrap(error, 'remove the push subscription')
 }
 
 export async function upsertDirect(name, document) {

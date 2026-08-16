@@ -7,7 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg', 'offline.html', 'icons/*.png'],
+      includeAssets: ['favicon.svg', 'offline.html', 'icons/*.png', 'push-sw.js'],
       manifest: {
         id: '/',
         name: 'ToolTrack AutoLab',
@@ -53,6 +53,9 @@ export default defineConfig({
         ],
       },
       workbox: {
+        // The push and notification-click listeners, pulled into the generated
+        // worker rather than replacing it — everything below is unchanged.
+        importScripts: ['/push-sw.js'],
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//],

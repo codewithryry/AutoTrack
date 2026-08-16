@@ -3,8 +3,6 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-do
 import {
   Bell,
   ChevronDown,
-  ExternalLink,
-  Globe,
   LogOut,
   Menu,
   Plus,
@@ -14,13 +12,12 @@ import {
   X,
 } from 'lucide-react'
 import { AppearanceToggleButton } from '../components/AccountSettings'
-import { BrandLockup } from '../components/Brand'
 import ErrorBoundary from '../components/ErrorBoundary'
 import Avatar from '../components/Avatar'
+import { RoleBadge } from '../components/ui'
 import {
   ACCOUNT_NAV,
   accountNavLabel,
-  ADMIN_DRAWER_NAV,
   EXTRA_PAGES,
   INSTRUCTOR_EXTRA_PAGES,
   INSTRUCTOR_QUICK_ACTIONS,
@@ -41,7 +38,12 @@ import {
 } from '../hooks'
 import { cx } from '../utils/helpers'
 import * as txnService from '../services/transactions'
-import { ACTIVE_TXN_STATUSES, APP_TAGLINE, REQUEST_STATUS, ROLE } from '../utils/constants'
+import {
+  ACTIVE_TXN_STATUSES,
+  APP_NAME,
+  REQUEST_STATUS,
+  ROLE,
+} from '../utils/constants'
 import { PERM } from '../utils/permissions'
 
 /**
@@ -105,6 +107,9 @@ export default function AppLayout() {
   // shells on exactly the path they were on before.
   const isInstructor = user?.role === ROLE.INSTRUCTOR
   const isAdmin = user?.role === ROLE.ADMIN
+  // Staff share one mobile shell: four destinations in the bar, the rest behind
+  // the Menu slot's drawer. A student's bar still carries everything they have.
+  const hasDrawer = isAdmin || isInstructor
 
   // The Requests count is a queue of decisions to make, so it is staff only:
   // a student raises the requests rather than answering them, and a badge on
@@ -127,11 +132,19 @@ export default function AppLayout() {
   // An instructor's rail is the same permitted set, reordered for the crib and
   // with the counter actions lifted into their own block; every other role gets
   // the list untouched.
-  const railItems = isInstructor
-    ? instructorRailItems(navItems)
-    : isStudent
-      ? studentRailItems(navItems)
-      : navItems
+  //
+  // Notifications is dropped from the rail for every role: the bell in the top
+  // bar is the route to it, carrying the same unread badge, and a second entry
+  // in the list was one destination reached two ways. The nav item itself
+  // stays — the route, its guard and the bar's page-title lookup all read
+  // `NAV_ITEMS`, and the mobile bottom bar is built separately.
+  const railItems = (
+    isInstructor
+      ? instructorRailItems(navItems)
+      : isStudent
+        ? studentRailItems(navItems)
+        : navItems
+  ).filter((item) => item.to !== '/notifications')
   const quickActions = isInstructor
     ? INSTRUCTOR_QUICK_ACTIONS.filter((a) => !a.permission || can(a.permission))
     : []
@@ -176,12 +189,6 @@ export default function AppLayout() {
         }
       : null
 
-  // The administrator's drawer is the five places it names, in that order, and
-  // only the ones their permissions already allow.
-  const adminDrawerItems = ADMIN_DRAWER_NAV.map((to) =>
-    navItems.find((item) => item.to === to),
-  ).filter(Boolean)
-
   // An administrator's raised slot is a contextual "+": on Tools, Users and
   // Maintenance it opens that page's own create form — the existing dialogs,
   // reached through the parameters those pages already honour. Everywhere else
@@ -222,6 +229,18 @@ export default function AppLayout() {
   const mobileItems = mobileNavForRole(user?.role)
     .map((to) => NAV_ITEMS.find((item) => item.to === to))
     .filter((item) => item && allowed.has(item.to))
+
+  // The staff drawer follows the desktop rail: the same items, in the same
+  // order, minus the ones reached another way — the bottom bar's own four,
+  // Notifications (the bell in the top bar) and Settings (the account menu
+  // beside it, which carries the row on a phone). Same routes and the same
+  // permission filter as the rail, and both staff roles are built the one way.
+  // `ADMIN_DRAWER_NAV` is no longer read.
+  const mobileRoutes = new Set(mobileItems.map((item) => item.to))
+  const DRAWER_EXCLUDED = new Set(['/notifications', '/settings'])
+  const drawerItems = railItems.filter(
+    (item) => !mobileRoutes.has(item.to) && !DRAWER_EXCLUDED.has(item.to),
+  )
 
   // Close transient UI whenever the route changes.
   useEffect(() => {
@@ -296,22 +315,31 @@ export default function AppLayout() {
         style={{ background: 'rgb(var(--rail))' }}
       >
         <div className="hazard-stripe h-1 w-full shrink-0" />
-        {/* A student's rail carries six destinations rather than the staff
-            eleven, so it can afford the room: a little more air under the
-            lockup and a rule closing the brand block off from the list. The
-            staff rail keeps its denser spacing. */}
-        <div
-          className={cx('px-5 pt-5', isStudent ? 'pb-5' : 'pb-4')}
-          style={isStudent ? { borderBottom: '1px solid rgb(255 255 255 / 0.06)' } : undefined}
-        >
-          <Link to="/dashboard" className="block rounded-lg">
-            <BrandLockup />
+
+        {/* One tile, built the way every other surface in the app is: rounded,
+            softly filled, hairline ring. The application's own mark — the same
+            `/Logoapp.png` the sign-in screen uses — and the system's name, and
+            nothing else. Every role opens on the same block now. */}
+        <div className="px-3 pb-4 pt-4">
+          <Link
+            to="/dashboard"
+            className="flex items-center gap-3 rounded-2xl bg-white/[0.06] px-3 py-3
+                       ring-1 ring-white/10 transition-colors hover:bg-white/[0.09]"
+          >
+            <img
+              src="/Logoapp.png"
+              alt=""
+              aria-hidden="true"
+              loading="eager"
+              decoding="async"
+              className="h-10 w-10 shrink-0 object-contain"
+            />
+            <span className="min-w-0 leading-tight">
+              <span className="block truncate text-[14px] font-extrabold tracking-tight text-white">
+                {APP_NAME}
+              </span>
+            </span>
           </Link>
-          {/* Tracked just far enough to read as a strapline, and no further: at
-              0.22em it broke onto a ragged second line inside the 248px rail. */}
-          <p className="mt-2.5 pl-0.5 text-[9.5px] font-bold uppercase leading-relaxed tracking-[0.13em] text-navy-500">
-            {APP_TAGLINE}
-          </p>
         </div>
 
         <nav className={cx('min-h-0 flex-1 overflow-y-auto px-3 pb-4', isStudent && 'pt-4')}>
@@ -330,42 +358,23 @@ export default function AppLayout() {
           />
         </nav>
 
-        {/* A student's navigation is the rail on desktop and the bottom bar on a
-            phone, so the department's own page — its Facebook page or external
-            site — is the one extra stop worth adding, and only when the
-            administrator has configured an address. */}
-        {isStudent && settings.departmentUrl && (
-          <div
-            className="px-3 py-2.5"
-            style={{ borderTop: '1px solid rgb(255 255 255 / 0.06)' }}
-          >
-            <a
-              href={settings.departmentUrl}
-              target="_blank"
-              rel="noreferrer noopener"
-              className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-[13.5px] font-semibold
-                         text-navy-300 transition-colors hover:bg-white/[0.05] hover:text-white"
-            >
-              <Globe className="h-[18px] w-[18px] shrink-0 text-navy-400" />
-              <span className="min-w-0 flex-1 truncate">Department page</span>
-              <ExternalLink className="h-3.5 w-3.5 shrink-0 text-navy-500" />
-            </a>
-          </div>
-        )}
+        {/* The department's page is reached from a student's account page and
+            from nowhere else, so the rail ends with the navigation. */}
 
-        <div className="px-5 pb-4 pt-3" style={{ borderTop: '1px solid rgb(255 255 255 / 0.06)' }}>
-          <p className="truncate text-[11px] font-semibold text-navy-300">{settings.labName}</p>
-          <p className="truncate text-[10px] text-navy-500">{settings.labLocation}</p>
-        </div>
+        {/* The laboratory's name and the room it is in were signage for a
+            visitor; everybody who signs in already knows which laboratory they
+            are standing in. Every rail now ends with the navigation, so the
+            footer is gone rather than left behind a condition no role meets.
+            `settings.labName` and `labLocation` are still set and read on the
+            Settings page and on the printed QR labels. */}
       </aside>
       )}
 
       {/* ------------------------------ mobile drawer ----------------------------- */}
-      {/* Administrators only — they alone have more destinations than a bottom
-          bar holds, and they open this from the bar's own Menu slot. A student's
-          and an instructor's bottom bar carries every route they have, so
-          neither has a drawer to open. */}
-      {!bare && drawerOpen && isAdmin && (
+      {/* Staff only — they have more destinations than a bottom bar holds, and
+          they open this from the bar's own Menu slot. A student's bottom bar
+          carries every route they have, so they have no drawer to open. */}
+      {!bare && drawerOpen && hasDrawer && (
         <div className="fixed inset-0 z-50 lg:hidden">
           <div
             className="absolute inset-0 bg-navy-950/70 animate-fade-in"
@@ -408,7 +417,7 @@ export default function AppLayout() {
                   and the drawer's last row sat under the gesture bar. */}
               <nav className="min-h-0 flex-1 overflow-y-auto p-3 pb-[max(0.75rem,var(--sab))]">
                 <ul className="space-y-1">
-                  {adminDrawerItems.map((item) => {
+                  {drawerItems.map((item) => {
                     const Icon = item.icon
                     return (
                       <li key={item.to}>
@@ -601,10 +610,15 @@ export default function AppLayout() {
                       account from another — the role, and a student's own ID. */}
                   <div className="min-w-0 px-2.5 pb-2.5 pt-1.5">
                     <p className="truncate text-sm font-bold">{user?.fullName}</p>
-                    <p className="subtle mt-0.5 truncate text-xs">
-                      {user?.role}
-                      {user?.studentId ? ` · ${user.studentId}` : ''}
-                    </p>
+                    {/* The same role badge the directory uses, so a colour means
+                        the same thing wherever it appears: amber Admin, violet
+                        Instructor, sky Student. */}
+                    <div className="mt-1 flex min-w-0 items-center gap-1.5">
+                      {user?.role && <RoleBadge role={user.role} />}
+                      {user?.studentId && (
+                        <span className="subtle truncate text-xs">{user.studentId}</span>
+                      )}
+                    </div>
                   </div>
                   {!online && (
                     <p className="mx-1 mb-1.5 flex items-center gap-1.5 rounded-lg bg-orange-500/10 px-2.5 py-2 text-[11px] font-semibold leading-snug text-orange-600 dark:text-orange-300">
@@ -614,98 +628,83 @@ export default function AppLayout() {
                   )}
                   <div className="mb-1.5 border-t" />
                   {user?.role === ROLE.STUDENT && (
+                    /* Rows built the way the phone builds a list: an icon in its
+                       own soft tile, the name, and one quiet line saying what is
+                       behind it. Same routes, same order, same permissions. */
                     <>
                       <Link
                         to="/profile"
-                        className="flex min-h-[42px] items-center gap-3 rounded-lg px-2.5 text-sm
-                                   font-semibold transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+                        className="flex min-h-[46px] items-center gap-3 rounded-xl px-2 py-1.5
+                                   transition-colors hover:bg-black/5 dark:hover:bg-white/5"
                         role="menuitem"
                       >
-                        <UserIcon className="h-4 w-4 shrink-0" />
-                        <span className="min-w-0 flex-1 truncate">Profile</span>
+                        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-black/5 dark:bg-white/10">
+                          <UserIcon className="h-4 w-4" />
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-sm font-semibold">
+                          My account
+                        </span>
                       </Link>
                       {/* The Settings page shows a student their own preferences;
                           the laboratory configuration inside it stays with the
                           administrators. */}
                       <Link
                         to="/settings"
-                        className="flex min-h-[42px] items-center gap-3 rounded-lg px-2.5 text-sm
-                                   font-semibold transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+                        className="flex min-h-[46px] items-center gap-3 rounded-xl px-2 py-1.5
+                                   transition-colors hover:bg-black/5 dark:hover:bg-white/5"
                         role="menuitem"
                       >
-                        <SettingsIcon className="h-4 w-4 shrink-0" />
-                        <span className="min-w-0 flex-1 truncate">Settings</span>
+                        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-black/5 dark:bg-white/10">
+                          <SettingsIcon className="h-4 w-4" />
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-sm font-semibold">
+                          Settings
+                        </span>
                       </Link>
-                      {/* The student menu's one external stop: the department's
-                          own page, when the administrator has set an address. */}
-                      {settings.departmentUrl && (
-                        <a
-                          href={settings.departmentUrl}
-                          target="_blank"
-                          rel="noreferrer noopener"
-                          className="flex min-h-[42px] items-center gap-3 rounded-lg px-2.5 text-sm font-semibold
-                                     transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-                          role="menuitem"
-                        >
-                          <Globe className="h-4 w-4" />
-                          Department page
-                          <ExternalLink className="ml-auto h-3.5 w-3.5 opacity-50" />
-                        </a>
-                      )}
                     </>
                   )}
-                  {/* An instructor had no route to their own account anywhere in
-                      the shell: this menu offered them Sign out and nothing
-                      else, and /profile was reachable only by typing it. They
-                      get the same two entries a student has — their profile and
-                      their own preferences — and nothing from user management,
-                      which stays an administrator's. */}
-                  {isInstructor && (
+                  {/* One block for both staff roles. There used to be three —
+                      one keyed off the role and two off `USER_MANAGE` and
+                      `SETTINGS_VIEW` — which an instructor now satisfies all of,
+                      so the menu repeated their account and their settings. The
+                      destinations and their guards are unchanged; only the
+                      duplication is gone. */}
+                  {!isStudent && (
                     <>
                       <Link
                         to="/profile"
-                        className="flex min-h-[42px] items-center gap-3 rounded-lg px-2.5 text-sm
-                                   font-semibold transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+                        className="flex min-h-[46px] items-center gap-3 rounded-xl px-2 py-1.5
+                                   transition-colors hover:bg-black/5 dark:hover:bg-white/5"
                         role="menuitem"
                       >
-                        <UserIcon className="h-4 w-4 shrink-0" />
-                        <span className="min-w-0 flex-1 truncate">My account</span>
+                        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-black/5 dark:bg-white/10">
+                          <UserIcon className="h-4 w-4" />
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-sm font-semibold">
+                          My account
+                        </span>
                       </Link>
-                      <Link
-                        to="/settings"
-                        className="flex min-h-[42px] items-center gap-3 rounded-lg px-2.5 text-sm
-                                   font-semibold transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-                        role="menuitem"
-                      >
-                        <SettingsIcon className="h-4 w-4 shrink-0" />
-                        <span className="min-w-0 flex-1 truncate">Settings</span>
-                      </Link>
+                      {/* Staff reach Settings from the rail on desktop, so the
+                          menu there is their account and their way out. On a
+                          phone there is no rail, so this row is the way in —
+                          `lg:hidden` is the whole difference, and it is the same
+                          for an instructor and an administrator. */}
+                      {can(PERM.SETTINGS_VIEW) && (
+                        <Link
+                          to="/settings"
+                          className="flex min-h-[46px] items-center gap-3 rounded-xl px-2 py-1.5
+                                     transition-colors hover:bg-black/5 dark:hover:bg-white/5 lg:hidden"
+                          role="menuitem"
+                        >
+                          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-black/5 dark:bg-white/10">
+                            <SettingsIcon className="h-4 w-4" />
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-sm font-semibold">
+                            Settings
+                          </span>
+                        </Link>
+                      )}
                     </>
-                  )}
-                  {/* The directory has its own rail entry — this menu is the
-                      account's own, so an administrator gets their profile here
-                      the way a student and an instructor do. */}
-                  {can(PERM.USER_MANAGE) && (
-                    <Link
-                      to="/profile"
-                      className="flex min-h-[42px] items-center gap-3 rounded-lg px-2.5 text-sm font-semibold
-                                 transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-                      role="menuitem"
-                    >
-                      <UserIcon className="h-4 w-4 shrink-0" />
-                      <span className="min-w-0 flex-1 truncate">Profile</span>
-                    </Link>
-                  )}
-                  {can(PERM.SETTINGS_VIEW) && (
-                    <Link
-                      to="/settings"
-                      className="flex min-h-[42px] items-center gap-3 rounded-lg px-2.5 text-sm font-semibold
-                                 transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-                      role="menuitem"
-                    >
-                      <SettingsIcon className="h-4 w-4" />
-                      Settings
-                    </Link>
                   )}
                   <div className="my-1.5 border-t" />
                   <button
@@ -894,9 +893,9 @@ export default function AppLayout() {
               </NavLink>
             )
           })}
-          {/* The administrator's last slot opens the menu panel rather than
-              navigating: the drawer carries the rest of their destinations. */}
-          {isAdmin && (
+          {/* Staff's last slot opens the menu panel rather than navigating: the
+              drawer carries the rest of their destinations. */}
+          {hasDrawer && (
             <button
               type="button"
               onClick={() => setDrawerOpen(true)}

@@ -341,11 +341,8 @@ export default function LoginPage() {
               stays clear of the phone's home indicator via the section's own
               safe-area padding. */}
           <div className="mt-5 text-center">
-            <p className="subtle text-[11px] font-semibold">Powered by Lorem Ipsum</p>
-            {/* One quiet line under it: what the app is and which build this is.
-                Smaller and dimmer than the line above so it fills the space
-                without drawing the eye away from the form. */}
-            <p className="subtle mt-1 text-[10px] leading-relaxed opacity-70">
+            {/* One quiet line: what the app is and which build this is. */}
+            <p className="subtle text-[10px] leading-relaxed opacity-70">
               Smart Tool Monitoring System · Version {APP_VERSION}
             </p>
           </div>

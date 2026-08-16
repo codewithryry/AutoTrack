@@ -37,7 +37,13 @@ import { useToast } from '../context/ToastContext'
 import { useDebounced, useTransactions, useUsers } from '../hooks'
 import * as userService from '../services/users'
 import { ValidationError } from '../services/tools'
-import { PERM } from '../utils/permissions'
+import {
+  PERM,
+  can as hasPermission,
+  canAssignRole,
+  canManageAccount,
+  visibleAccountRoles,
+} from '../utils/permissions'
 import {
   ACTIVE_TXN_STATUSES,
   COURSES,
@@ -120,6 +126,10 @@ export default function UsersPage() {
   const tour = usePageTour('users', currentUser?.id)
 
   const canManage = can(PERM.USER_CREATE)
+  // The roles this account's directory contains at all — every role for an
+  // administrator, `Student` alone for an instructor. The filter offers only
+  // these, so it never promises rows `profiles_select` will not return.
+  const directoryRoles = visibleAccountRoles(currentUser)
 
   const openCreate = () => {
     setEditing(null)
@@ -160,7 +170,7 @@ export default function UsersPage() {
       label: 'Role',
       value: role,
       onChange: setRole,
-      options: [{ value: 'all', label: 'All roles' }, ...ROLES],
+      options: [{ value: 'all', label: 'All roles' }, ...directoryRoles],
     },
     {
       key: 'status',
@@ -452,7 +462,7 @@ export default function UsersPage() {
               label="Role"
               value={role}
               onChange={setRole}
-              options={[{ value: 'all', label: 'All roles' }, ...ROLES]}
+              options={[{ value: 'all', label: 'All roles' }, ...directoryRoles]}
             />
             <FilterSelect
               label="Status"
@@ -553,7 +563,7 @@ export default function UsersPage() {
                       <Pencil className="h-4 w-4" />
                     </button>
                   )}
-                  {can(PERM.USER_DELETE) && row.id !== currentUser?.id && (
+                  {can(PERM.USER_DELETE) && canManageAccount(currentUser, row) && row.id !== currentUser?.id && (
                     <button
                       type="button"
                       onClick={() => requestDelete(row)}
@@ -654,7 +664,7 @@ export default function UsersPage() {
                                 <Pencil className="h-4 w-4" />
                               </button>
                             )}
-                            {can(PERM.USER_DELETE) && row.id !== currentUser?.id && (
+                            {can(PERM.USER_DELETE) && canManageAccount(currentUser, row) && row.id !== currentUser?.id && (
                               <button
                                 type="button"
                                 onClick={() => requestDelete(row)}
@@ -690,7 +700,11 @@ export default function UsersPage() {
         open={!!viewing}
         onClose={() => setViewing(null)}
         canManage={canManage || viewing?.id === currentUser?.id}
-        canDelete={can(PERM.USER_DELETE) && viewing?.id !== currentUser?.id}
+        canDelete={
+          can(PERM.USER_DELETE) &&
+          canManageAccount(currentUser, viewing) &&
+          viewing?.id !== currentUser?.id
+        }
         canReset={can(PERM.USER_EDIT)}
         busy={busy}
         onEdit={() => {
@@ -932,7 +946,12 @@ function UserForm({ open, user, onClose, currentUser }) {
   const toast = useToast()
   const isEdit = !!user
   const isSelf = user?.id === currentUser?.id
-  const canManageRoles = currentUser?.role === ROLE.ADMIN
+  // Permission, not role: an instructor keeps the directory too. What an
+  // instructor may not do is reach an administrator — `canManageAccount` — or
+  // hand out the role, which is why `ROLES` is filtered rather than shown whole.
+  const canManageRoles =
+    hasPermission(currentUser, PERM.USER_EDIT) && canManageAccount(currentUser, user)
+  const roleOptions = ROLES.filter((role) => canAssignRole(currentUser, role))
 
   const [form, setForm] = useState(BLANK_USER)
   const [errors, setErrors] = useState({})
@@ -1048,13 +1067,13 @@ function UserForm({ open, user, onClose, currentUser }) {
               required
               value={form.role}
               onChange={setField('role')}
-              options={ROLES}
+              options={roleOptions}
               placeholder="Select a role"
               error={errors.role}
               disabled={isEdit && !canManageRoles}
               hint={
                 isEdit && !canManageRoles
-                  ? 'Only an administrator can change a role.'
+                  ? 'You are not allowed to change this account’s role.'
                   : ROLE_SUMMARY[form.role]
               }
             />
@@ -1066,7 +1085,7 @@ function UserForm({ open, user, onClose, currentUser }) {
               error={errors.status}
               disabled={!canManageRoles}
               hint={
-                !canManageRoles ? 'Only an administrator can suspend an account.' : undefined
+                !canManageRoles ? 'You are not allowed to change this account’s status.' : undefined
               }
             />
           </div>

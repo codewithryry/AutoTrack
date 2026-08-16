@@ -21,7 +21,7 @@ import { SelectField, Spinner, TextField } from '../components/ui'
 import { useToast } from '../context/ToastContext'
 import * as userService from '../services/users'
 import { ValidationError } from '../services/tools'
-import { APP_VERSION, ROLE } from '../utils/constants'
+import { APP_VERSION, DEPARTMENTS, OTHER_OPTION, PROGRAMMES, ROLE } from '../utils/constants'
 import { cx } from '../utils/helpers'
 
 /**
@@ -60,9 +60,6 @@ const ROLE_CHOICES = [
   },
 ]
 
-/** The only programme this system serves. */
-const PROGRAMMES = ['Automotive Technology']
-
 const BLANK = {
   firstName: '',
   lastName: '',
@@ -72,9 +69,11 @@ const BLANK = {
   role: ROLE.STUDENT,
   studentId: '',
   employeeId: '',
-  // Students pick from PROGRAMMES; an instructor types their own department, so
-  // switching role clears it (see chooseRole).
+  // Both roles pick from a central list, so switching role swaps the default
+  // (see chooseRole).
   department: PROGRAMMES[0],
+  // Only used while `department` is `Other`; the typed value is what gets saved.
+  departmentOther: '',
   contact: '',
 }
 
@@ -88,20 +87,22 @@ export default function SignUpPage() {
   const [submitting, setSubmitting] = useState(false)
 
   const isStudent = form.role === ROLE.STUDENT
+  const isOther = form.department === OTHER_OPTION
 
   const setField = (field) => (event) => {
     const value = event?.target ? event.target.value : event
     setForm((f) => ({ ...f, [field]: value }))
-    setErrors((e) => ({ ...e, [field]: undefined, form: undefined }))
+    // The typed `Other` value is validated as `department`, so clear that error.
+    const shown = field === 'departmentOther' ? 'department' : field
+    setErrors((e) => ({ ...e, [field]: undefined, [shown]: undefined, form: undefined }))
   }
 
   const chooseRole = (role) => {
     setForm((f) => ({
       ...f,
       role,
-      // Keep the instructor's free-text department behaving as it always has:
-      // it starts empty rather than pre-filled with the student programme.
-      department: role === ROLE.STUDENT ? PROGRAMMES[0] : '',
+      department: role === ROLE.STUDENT ? PROGRAMMES[0] : DEPARTMENTS[0],
+      departmentOther: '',
     }))
     setErrors((e) => ({ ...e, role: undefined, studentId: undefined, employeeId: undefined }))
   }
@@ -112,7 +113,11 @@ export default function SignUpPage() {
     setErrors({})
 
     try {
-      const account = await userService.signUp(form)
+      // `Other` means the typed value is the programme/department that is saved.
+      const account = await userService.signUp({
+        ...form,
+        department: isOther ? form.departmentOther : form.department,
+      })
       // Never leave credentials in component state.
       setForm((f) => ({ ...f, password: '', confirmPassword: '' }))
 
@@ -206,7 +211,7 @@ export default function SignUpPage() {
             </p>
           </div>
 
-          <form onSubmit={submit} className="auth-form space-y-5" noValidate>
+          <form onSubmit={submit} className="auth-form space-y-4" noValidate>
             {errors.form && (
               <div
                 role="alert"
@@ -223,7 +228,7 @@ export default function SignUpPage() {
               <legend className="label mb-2">
                 I am a <span className="text-red-500">*</span>
               </legend>
-              <div className="grid gap-2 sm:grid-cols-2">
+              <div className="grid gap-2 min-[360px]:grid-cols-2">
                 {ROLE_CHOICES.map(({ value, icon: Icon, title, text, note }) => {
                   const active = form.role === value
                   return (
@@ -261,7 +266,10 @@ export default function SignUpPage() {
             </fieldset>
 
             {/* ----------------------- name ----------------------- */}
-            <div className="grid gap-4 sm:grid-cols-2">
+            {/* Paired from 360px rather than `sm`, so the phone gets the same
+                two-column grouping the desktop does instead of one long column.
+                Below that the pair stacks. */}
+            <div className="grid gap-3 min-[360px]:grid-cols-2">
               <TextField
                 label="First name"
                 required
@@ -316,7 +324,7 @@ export default function SignUpPage() {
             </div>
 
             {/* --------------------- role details --------------------- */}
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-3 min-[360px]:grid-cols-2">
               {isStudent ? (
                 <TextField
                   label="Student ID"
@@ -338,38 +346,38 @@ export default function SignUpPage() {
                   className="mono"
                 />
               )}
-              {isStudent ? (
-                // This system serves one programme, so the choice is fixed
-                // rather than typed. It writes the same `department` field the
-                // text input did, so nothing downstream changes.
-                <SelectField
-                  label="Programme"
-                  required
-                  value={form.department}
-                  onChange={setField('department')}
-                  error={errors.department}
-                  options={PROGRAMMES}
-                />
-              ) : (
-                <TextField
-                  label="Department"
-                  required
-                  value={form.department}
-                  onChange={setField('department')}
-                  error={errors.department}
-                  placeholder="Automotive Technology"
-                />
-              )}
+              <TextField
+                label="Contact number"
+                value={form.contact}
+                onChange={setField('contact')}
+                error={errors.contact}
+                placeholder="0917 000 0000"
+                hint="Optional — the tool room uses it to reach you."
+              />
             </div>
 
-            <TextField
-              label="Contact number"
-              value={form.contact}
-              onChange={setField('contact')}
-              error={errors.contact}
-              placeholder="0917 000 0000"
-              hint="Optional — used by the tool room to reach you about a loan."
+            {/* Full width of its own row: the programme labels are long, and a
+                half-width select truncates them on a phone. Both are chosen from
+                the central list rather than typed, and both write the same
+                `department` field the text input did, so nothing downstream
+                changes. */}
+            <SelectField
+              label={isStudent ? 'Programme' : 'Department'}
+              required
+              value={form.department}
+              onChange={setField('department')}
+              error={isOther ? undefined : errors.department}
+              options={isStudent ? PROGRAMMES : DEPARTMENTS}
             />
+            {isOther && (
+              <TextField
+                label={isStudent ? 'Programme (please specify)' : 'Department (please specify)'}
+                required
+                value={form.departmentOther}
+                onChange={setField('departmentOther')}
+                error={errors.department}
+              />
+            )}
 
             {/* --------------------- password --------------------- */}
             <div>
@@ -451,11 +459,8 @@ export default function SignUpPage() {
               stays clear of the phone's home indicator via the section's own
               safe-area padding. */}
           <div className="mt-8 text-center">
-            <p className="subtle text-[11px] font-semibold">Powered by Student BTVTED</p>
-            {/* One quiet line under it: what the app is and which build this is.
-                Smaller and dimmer than the line above so it fills the space
-                without drawing the eye away from the form. */}
-            <p className="subtle mt-1 text-[10px] leading-relaxed opacity-70">
+            {/* One quiet line: what the app is and which build this is. */}
+            <p className="subtle text-[10px] leading-relaxed opacity-70">
               Smart Tool Monitoring System · Version {APP_VERSION}
             </p>
           </div>

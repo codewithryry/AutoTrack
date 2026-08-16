@@ -115,11 +115,13 @@ export function PageHeader({
   return (
     <div
       className={cx(
-        'mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between',
+        'mb-5 flex flex-col gap-3 sm:flex-row sm:items-start',
         hideTitleMobile && !hasActions && 'hidden sm:flex',
-        // Nothing sits on the left but the assistant, so the actions keep their
-        // place at the right.
-        hideTitle && 'sm:justify-end',
+        // One `justify-*` or the other, never both: listing them together left
+        // the winner to whichever Tailwind emitted last, and that is
+        // `justify-between` — which, with the title dropped and a single child,
+        // pinned the action to the *left* of the row instead of the right.
+        hideTitle ? 'sm:justify-end' : 'sm:justify-between',
       )}
     >
       {!hideTitle && (

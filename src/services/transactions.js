@@ -932,7 +932,7 @@ export async function runOverdueCheck({ dueSoonThresholdDays = 1, notify = true 
 
 /** Mark an overdue loan as lost. Admin/instructor only. */
 export async function markLost(transactionId, actor, note) {
-  assertCan(actor, PERM.TXN_EDIT, 'Only an administrator can write off a tool as lost.')
+  assertCan(actor, PERM.TXN_EDIT, 'You are not allowed to write off a tool as lost.')
 
   const txn = await getById(transactionId)
   if (!txn) throw new Error('Transaction not found.')
@@ -975,7 +975,7 @@ export async function markLost(transactionId, actor, note) {
 
 /** Extend a due date — instructors granting more laboratory time. */
 export async function extendDueDate(transactionId, newDueDate, actor) {
-  assertCan(actor, PERM.TXN_EDIT, 'Only an administrator can extend a due date.')
+  assertCan(actor, PERM.TXN_EDIT, 'You are not allowed to extend a due date.')
 
   const txn = await getById(transactionId)
   if (!txn) throw new Error('Transaction not found.')

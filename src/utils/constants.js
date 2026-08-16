@@ -207,6 +207,37 @@ export const COURSES = [
   'BS Mechanical Engineering',
 ]
 
+/** The last option in both lists: pick it and type the value instead. */
+export const OTHER_OPTION = 'Other'
+
+/**
+ * Programmes a student may register under, as the label the profile stores.
+ *
+ * A degree with majors gets one entry per major, so the student picks the major
+ * rather than typing it. Order is the campus's own.
+ */
+export const PROGRAMMES = [
+  ...[
+    'Automotive Technology',
+    'Food and Service Management',
+    'Electronics Technology',
+    'Electrical Technology',
+    'Drafting Technology',
+    'Fashion and Garments Technology',
+  ].map((major) => `BTVTED — ${major}`),
+  ...['Industrial Arts', 'Home Economics'].map((major) => `BTLED — ${major}`),
+  'BSCrim — Bachelor of Science in Criminology',
+  ...['English', 'Filipino', 'Mathematics', 'Science'].map((major) => `BSEd — ${major}`),
+  'BSIT — Bachelor of Science in Information Technology',
+  'BSTM — Bachelor of Science in Tourism Management',
+  'BSHM — Bachelor of Science in Hospitality Management',
+  'AB Psych — Bachelor of Arts in Psychology',
+  OTHER_OPTION,
+]
+
+/** Departments an instructor may be attached to. */
+export const DEPARTMENTS = ['BTVTED', 'CCJE', 'CAS', 'CBM', 'CCS', 'CTE', OTHER_OPTION]
+
 export const YEAR_LEVELS = ['1st Year', '2nd Year', '3rd Year', '4th Year', 'N/A']
 
 /* ------------------------------------------------------------------ *
@@ -376,6 +407,9 @@ export const DEFAULT_SETTINGS = {
   labName: 'Automotive Laboratory',
   labLocation: 'Technical Education Building — Ground Floor',
   institution: 'College of Engineering Technology',
+  // The department's own page: the name it is shown under, and the address.
+  // Empty means there is no link to offer, and nothing is rendered.
+  departmentName: '',
   departmentUrl: '',
   defaultBorrowDays: 3,
   maxBorrowDays: 30,

@@ -340,15 +340,6 @@ export default function SettingsPage() {
             disabled={!canEdit}
           />
 
-          <TextField
-            label="Department page URL"
-            value={form.departmentUrl ?? ''}
-            onChange={(e) => setField('departmentUrl')(e.target.value)}
-            error={errors.departmentUrl}
-            disabled={!canEdit}
-            hint="Optional. Students get a link to this address — a department or Facebook page — from their navigation. Leave it empty to hide the link."
-          />
-
           <div className="grid gap-4 sm:grid-cols-3">
             <TextField
               label="Default borrowing days"
@@ -390,6 +381,34 @@ export default function SettingsPage() {
               Settings last saved {formatDateTime(settings.updatedAt)}
             </p>
           )}
+        </div>
+      </SectionCard>
+
+      {/* The department's own page — a department site or a Facebook page. Two
+          fields and nothing else: what to call it, and where it goes. Saved by
+          the same button as the card above, through the same patch. */}
+      <SectionCard
+        title="Connect"
+        description="Shown to students on their account page"
+        className="mt-4"
+      >
+        <div className="space-y-4">
+          <TextField
+            label="Page name"
+            value={form.departmentName ?? ''}
+            onChange={(e) => setField('departmentName')(e.target.value)}
+            error={errors.departmentName}
+            disabled={!canEdit}
+            hint="Optional. What the link is called. Without one the address itself is shown."
+          />
+          <TextField
+            label="URL"
+            value={form.departmentUrl ?? ''}
+            onChange={(e) => setField('departmentUrl')(e.target.value)}
+            error={errors.departmentUrl}
+            disabled={!canEdit}
+            hint="Optional. Leave it empty to hide the link entirely."
+          />
         </div>
       </SectionCard>
     </form>

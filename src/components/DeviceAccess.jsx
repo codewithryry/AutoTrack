@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
-import { Camera, Download, MapPin, Smartphone } from 'lucide-react'
+import { Bell, Camera, Copy, Download, MapPin, Share2, Smartphone } from 'lucide-react'
 import { Badge, SectionCard } from './ui'
+import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
+import * as pushService from '../services/push'
 import { isStandalone } from '../utils/pwa'
 
 /**
@@ -223,7 +225,98 @@ export function DeviceAccessControl() {
           )
         }
       />
+      <PushNotificationRow />
     </div>
+  )
+}
+
+/**
+ * Phone notifications for this device.
+ *
+ * A third permission row alongside the camera and location, because that is
+ * what it is: the browser's own permission, asked for and reported here. The
+ * notification centre inside the app is untouched and keeps working whatever
+ * this says — turning it on only adds the alert that arrives when the app is
+ * closed.
+ */
+function PushNotificationRow() {
+  const toast = useToast()
+  const { user } = useApp()
+  const [state, setState] = useState('unknown')
+  const [busy, setBusy] = useState(false)
+
+  const available = pushService.isAvailable()
+
+  useEffect(() => {
+    let active = true
+    if (!pushService.isSupported()) {
+      setState('unsupported')
+      return
+    }
+    pushService.isSubscribed().then((on) => {
+      if (!active) return
+      // `granted` on this device but not subscribed is still something to
+      // switch on, so the row reports the subscription, not just the permission.
+      setState(on ? 'granted' : pushService.permissionState() === 'denied' ? 'denied' : 'prompt')
+    })
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const enable = async () => {
+    setBusy(true)
+    try {
+      await pushService.subscribe(user)
+      setState('granted')
+      toast.success('Notifications are on for this device.')
+    } catch (err) {
+      if (pushService.permissionState() === 'denied') setState('denied')
+      toast.info(err.message ?? 'Notifications could not be turned on.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const disable = async () => {
+    setBusy(true)
+    try {
+      await pushService.unsubscribe()
+      setState('prompt')
+      toast.info('Notifications are off for this device.')
+    } catch (err) {
+      toast.info(err.message ?? 'Notifications could not be turned off.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <AccessRow
+      icon={Bell}
+      title="Notifications"
+      description={
+        available
+          ? 'Alerts about your loans arrive on this device even when the app is closed.'
+          : 'This browser cannot deliver alerts while the app is closed. The notification centre inside the app still works.'
+      }
+      state={available ? state : 'unsupported'}
+      stateLabel={available && state === 'granted' ? 'On' : undefined}
+      action={
+        available &&
+        state !== 'denied' &&
+        state !== 'unknown' && (
+          <button
+            type="button"
+            onClick={state === 'granted' ? disable : enable}
+            className="btn btn-outline btn-sm shrink-0"
+            disabled={busy}
+          >
+            {state === 'granted' ? 'Turn off' : 'Enable'}
+          </button>
+        )
+      }
+    />
   )
 }
 
@@ -235,8 +328,15 @@ export function DeviceAccessControl() {
  * the option alive with hand-done instructions instead of disappearing.
  */
 export function InstallAppCard() {
+  const toast = useToast()
   const [installed, setInstalled] = useState(isStandalone())
   const [deferred, setDeferred] = useState(null)
+
+  // The address this copy of the app is served from — the same source
+  // `localAuth` uses for its reset link, so there is no second URL to keep in
+  // step with the deployment.
+  const appUrl = typeof window === 'undefined' ? '' : `${window.location.origin}/`
+  const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function'
 
   useEffect(() => {
     const onPrompt = (event) => {
@@ -263,6 +363,27 @@ export function InstallAppCard() {
     setDeferred(null)
   }
 
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(appUrl)
+      toast.success('App link copied.')
+    } catch {
+      // No clipboard permission, or a page served over plain http.
+      toast.error('The link could not be copied. Copy it from the address bar.')
+    }
+  }
+
+  /** Hand the app's address to the device's own share sheet, or copy it. */
+  const share = async () => {
+    if (!canShare) return copyLink()
+    try {
+      await navigator.share({ title: 'ToolTrack AutoLab', url: appUrl })
+    } catch (err) {
+      // Dismissing the sheet is a choice, not a failure.
+      if (err?.name !== 'AbortError') await copyLink()
+    }
+  }
+
   // iOS Safari never fires `beforeinstallprompt`, so the install has to be done
   // by hand there — the instructions below are that fallback, and they keep the
   // option available to students, instructors and administrators alike even when
@@ -286,12 +407,6 @@ export function InstallAppCard() {
           description="Runs full screen from your home screen, and keeps working offline."
           state="prompt"
           stateLabel="Available"
-          action={
-            <button type="button" onClick={install} className="btn btn-primary btn-sm shrink-0">
-              <Download className="h-3.5 w-3.5" />
-              Install
-            </button>
-          }
         />
       ) : (
         <>
@@ -327,6 +442,22 @@ export function InstallAppCard() {
           </div>
         </>
       )}
+
+      {/* Both actions in one row, full width on a phone and side by side from
+          `sm`. Install only appears while the browser is actually offering it —
+          the instructions above are the fallback when it is not. */}
+      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+        {deferred && !installed && (
+          <button type="button" onClick={install} className="btn btn-primary flex-1">
+            <Download className="h-4 w-4" />
+            Install app
+          </button>
+        )}
+        <button type="button" onClick={share} className="btn btn-outline flex-1">
+          {canShare ? <Share2 className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+          {canShare ? 'Share app' : 'Copy link'}
+        </button>
+      </div>
     </SectionCard>
   )
 }

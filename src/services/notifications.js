@@ -1,5 +1,6 @@
 import * as db from './db'
 import { COLLECTIONS } from './db'
+import * as push from './push'
 import { NOTIF_TYPE } from '../utils/constants'
 import { isAdmin, isStaff } from '../utils/permissions'
 import { uid } from '../utils/helpers'
@@ -48,6 +49,14 @@ export async function create(input) {
     createdAt: input.createdAt ?? nowISO(),
   }
   await db.insert(COLLECTIONS.notifications, record)
+
+  // The record is written; the phone alert is a bonus on top of it. Addressed
+  // notifications only — a broadcast is read in the app — and never awaited, so
+  // a slow or unconfigured push service cannot hold up a borrow or a return.
+  if (record.userId) {
+    push.deliver(record.id).catch((err) => console.warn('[notifications] not pushed', err))
+  }
+
   return record
 }
 

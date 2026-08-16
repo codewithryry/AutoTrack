@@ -49,21 +49,32 @@ export function toProfile(sessionUser, document) {
 export async function loadProfile(sessionUser) {
   if (!sessionUser?.uid) return null
 
-  let document
-  try {
-    document = await db.getDirect(COLLECTIONS.users, sessionUser.uid)
-  } catch (err) {
-    throw new AuthError(
-      err?.code === 'permission-denied'
-        ? 'Your profile could not be read. Ask the laboratory administrator to check your account.'
-        : (err?.message ?? 'Your profile could not be loaded.'),
-    )
+  // Registration signs the account in *before* its profile row is written, so
+  // the session change fires while the insert is still in flight and the first
+  // read comes back empty. Only a missing row is retried — a read that fails,
+  // or a profile that exists but is not usable, is reported at once as before.
+  const read = async () => {
+    try {
+      return await db.getDirect(COLLECTIONS.users, sessionUser.uid)
+    } catch (err) {
+      // The reason is for the console, not the screen: a database error carries
+      // table names, column names and policy details, and the person reading it
+      // can act on none of them.
+      console.warn('[auth] the profile could not be read', err)
+      throw new AuthError('Your profile could not be loaded. Please try again.')
+    }
   }
 
+  let document = await read()
+  for (let attempt = 0; !document && attempt < 4; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    document = await read()
+  }
+
+  // Registration writes the profile with the account, so a session without one
+  // is a fault rather than a step somebody has to finish by hand.
   if (!document) {
-    throw new AuthError(
-      'This account has no laboratory profile yet. Ask the administrator to finish setting it up.',
-    )
+    throw new AuthError('This account cannot be used right now. Contact the laboratory administrator.')
   }
 
   // Only an active account authorises anything. Each state gets its own wording

@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Camera, CheckCircle2, Clock, ShieldCheck, Trash2, XCircle } from 'lucide-react'
+import {
+  Camera,
+  CheckCircle2,
+  Clock,
+  ExternalLink,
+  Globe,
+  ShieldCheck,
+  Trash2,
+  XCircle,
+} from 'lucide-react'
 import { SectionCard, SelectField, Spinner, TextField } from '../components/ui'
 import { DeleteAccountControl } from '../components/AccountSettings'
 import Walkthrough, { usePageTour } from '../components/Walkthrough'
@@ -18,7 +27,7 @@ import { formatDate } from '../utils/dates'
  *
  * Editing is free; applying is not. A save is submitted for review and parked
  * as a pending change — the approved profile is left exactly as it was until an
- * administrator approves it, and the account keeps working the whole time.
+ * instructor approves it, and the account keeps working the whole time.
  *
  * Students only, by design. An instructor's or administrator's profile flow is
  * unchanged, so this page shows them their details without the review path.
@@ -61,19 +70,24 @@ const FIELD_LABELS = {
  * matrix in `utils/permissions.js` — nothing here grants anything.
  */
 const INSTRUCTOR_CAPABILITIES = [
-  'View the inventory, edit tool records and change a tool’s status.',
+  'Register, edit and delete tool records, and change a tool’s status.',
   'Scan a tool label to see its status, its borrower and the borrowing behind it.',
   'Issue tools to yourself or to any student, and receive anyone’s return.',
   'See every transaction in the laboratory, extend a due date, or report a tool lost.',
+  'Decide the tool requests and manage the holds an approval creates.',
   'Schedule, update and complete maintenance on laboratory equipment.',
-  'Read the laboratory’s staff notifications.',
+  'Create, edit and delete student accounts, and reset a student’s password.',
+  'Approve or reject a student’s profile and photo changes.',
+  'Read the laboratory reports, and export them.',
+  'Read the laboratory settings, and the laboratory’s staff notifications.',
 ]
 
 /** The counterpart list: what the role deliberately does not carry. */
 const INSTRUCTOR_LIMITS = [
-  'Creating, editing or deleting user accounts — the directory stays with the administrator.',
-  'Laboratory configuration and reports.',
-  'Clearing the notification centre for everyone.',
+  'Administrator and instructor accounts — your directory is the students in it, so no other staff account is listed, editable or deletable.',
+  'Granting any role but Student.',
+  'Changing the laboratory settings — you can read them, an administrator writes them.',
+  'The stored data: import, export, reseed and clearing the collections.',
 ]
 
 /**
@@ -104,7 +118,7 @@ const accountTour = (student, instructor = false) =>
         {
           target: 'account-approval',
           title: 'Changes need approval',
-          text: 'Submitting sends the change to an administrator. Your account keeps working, and your current details stay in place until they approve it.',
+          text: 'Submitting sends the change to an instructor. Your account keeps working, and your current details stay in place until they approve it.',
         },
       ]
     : instructor
@@ -144,7 +158,7 @@ const accountTour = (student, instructor = false) =>
         ]
 
 export default function ProfilePage() {
-  const { user, refreshUser } = useApp()
+  const { user, refreshUser, settings } = useApp()
   const toast = useToast()
 
   const isStudent = user?.role === ROLE.STUDENT
@@ -180,7 +194,7 @@ export default function ProfilePage() {
       await refreshUser?.()
       toast.success(
         review
-          ? 'Your picture was sent to an administrator for approval.'
+          ? 'Your picture was sent to an instructor for approval.'
           : file
             ? 'Your profile picture was updated.'
             : 'Your profile picture was removed.',
@@ -228,7 +242,7 @@ export default function ProfilePage() {
       await refreshUser()
       // Placed against the form the change was submitted from, so the notice
       // reads as an answer to that action rather than a banner in the shell.
-      toast.success('Your changes were sent to an administrator for approval.', {
+      toast.success('Your changes were sent to an instructor for approval.', {
         title: 'Submitted for approval',
         anchor: '[data-tour="account-form"]',
       })
@@ -259,7 +273,7 @@ export default function ProfilePage() {
           <p className="text-sm font-bold">{badge.label}</p>
           <p className="mt-1 text-xs leading-relaxed">
             {isPending
-              ? 'An administrator is reviewing your changes. Your account works normally in the meantime, and your current details stay in place until they are approved.'
+              ? 'An instructor is reviewing your changes. Your account works normally in the meantime, and your current details stay in place until they are approved.'
               : reviewStatus === userService.PROFILE_REVIEW.REJECTED
                 ? user?.profileReviewNote ||
                   'Your last changes were not approved. Your previous details are unchanged.'
@@ -314,7 +328,7 @@ export default function ProfilePage() {
             </div>
             {(photoError || photoPending) && (
               <p className={cx('mt-1.5 text-xs', photoError ? 'text-red-500' : 'subtle')}>
-                {photoError ?? 'Waiting for an administrator to approve this picture.'}
+                {photoError ?? 'Waiting for an instructor to approve this picture.'}
               </p>
             )}
           </div>
@@ -333,6 +347,10 @@ export default function ProfilePage() {
       </SectionCard>
 
       <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+        {/* The left column. One wrapper rather than a bare form, because the
+            instructor's Danger zone sits under it on desktop — a third grid
+            child would auto-place into the *right* column instead. */}
+        <div className="space-y-4">
         {/* The form is one submission split across two grouped cards, so the
             fields read as sections rather than as one long column. The field
             grid stays two columns at every width — the fields are short, and
@@ -420,8 +438,8 @@ export default function ProfilePage() {
           {isStudent && (
             <div className="card p-4">
               <p className="subtle text-xs leading-relaxed">
-                Changes are sent to an administrator for approval. Your current details stay in
-                place until the change is approved.
+                Changes are sent to an instructor for approval. Your current details stay in place
+                until the change is approved, and you are told either way.
               </p>
               <button type="submit" className="btn btn-primary btn-lg mt-3 w-full" disabled={saving}>
                 {saving && <Spinner />}
@@ -430,6 +448,23 @@ export default function ProfilePage() {
             </div>
           )}
         </form>
+
+          {/* A staff account's destructive control, on desktop only: directly
+              under Personal information, so the space beside a short form is
+              used rather than left to run on below the page. Below `lg` it is
+              hidden here and the full-width card at the foot of the page
+              carries it instead, so the phone's order is exactly what it was. */}
+          {isStaffAccount && (
+            <SectionCard
+              data-tour="account-danger"
+              title="Danger zone"
+              description="Irreversible actions on this account"
+              className="hidden lg:block"
+            >
+              <DeleteAccountControl />
+            </SectionCard>
+          )}
+        </div>
 
         <div className="space-y-4">
           {pending && (
@@ -461,9 +496,10 @@ export default function ProfilePage() {
               <SectionCard title="About this page">
                 <p className="muted flex gap-2 text-sm leading-relaxed">
                   <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 opacity-60" />
-                  These are the details the laboratory holds for you. Staff records are maintained
-                  by the laboratory administrator — ask them to correct anything that is wrong
-                  here. The approval flow applies to student accounts only.
+                  These are the details the laboratory holds for you. Edit them — and every
+                  student record — from the Users page; other staff accounts stay with the
+                  administrators. The approval flow applies to student accounts only, and you are
+                  one of the people who reviews them.
                 </p>
               </SectionCard>
 
@@ -498,6 +534,47 @@ export default function ProfilePage() {
             </>
           )}
 
+          {/* The department's own page, when an administrator or instructor has
+              configured an address. Same stored value the navigation links to —
+              `settings.departmentUrl` — so there is one address, set in one
+              place. Nothing is shown at all when it is empty. */}
+          {isStudent && settings?.departmentUrl && (
+            <SectionCard
+              title="Websites"
+              description="Access important websites and online links"
+            >
+              <a
+                href={settings.departmentUrl}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="flex min-h-[44px] items-center gap-3 rounded-xl px-2 py-1.5
+                           transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+              >
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-black/5 dark:bg-white/10">
+                  <Globe className="h-4 w-4" />
+                </span>
+                <span className="min-w-0 flex-1 truncate text-sm font-semibold">
+                  {settings.departmentName?.trim() || settings.departmentUrl}
+                </span>
+                <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-50" />
+              </a>
+            </SectionCard>
+          )}
+
+          {/* A student's destructive control sits at the foot of this column
+              rather than across the page: the form beside it is short, so the
+              space is there, and on a phone the column stacks under it exactly
+              as it did before. Staff keep it full width below the grid. */}
+          {isStudent && (
+            <SectionCard
+              data-tour="account-danger"
+              title="Danger zone"
+              description="Irreversible actions on this account"
+            >
+              <DeleteAccountControl />
+            </SectionCard>
+          )}
+
           {!isStudent && !isInstructor && (
             <>
               <SectionCard title="About this page">
@@ -529,16 +606,19 @@ export default function ProfilePage() {
         </div>
       </div>
 
-      {/* Last on the page and on its own, so nothing destructive sits beside an
-          ordinary field. The confirmation flow is the control's own. */}
-      <SectionCard
-        data-tour="account-danger"
-        title="Danger zone"
-        description="Irreversible actions on this account"
-        className="mt-4"
-      >
-        <DeleteAccountControl />
-      </SectionCard>
+      {/* Staff keep it last on the page and on its own, so nothing destructive
+          sits beside an ordinary field. A student's is in the column above.
+          The confirmation flow is the control's own either way. */}
+      {!isStudent && (
+        <SectionCard
+          data-tour="account-danger"
+          title="Danger zone"
+          description="Irreversible actions on this account"
+          className={cx('mt-4', isStaffAccount && 'lg:hidden')}
+        >
+          <DeleteAccountControl />
+        </SectionCard>
+      )}
 
       <Walkthrough steps={tourSteps} open={tour.open} onClose={tour.close} compact={isStudent} />
     </>

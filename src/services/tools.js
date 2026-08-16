@@ -206,7 +206,7 @@ export async function validate(input, { isEdit = false } = {}) {
  * ------------------------------------------------------------------ */
 
 export async function create(input, actor) {
-  assertCan(actor, PERM.TOOL_CREATE, 'Only an administrator can add tools to the inventory.')
+  assertCan(actor, PERM.TOOL_CREATE, 'You are not allowed to add tools to the inventory.')
 
   const id = (input.id?.trim() || (await nextToolId())).toUpperCase()
   const draft = { ...input, id }
@@ -360,7 +360,7 @@ export async function hasActiveTransaction(toolId) {
  * inventory row itself is gone.
  */
 export async function remove(id, actor) {
-  assertCan(actor, PERM.TOOL_DELETE, 'Only an administrator can delete tools.')
+  assertCan(actor, PERM.TOOL_DELETE, 'You are not allowed to delete tools.')
 
   const tool = await getById(id)
   if (!tool) throw new Error('Tool not found.')

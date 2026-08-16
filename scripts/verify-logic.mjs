@@ -95,21 +95,53 @@ check('student cannot manage tools, users, reports or settings', () => {
   assert.equal(perms.can(student, perms.PERM.RETURN), true)
 })
 
-check('instructor runs the crib but has no admin access', () => {
-  assert.equal(perms.can(instructor, perms.PERM.TOOL_DELETE), false)
-  assert.equal(perms.can(instructor, perms.PERM.TOOL_CREATE), false)
+check('instructor runs the laboratory, not the system', () => {
+  // The laboratory: the inventory, the crib, servicing, the directory, reports.
+  assert.equal(perms.can(instructor, perms.PERM.TOOL_CREATE), true)
   assert.equal(perms.can(instructor, perms.PERM.TOOL_EDIT), true)
+  assert.equal(perms.can(instructor, perms.PERM.TOOL_DELETE), true)
   assert.equal(perms.can(instructor, perms.PERM.TXN_EDIT), true)
   assert.equal(perms.can(instructor, perms.PERM.TXN_VIEW_ALL), true)
   assert.equal(perms.can(instructor, perms.PERM.MAINTENANCE_MANAGE), true)
-  // Reads the directory to pick a borrower, but manages nobody.
   assert.equal(perms.can(instructor, perms.PERM.USER_VIEW), true)
-  assert.equal(perms.can(instructor, perms.PERM.USER_MANAGE), false)
-  assert.equal(perms.can(instructor, perms.PERM.USER_CREATE), false)
-  assert.equal(perms.can(instructor, perms.PERM.USER_DELETE), false)
-  assert.equal(perms.can(instructor, perms.PERM.REPORTS_VIEW), false)
-  assert.equal(perms.can(instructor, perms.PERM.SETTINGS_VIEW), false)
+  assert.equal(perms.can(instructor, perms.PERM.USER_MANAGE), true)
+  assert.equal(perms.can(instructor, perms.PERM.USER_CREATE), true)
+  assert.equal(perms.can(instructor, perms.PERM.USER_EDIT), true)
+  assert.equal(perms.can(instructor, perms.PERM.USER_DELETE), true)
+  assert.equal(perms.can(instructor, perms.PERM.REPORTS_VIEW), true)
+  assert.equal(perms.can(instructor, perms.PERM.REPORTS_EXPORT), true)
+  // Reads the configuration; writing it, and the data tools, stay with the
+  // administrator.
+  assert.equal(perms.can(instructor, perms.PERM.SETTINGS_VIEW), true)
+  assert.equal(perms.can(instructor, perms.PERM.SETTINGS_EDIT), false)
   assert.equal(perms.can(instructor, perms.PERM.DATA_MANAGE), false)
+})
+
+check('an instructor keeps the students, and only the students', () => {
+  // The whole point of the two roles being different. Mirrored by the
+  // `profiles` policies and the guard trigger in 0028.
+  assert.equal(perms.canManageAccount(instructor, student), true)
+  assert.equal(perms.canManageAccount(instructor, admin), false)
+  assert.equal(perms.canManageAccount(instructor, instructor), false)
+  assert.equal(perms.canManageAccount(admin, admin), true)
+  assert.equal(perms.canManageAccount(admin, instructor), true)
+  assert.equal(perms.canManageAccount(student, student), false)
+
+  // And may hand out no role but `Student`.
+  assert.equal(perms.canAssignRole(instructor, 'Student'), true)
+  assert.equal(perms.canAssignRole(instructor, 'Instructor'), false)
+  assert.equal(perms.canAssignRole(instructor, 'Admin'), false)
+  assert.equal(perms.canAssignRole(admin, 'Admin'), true)
+  assert.equal(perms.canAssignRole(student, 'Student'), false)
+})
+
+check('the directory each role may read', () => {
+  // The frontend half of `profiles_select`: the list may only offer what the
+  // policy will actually return.
+  assert.deepEqual(perms.visibleAccountRoles(admin), ['Admin', 'Instructor', 'Student'])
+  assert.deepEqual(perms.visibleAccountRoles(instructor), ['Student'])
+  assert.deepEqual(perms.visibleAccountRoles(student), [])
+  assert.deepEqual(perms.visibleAccountRoles(null), [])
 })
 
 check('staff is admin + instructor only', () => {

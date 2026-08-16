@@ -156,6 +156,15 @@ export function AppProvider({ children }) {
           setBootError(
             'Your laboratory profile could not be loaded. Check the internet connection and try again.',
           )
+        } else if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+          // Offline with nothing cached for this account — a first launch on
+          // this device, say. The session is deliberately left alone: signing
+          // them out here would mean they could not get back in until they had
+          // a connection *and* their password. They are told to reconnect, and
+          // the retry picks up where it left off.
+          setBootError(
+            'Your laboratory profile is not stored on this device yet. Connect to the internet once to finish signing in.',
+          )
         } else {
           // The account authenticates but cannot be used: no profile, no role,
           // or not active. Drop the session and explain why on the login screen.

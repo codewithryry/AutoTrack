@@ -5,6 +5,8 @@ dist/
 .env
 .env.local
 .env.*.local
+.env.example
+.env.bak.1786848346
 
 # Never commit service-account or admin credentials of any kind. Everything
 # under src/ is shipped to the browser; a key that reaches this repository is a

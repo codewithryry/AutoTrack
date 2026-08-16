@@ -57,14 +57,23 @@ export const PERM = {
 }
 
 /**
- * Instructors run the tool crib: they issue and receive equipment for any
- * student, correct transactions and manage servicing. They may read the user
- * directory (a borrower has to be selectable) but cannot create, edit or delete
- * accounts, cannot open the Users page, and cannot touch reports or settings.
+ * Instructors run the laboratory: they issue and receive equipment for any
+ * student, correct transactions, manage servicing and the inventory itself,
+ * keep the user directory, review a student's profile changes, and read the
+ * reports.
+ *
+ * What stays with the administrator is writing the system rather than reading
+ * it: changing the laboratory settings (`SETTINGS_EDIT`) and the data tools
+ * (import, export, reseed, wipe). And one boundary holds absolutely — an instructor may not create,
+ * become, edit or delete an `Admin`. That is enforced three times over: in
+ * `canManageAccount()` and `canAssignRole()` below, in `services/users.js`, and
+ * in the `profiles` policies and guard trigger, which are the real boundary.
  */
 const INSTRUCTOR_PERMS = [
   PERM.TOOL_VIEW,
+  PERM.TOOL_CREATE,
   PERM.TOOL_EDIT,
+  PERM.TOOL_DELETE,
   PERM.TOOL_STATUS,
   PERM.BORROW,
   PERM.BORROW_FOR_OTHERS,
@@ -80,9 +89,25 @@ const INSTRUCTOR_PERMS = [
   PERM.REQUEST_DECIDE,
   PERM.RESERVATION_MANAGE,
   PERM.MESSAGE_SEND,
+  // The directory, and the account work that goes with running a laboratory:
+  // adding a student who has not registered, correcting a record, approving a
+  // profile change, removing an account that has left. Never an `Admin` — see
+  // `canManageAccount()`.
   PERM.USER_VIEW,
+  PERM.USER_MANAGE,
+  PERM.USER_CREATE,
+  PERM.USER_EDIT,
+  PERM.USER_DELETE,
   PERM.MAINTENANCE_VIEW,
   PERM.MAINTENANCE_MANAGE,
+  PERM.REPORTS_VIEW,
+  PERM.REPORTS_EXPORT,
+  // Reading the laboratory's configuration, not changing it: `SETTINGS_VIEW`
+  // opens the page and its laboratory and alert sections; `SETTINGS_EDIT` —
+  // which actually writes them — stays with the administrator, and so does
+  // `DATA_MANAGE`. The `settings` table is readable by any active account
+  // already (`settings_select` in 0002), so nothing moves in the database.
+  PERM.SETTINGS_VIEW,
 ]
 
 /**
@@ -141,6 +166,55 @@ export const isInstructor = (user) => user?.role === ROLE.INSTRUCTOR
 export const isStudent = (user) => user?.role === ROLE.STUDENT
 /** Staff share the laboratory-wide view; students are scoped to themselves. */
 export const isStaff = (user) => isAdmin(user) || isInstructor(user)
+
+/**
+ * May this actor act on this account at all?
+ *
+ * An instructor keeps the directory, but an administrator's account is not part
+ * of it: only an administrator edits, suspends or deletes another
+ * administrator. Without this, `USER_EDIT` alone would let an instructor demote
+ * or delete the people who can overrule them.
+ *
+ * @param {object} actor
+ * @param {object|string} target  the account being acted on, or its role
+ */
+export function canManageAccount(actor, target) {
+  if (!actor?.role) return false
+  if (!can(actor, PERM.USER_EDIT)) return false
+  const targetRole = typeof target === 'string' ? target : target?.role
+  // An administrator keeps the whole directory. An instructor keeps the
+  // students in it and nothing else: not an administrator, and not another
+  // instructor. A row with no role is unknown, so it is not theirs either.
+  if (isAdmin(actor)) return true
+  return targetRole === ROLE.STUDENT
+}
+
+/**
+ * May this actor hand out this role?
+ *
+ * `Admin` is created by an administrator and by nobody else — the same rule
+ * that keeps it out of public sign-up keeps it out of an instructor's reach.
+ */
+export function canAssignRole(actor, role) {
+  if (!can(actor, PERM.USER_EDIT)) return false
+  // The same boundary as `canManageAccount`: an instructor's directory is the
+  // students in it, so `Student` is the only role they can hand out.
+  return isAdmin(actor) || role === ROLE.STUDENT
+}
+
+/**
+ * The roles an actor may see in the directory at all.
+ *
+ * The frontend counterpart of the `profiles_select` policy: it decides which
+ * rows a list is allowed to show, and the policy decides which rows the server
+ * will part with. Both must say the same thing — the policy is the one that
+ * matters.
+ */
+export function visibleAccountRoles(actor) {
+  if (isAdmin(actor)) return [ROLE.ADMIN, ROLE.INSTRUCTOR, ROLE.STUDENT]
+  if (isInstructor(actor)) return [ROLE.STUDENT]
+  return []
+}
 
 /** Students may only borrow for themselves. */
 export function canBorrowFor(user, targetUserId) {

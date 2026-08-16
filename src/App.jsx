@@ -133,14 +133,6 @@ function BootSplash() {
         </p>
         <p className="mt-4 text-xs font-semibold text-navy-300">Version {APP_VERSION}</p>
       </div>
-
-      {/* A quiet footer, clear of the iOS home indicator. */}
-      <p
-        className="absolute left-1/2 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium tracking-wide text-navy-400"
-        style={{ bottom: 'calc(2rem + var(--sab))' }}
-      >
-        Made by heart
-      </p>
     </div>
   )
 }

@@ -15,7 +15,13 @@ import {
   USER_STATUSES,
   YEAR_LEVELS,
 } from '../utils/constants'
-import { PERM, assertCan } from '../utils/permissions'
+import {
+  PERM,
+  PermissionError,
+  assertCan,
+  canAssignRole,
+  canManageAccount,
+} from '../utils/permissions'
 import { matchesQuery, sortBy } from '../utils/helpers'
 import { nowISO } from '../utils/dates'
 
@@ -207,7 +213,12 @@ function buildProfile(uid, input, { actor, existing } = {}) {
  * password goes to the auth layer and nowhere else.
  */
 export async function create(input, actor) {
-  assertCan(actor, PERM.USER_CREATE, 'Only an administrator can create user accounts.')
+  assertCan(actor, PERM.USER_CREATE, 'You are not allowed to create user accounts.')
+  // An instructor keeps the directory, but `Admin` is not theirs to hand out.
+  // The `profiles_insert` policy refuses it too, so this is the friendly half.
+  if (!canAssignRole(actor, input.role)) {
+    throw new PermissionError('You are not allowed to create an account with that role.')
+  }
 
   const errors = await validate(input)
   if (Object.keys(errors).length) throw new ValidationError(errors)
@@ -225,9 +236,10 @@ export async function create(input, actor) {
   } catch (err) {
     // The sign-in account exists but has no profile, so it cannot be used yet.
     // Deleting it needs the Admin SDK, so say plainly what has to happen next.
+    console.warn('[users] the profile could not be saved', err)
     const message =
       `The sign-in account for ${profile.email} was created, but its laboratory profile ` +
-      `could not be saved (${err.message}). Add the profile again with the same email, ` +
+      `could not be saved. Add the profile again with the same email, ` +
       `or remove the account from the directory.`
     const wrapped = new Error(message)
     wrapped.name = 'ProfileWriteError'
@@ -382,11 +394,17 @@ export async function signUp(input) {
       displayName: fullName,
       role,
       status,
-      studentId: isStudent ? (input.studentId?.trim() ?? '') : '',
-      course: '',
+      // A self-registered profile is complete on creation: every field the
+      // laboratory reads is written, with `N/A` standing in for the ones this
+      // role has no value for, so nothing is left null for an administrator to
+      // fill in before the account can be used.
+      studentId: isStudent ? (input.studentId?.trim() || 'N/A') : 'N/A',
+      course: isStudent ? (input.department?.trim() || 'N/A') : 'N/A',
       yearLevel: isStudent ? (input.yearLevel ?? 'N/A') : 'N/A',
-      employeeId: isStudent ? '' : (input.employeeId?.trim() ?? ''),
-      department: input.department?.trim() ?? '',
+      employeeId: isStudent ? 'N/A' : (input.employeeId?.trim() || 'N/A'),
+      department: input.department?.trim() || 'N/A',
+      // Left blank rather than `N/A`: `validate()` checks any non-empty contact
+      // against the phone-number pattern, and `N/A` would fail every later edit.
       contact: input.contact?.trim() ?? '',
       registeredSelf: true,
       createdAt: timestamp,
@@ -403,7 +421,7 @@ export async function signUp(input) {
  * Approve a pending account — the other half of instructor self-registration.
  */
 export async function approve(id, actor) {
-  assertCan(actor, PERM.USER_EDIT, 'Only an administrator can approve accounts.')
+  assertCan(actor, PERM.USER_EDIT, 'You are not allowed to approve accounts.')
 
   const user = await getById(id)
   if (!user) throw new Error('User not found.')
@@ -459,6 +477,13 @@ export async function updateUser(id, input, actor) {
   const current = await getById(id)
   if (!current) throw new Error('User not found.')
 
+  // An administrator's account is not part of the directory an instructor
+  // keeps: only an administrator edits another administrator. Checked before
+  // anything else, so the reason is the real one.
+  if (actor?.id !== id && !canManageAccount(actor, current)) {
+    throw new PermissionError('You are not allowed to edit that account.')
+  }
+
   // Guard the laboratory's last administrator before field validation, so the
   // caller gets the real reason rather than a downstream "student ID required".
   const demoting = input.role && input.role !== current.role && current.role === ROLE.ADMIN
@@ -483,11 +508,12 @@ export async function updateUser(id, input, actor) {
   const changingRole = input.role && input.role !== current.role
   const changingStatus = input.status && input.status !== current.status
   if (changingRole || changingStatus) {
-    assertCan(
-      actor,
-      PERM.USER_EDIT,
-      'Only an administrator can change a role or an account status.',
-    )
+    assertCan(actor, PERM.USER_EDIT, 'You are not allowed to change a role or an account status.')
+  }
+  // Promotion to `Admin` is an administrator's decision alone — otherwise
+  // `USER_EDIT` would be a one-step route from instructor to administrator.
+  if (changingRole && !canAssignRole(actor, input.role)) {
+    throw new PermissionError('You are not allowed to assign that role.')
   }
   if (!changingRole) next.role = current.role
   if (!changingStatus) next.status = current.status
@@ -539,11 +565,14 @@ async function assertNotLastAdmin(excludingId) {
  * intact.
  */
 export async function remove(id, actor, { force = false } = {}) {
-  assertCan(actor, PERM.USER_DELETE, 'Only an administrator can delete user accounts.')
+  assertCan(actor, PERM.USER_DELETE, 'You are not allowed to delete user accounts.')
 
   const user = await getById(id)
   if (!user) throw new Error('User not found.')
   if (user.id === actor?.id) throw new Error('You cannot delete your own account.')
+  if (!canManageAccount(actor, user)) {
+    throw new PermissionError('You are not allowed to delete that account.')
+  }
   if (user.role === ROLE.ADMIN) await assertNotLastAdmin(id)
 
   const open = await db.query(
@@ -576,11 +605,14 @@ export async function remove(id, actor, { force = false } = {}) {
 
 /** Activate / deactivate / suspend an account. */
 export async function setStatus(id, status, actor) {
-  assertCan(actor, PERM.USER_EDIT, 'Only an administrator can change an account status.')
+  assertCan(actor, PERM.USER_EDIT, 'You are not allowed to change an account status.')
   if (!USER_STATUSES.includes(status)) throw new Error(`Unknown status "${status}".`)
 
   const user = await getById(id)
   if (!user) throw new Error('User not found.')
+  if (!canManageAccount(actor, user)) {
+    throw new PermissionError('You are not allowed to change that account.')
+  }
   if (user.role === ROLE.ADMIN && status !== USER_STATUS.ACTIVE) await assertNotLastAdmin(id)
 
   const saved = await db.update(COLLECTIONS.users, id, { status, updatedAt: nowISO() })
@@ -604,7 +636,15 @@ export async function setStatus(id, status, actor) {
  */
 export async function requestPasswordReset(email, actor) {
   if (actor && actor.email?.toLowerCase() !== String(email).toLowerCase()) {
-    assertCan(actor, PERM.USER_EDIT, 'Only an administrator can reset another account.')
+    assertCan(actor, PERM.USER_EDIT, 'You are not allowed to reset another account.')
+    // Resetting a password is an account action like any other, so it obeys the
+    // same directory boundary: an instructor may do it for a student and for
+    // nobody else. An address that is not in the directory they can read gives
+    // no row here, and is refused rather than guessed at.
+    const target = await findByEmail(email)
+    if (!canManageAccount(actor, target)) {
+      throw new PermissionError('You are not allowed to reset that account.')
+    }
   }
   await sendPasswordReset(email)
   return true
@@ -804,7 +844,7 @@ export const pendingProfileChanges = (users = []) =>
 
 /** Apply a submitted patch to the official profile. */
 export async function approveProfileChanges(id, actor) {
-  assertCan(actor, PERM.USER_EDIT, 'Only an administrator can approve profile changes.')
+  assertCan(actor, PERM.USER_EDIT, 'You are not allowed to approve profile changes.')
 
   const user = await getById(id)
   if (!user) throw new Error('User not found.')
@@ -853,7 +893,7 @@ export async function approveProfileChanges(id, actor) {
 
 /** Discard a submitted patch; the approved profile is left exactly as it was. */
 export async function rejectProfileChanges(id, actor, note = '') {
-  assertCan(actor, PERM.USER_EDIT, 'Only an administrator can reject profile changes.')
+  assertCan(actor, PERM.USER_EDIT, 'You are not allowed to reject profile changes.')
 
   const user = await getById(id)
   if (!user) throw new Error('User not found.')

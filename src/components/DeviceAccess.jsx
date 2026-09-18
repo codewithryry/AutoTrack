@@ -4,8 +4,9 @@ import { Badge, SectionCard } from './ui'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import * as pushService from '../services/push'
+import * as nativePermissions from '../services/nativePermissions'
 import { isStandalone } from '../utils/pwa'
-import { webOrigin } from '../utils/native'
+import { isNative, webOrigin } from '../utils/native'
 
 /**
  * Device access and installation, in one place.
@@ -39,12 +40,65 @@ const STATE_LABELS = {
  */
 const secureContext = () => typeof window === 'undefined' || window.isSecureContext
 
-/** Reads one permission and keeps it current while the page is open. */
+/**
+ * Which native reader answers for each permission, by its Permissions API name.
+ * Absent from this map means there is no native equivalent and the browser path
+ * is the only one.
+ */
+const NATIVE_READERS = {
+  geolocation: nativePermissions.locationState,
+  camera: nativePermissions.cameraState,
+  notifications: nativePermissions.notificationState,
+}
+
+/**
+ * Reads one permission and keeps it current while the page is open.
+ *
+ * Two entirely separate implementations behind one hook:
+ *
+ *   • In a browser, the Permissions API, with its `change` event — unchanged.
+ *   • In the Android shell, the OS itself, re-read every time the app resumes.
+ *
+ * The native half exists because `navigator.permissions` inside the WebView
+ * answers for the page rather than the app: it reports a state Android may never
+ * have been asked for, and it does not change when somebody grants or revokes a
+ * permission in Android Settings. Re-reading on resume is what makes leaving for
+ * Settings and coming back show the truth.
+ *
+ * Nothing is persisted on either path. A remount re-reads rather than restoring
+ * a remembered answer, so the WebView being recreated cannot strand the UI on a
+ * stale state.
+ */
 function usePermissionState(name, supported) {
   const [state, setState] = useState(supported ? 'unknown' : 'unsupported')
 
   useEffect(() => {
-    if (!supported) return
+    if (!supported) return undefined
+
+    const readNative = NATIVE_READERS[name]
+
+    if (isNative() && readNative) {
+      let alive = true
+      // `unknown` while the first read is in flight, never a guess: a default of
+      // `denied` would flash Blocked on every open for a permission that is in
+      // fact granted.
+      const sync = () => {
+        readNative()
+          .then((value) => alive && setState(value))
+          .catch(() => alive && setState('unknown'))
+      }
+
+      sync()
+      // The fix for the reported bug: re-read when the app comes back, so a
+      // change made in Android Settings is picked up on return.
+      const stop = nativePermissions.onResume(sync)
+
+      return () => {
+        alive = false
+        stop()
+      }
+    }
+
     let status
     const sync = () => setState(status.state)
     navigator.permissions
@@ -95,7 +149,11 @@ function AccessRow({ icon: Icon, title, description, state, stateLabel, action }
 export function DeviceAccessControl() {
   const toast = useToast()
 
-  const secure = secureContext()
+  // The secure-context rule is a browser one. The native shell serves the app
+  // from its own origin and asks Android for these permissions directly, so
+  // gating on it there would report both as Unavailable in a perfectly capable
+  // APK.
+  const secure = isNative() || secureContext()
   const locationSupported =
     secure && typeof navigator !== 'undefined' && 'geolocation' in navigator
   const cameraSupported =
@@ -107,6 +165,30 @@ export function DeviceAccessControl() {
 
   const askLocation = async () => {
     setBusy('location')
+
+    // Android shows its own dialog, and only when the plugin asks for it. Going
+    // through `getCurrentPosition` here would wait on a permission nothing had
+    // requested, which is why Enable appeared to do nothing in the APK.
+    if (isNative()) {
+      try {
+        const result = await nativePermissions.requestLocation()
+        setLocation(result)
+        if (result === 'granted') {
+          toast.success('Location is allowed. Borrow and return records can carry a reading.')
+        } else if (result === 'denied') {
+          toast.info(
+            'Location is blocked for this app. Turn it on in Android Settings › Apps › ' +
+              'ToolTrack AutoLab › Permissions, then come back.',
+          )
+        } else {
+          toast.info('Location was not allowed.')
+        }
+      } finally {
+        setBusy(null)
+      }
+      return
+    }
+
     // One attempt in a promise so the fallback below can retry on the same
     // click rather than making the person press Enable twice.
     const getFix = (options) =>
@@ -152,6 +234,30 @@ export function DeviceAccessControl() {
 
   const askCamera = async () => {
     setBusy('camera')
+
+    // Android's own dialog, through the plugin. `getUserMedia` below is the web
+    // path: in the WebView it only reaches Android when the shell decides to
+    // forward it, so asking the OS directly is what makes Enable work here.
+    if (isNative()) {
+      try {
+        const result = await nativePermissions.requestCamera()
+        setCamera(result)
+        if (result === 'granted') {
+          toast.success('Camera is allowed. The Scan page can read QR labels.')
+        } else if (result === 'denied') {
+          toast.info(
+            'Camera access is blocked. Turn it on in Android Settings › Apps › ' +
+              'ToolTrack AutoLab › Permissions, then come back.',
+          )
+        } else {
+          toast.info('Camera access was not allowed.')
+        }
+      } finally {
+        setBusy(null)
+      }
+      return
+    }
+
     try {
       // Asked for the back camera, the one the scanner uses, then handed
       // straight back — the permission is what this control is after, not a
@@ -169,7 +275,14 @@ export function DeviceAccessControl() {
         toast.info('The camera is in use by another app. Close it and try again.')
       } else {
         setCamera('denied')
-        toast.info('Camera access is blocked. Allow it from your browser’s site settings.')
+        // The way back differs by platform, and pointing at the wrong one is
+        // worse than saying nothing: there are no site settings in the APK.
+        toast.info(
+          isNative()
+            ? 'Camera access is blocked. Turn it on in Android Settings › Apps › ' +
+              'ToolTrack AutoLab › Permissions, then come back.'
+            : 'Camera access is blocked. Allow it from your browser’s site settings.',
+        )
       }
     } finally {
       setBusy(null)
@@ -258,18 +371,32 @@ function PushNotificationRow() {
     // Asynchronous because the Android permission is: the WebView cannot answer
     // for the OS, so it has to be asked. On the web this resolves immediately
     // with `Notification.permission`, exactly as before.
-    pushService
-      .syncPermissionState()
-      .then((permission) => {
-        if (!alive) return
-        setState(
-          permission === 'granted' ? 'granted' : permission === 'denied' ? 'denied' : 'prompt',
-        )
-      })
-      .catch(() => alive && setState('prompt'))
+    //
+    // This reads the OS *permission*, not whether a Web Push subscription
+    // exists. The two are separate: on the web a permission can be granted with
+    // no subscription stored, and in the APK there is no subscription at all
+    // because the alerts are posted locally. This row reports the permission.
+    const sync = () => {
+      pushService
+        .syncPermissionState()
+        .then((permission) => {
+          if (!alive) return
+          setState(
+            permission === 'granted' ? 'granted' : permission === 'denied' ? 'denied' : 'prompt',
+          )
+        })
+        .catch(() => alive && setState('prompt'))
+    }
+
+    sync()
+    // Re-read when the app comes back, so turning notifications on or off in
+    // Android Settings is reflected on return rather than showing whatever was
+    // true when this row first rendered.
+    const stop = nativePermissions.onResume(sync)
 
     return () => {
       alive = false
+      stop()
     }
   }, [available])
 

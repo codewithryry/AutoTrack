@@ -654,10 +654,6 @@ export default function SettingsPage() {
           />
         </div>
       </SectionCard>
-
-      <p className="subtle px-1 pb-1 text-center text-[11px]">
-        © 2026 Reymel Mislang. All rights reserved.
-      </p>
     </>
   )
 

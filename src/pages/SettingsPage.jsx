@@ -5,7 +5,10 @@ import {
   ChevronDown,
   Database,
   Download,
+  ExternalLink,
   FlaskConical,
+  Github,
+  Info,
   RotateCcw,
   Save,
   Smartphone,
@@ -28,6 +31,8 @@ import * as settingsService from '../services/settings'
 import { seedDatabase } from '../data/seed'
 import { PERM } from '../utils/permissions'
 import { cx, downloadBlob, downloadCSV, readFileAsText } from '../utils/helpers'
+import { APP_NAME, APP_VERSION } from '../utils/constants'
+import { externalLinkProps } from '../utils/native'
 import { formatDateTime } from '../utils/dates'
 import { TOOLS_CSV_COLUMNS } from './ToolsPage'
 import { TRANSACTIONS_CSV_COLUMNS } from './TransactionsPage'
@@ -596,6 +601,66 @@ export default function SettingsPage() {
     </>
   )
 
+  /* ---------------------------------- about ---------------------------------
+     The last category, and the only one every role sees alongside Device: what
+     this application is, who wrote it, and the two links out. `APP_NAME` and
+     `APP_VERSION` are read from `utils/constants` rather than written here, so
+     the version shown can never drift from the one the verification suite
+     checks against package.json. */
+
+  const aboutSection = (
+    <>
+      <SectionCard title={`About ${APP_NAME}`} description="Version and attribution">
+        <div className="flex items-start gap-3">
+          <span
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-xl"
+            style={{ background: 'rgb(var(--surface-3))' }}
+          >
+            <Info className="h-5 w-5" style={{ color: 'rgb(var(--text-subtle))' }} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-bold">{APP_NAME}</p>
+            <p className="subtle mt-0.5 text-xs leading-snug">
+              QR-Based Automotive Laboratory Tool Monitoring System
+            </p>
+            {/* The version reads as data rather than prose, which is the same
+                treatment record identifiers get everywhere else in the app. */}
+            <p className="subtle mt-1.5 font-mono text-[11px]">Version {APP_VERSION}</p>
+          </div>
+        </div>
+
+        <div className="mt-4 border-t pt-3">
+          <p className="subtle text-[11px] font-bold uppercase tracking-wider">Developer</p>
+          <p className="mt-1 text-sm font-semibold">Reymel Mislang</p>
+          <p className="subtle mt-0.5 text-xs leading-snug">
+            Designed and developed by Reymel Mislang.
+          </p>
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Links" description="The source code and the developer">
+        <div className="-mx-1 flex flex-col">
+          <AboutLink
+            icon={Github}
+            label="View repository"
+            hint="github.com/codewithryry/AutoTrack"
+            href="https://github.com/codewithryry/AutoTrack"
+          />
+          <AboutLink
+            icon={Github}
+            label="GitHub"
+            hint="github.com/codewithryry"
+            href="https://github.com/codewithryry"
+          />
+        </div>
+      </SectionCard>
+
+      <p className="subtle px-1 pb-1 text-center text-[11px]">
+        © 2026 Reymel Mislang. All rights reserved.
+      </p>
+    </>
+  )
+
   const categories = [
     {
       slug: 'device',
@@ -624,6 +689,15 @@ export default function SettingsPage() {
       title: 'Data management',
       description: 'Exports, backups, demo data and the stored collections.',
       content: dataSection,
+    },
+    // Last, and open to every role: nothing here is a setting, so it belongs
+    // below the controls rather than among them.
+    {
+      slug: 'about',
+      icon: Info,
+      title: 'About',
+      description: 'Version, the developer and the project links.',
+      content: aboutSection,
     },
   ].filter(Boolean)
 
@@ -663,6 +737,43 @@ export default function SettingsPage() {
         loading={busy}
       />
     </>
+  )
+}
+
+/**
+ * One row in the About section's list of links.
+ *
+ * Built to the same measurements as the outward link on the profile page — 44px
+ * minimum touch target, the same recessed icon tile, the same trailing
+ * external-link mark — so the two read as one pattern rather than two.
+ *
+ * `externalLinkProps` is what makes these work in the APK. A `target="_blank"`
+ * anchor does nothing at all inside the Android WebView; that helper hands the
+ * URL to an in-app browser tab instead, which the system back gesture closes
+ * again. In a browser it adds nothing and the anchor behaves normally.
+ */
+function AboutLink({ icon: Icon, label, hint, href }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer noopener"
+      {...externalLinkProps(href)}
+      className="flex min-h-[44px] items-center gap-3 rounded-xl px-2 py-1.5 text-left
+                 transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+    >
+      <span
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-xl"
+        style={{ background: 'rgb(var(--surface-3))' }}
+      >
+        <Icon className="h-4 w-4" style={{ color: 'rgb(var(--text-subtle))' }} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-semibold">{label}</span>
+        <span className="subtle block truncate text-xs">{hint}</span>
+      </span>
+      <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-50" />
+    </a>
   )
 }
 

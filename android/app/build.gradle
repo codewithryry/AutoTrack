@@ -1,5 +1,36 @@
 apply plugin: 'com.android.application'
 
+/*
+ * The app version, read from package.json rather than written here.
+ *
+ * These two lines used to say 1.0 while the project was on 0.2.x, so the APK
+ * reported a version the project had never used: "Version 0.2.5" in Settings
+ * and 1.0 in Android's own app info. The release workflow already refuses a tag
+ * that disagrees with package.json, so package.json is the one place a version
+ * is set and this follows it.
+ *
+ * Parsed with a regex rather than a JSON library because a Gradle script has no
+ * dependency on one: the first top-level "version" key is the project's own,
+ * since npm writes it in the opening object.
+ *
+ * versionCode must be a single integer that only ever increases, so the three
+ * parts are packed as major*10000 + minor*100 + patch — 0.2.5 becomes 205, and
+ * a later 0.3.0 becomes 300. Two digits per part, which is what keeps the
+ * ordering right without a build-number file to maintain.
+ *
+ * Only the numeric parts are taken, and missing ones read as zero: a two-part
+ * "1.0" and a pre-release "0.3.0-beta.1" both parse rather than failing the
+ * build on a version string nobody thought to test. The previous hard-coded
+ * versionCode was 1, so 205 is an increase and an installed APK upgrades
+ * rather than being refused as a downgrade.
+ */
+def packageJson = new File(rootDir, '../package.json').text
+def appVersionName = (packageJson =~ /"version"\s*:\s*"([^"]+)"/)[0][1]
+def appVersionParts = (appVersionName.tokenize('.-').findAll { it.isInteger() } + ['0', '0', '0'])
+def appVersionCode = appVersionParts[0].toInteger() * 10000 +
+                     appVersionParts[1].toInteger() * 100 +
+                     appVersionParts[2].toInteger()
+
 android {
     namespace = "ph.edu.autolab.tooltrack"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +38,8 @@ android {
         applicationId "ph.edu.autolab.tooltrack"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode appVersionCode
+        versionName appVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

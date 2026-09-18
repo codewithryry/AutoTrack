@@ -54,7 +54,10 @@ export async function create(input) {
   // notifications only — a broadcast is read in the app — and never awaited, so
   // a slow or unconfigured push service cannot hold up a borrow or a return.
   if (record.userId) {
-    push.deliver(record.id).catch((err) => console.warn('[notifications] not pushed', err))
+    // The whole record, not just its id: on Android the alert is posted on this
+    // device rather than sent by the server, so the title and message have to
+    // travel with it. The web path still reads only the id from it.
+    push.deliver(record).catch((err) => console.warn('[notifications] not pushed', err))
   }
 
   return record

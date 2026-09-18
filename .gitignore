@@ -8,6 +8,8 @@ dist/
 .env.example
 .env.bak.1786848346
 
+release.keystore
+
 # Never commit service-account or admin credentials of any kind. Everything
 # under src/ is shipped to the browser; a key that reaches this repository is a
 # key that reaches every visitor.

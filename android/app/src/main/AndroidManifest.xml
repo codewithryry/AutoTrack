@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <application
         android:allowBackup="true"
@@ -41,6 +42,17 @@
 
         </activity>
 
+        <!--
+            The companion to the RECEIVE_BOOT_COMPLETED removal below: the
+            plugin registers this receiver to re-arm scheduled notifications
+            after a restart. This app schedules none, so it would run at every
+            boot with nothing to do. Removed so the APK declares no
+            boot-completed receiver at all.
+        -->
+        <receiver
+            android:name="com.capacitorjs.plugins.localnotifications.LocalNotificationRestoreReceiver"
+            tools:node="remove" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -59,4 +71,61 @@
     <!-- The QR scanner reads tool codes through the camera. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <!--
+        Location. A borrowing or return may record where it happened, as a single
+        fix taken when somebody presses the button — there is no tracking and no
+        background location, which is why neither ACCESS_BACKGROUND_LOCATION nor
+        a foreground-location service type is declared.
+
+        Both precision levels are requested: Android 12 and later let the person
+        grant only the approximate one, and a coarse fix is still worth recording
+        (`isApproximate` labels it wherever it is shown) rather than refusing.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+
+    <!--
+        Notifications. Android 13 (API 33) made this a runtime permission: without
+        it, a posted notification is dropped silently — the app is not told, which
+        is exactly how "notifications are allowed but nothing arrives" happens.
+        `services/push.js` requests it before posting anything.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+        Permissions the local-notifications plugin merges in, removed here
+        because this app does not use the features behind them.
+
+        Every notification this app posts is posted immediately:
+        `services/nativeNotifications.js` calls `LocalNotifications.schedule()`
+        with no `schedule` block, which is the plugin's way of saying "show this
+        now". Nothing is ever queued for a later time, so:
+
+          • SCHEDULE_EXACT_ALARM sets an alarm at an exact wall-clock moment.
+            The app never asks for one. It is also a Play-policy restricted
+            permission that has to be justified to Google, and an app holding a
+            restricted permission it visibly never exercises is exactly the kind
+            of mismatch a scanner reports.
+          • RECEIVE_BOOT_COMPLETED exists so pending alarms can be re-registered
+            after a restart. With no pending alarms there is nothing to restore,
+            and the plugin's restore receiver is removed with it.
+          • WAKE_LOCK keeps the device awake to fire a scheduled alarm. Same
+            reason: there is no scheduled alarm to fire.
+
+        Posting a notification while the app is running needs none of these —
+        only POST_NOTIFICATIONS above, which is declared and requested properly.
+        If a future feature does schedule a notification for a due date, delete
+        the matching line here rather than adding the permission back by hand.
+    -->
+    <uses-permission
+        android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.RECEIVE_BOOT_COMPLETED"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.WAKE_LOCK"
+        tools:node="remove" />
 </manifest>

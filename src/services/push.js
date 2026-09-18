@@ -1,6 +1,7 @@
 import * as db from './db'
 import { accessToken } from './localAuth'
-import { apiUrl } from '../utils/native'
+import { apiUrl, isNative } from '../utils/native'
+import * as native from './nativeNotifications'
 
 /**
  * Web Push — the phone-level half of the notification centre.
@@ -18,8 +19,19 @@ import { apiUrl } from '../utils/native'
 /** The public half of the VAPID pair. Absent means push is simply not set up. */
 export const vapidPublicKey = String(import.meta.env?.VITE_VAPID_PUBLIC_KEY ?? '').trim()
 
-/** Does this browser have the three pieces a push needs? */
+/**
+ * Does this platform have the pieces an alert needs?
+ *
+ * Two different answers for two different mechanisms. In the browser it is Web
+ * Push: a service worker, a push manager and `Notification`. In the Android
+ * shell none of those exist — the WebView implements neither the Push API nor
+ * `Notification`, and the native build ships without a service worker on
+ * purpose — so the question is instead whether the local-notification plugin is
+ * there. That is why Notifications did nothing in the APK: every check here used
+ * to be a browser check, and every one of them was false.
+ */
 export function isSupported() {
+  if (isNative()) return native.isSupported()
   return (
     typeof window !== 'undefined' &&
     'serviceWorker' in navigator &&
@@ -28,14 +40,50 @@ export function isSupported() {
   )
 }
 
-/** Configured *and* supported — the only state in which subscribing can work. */
-export const isAvailable = () => isSupported() && !!vapidPublicKey
+/**
+ * Configured *and* supported — the only state in which turning alerts on works.
+ *
+ * The VAPID key is a Web Push requirement and has no bearing on the native path,
+ * which posts its notifications locally and needs no server key at all.
+ */
+export const isAvailable = () => (isNative() ? native.isSupported() : isSupported() && !!vapidPublicKey)
 
-/** `granted` | `denied` | `default` | `unsupported` */
+/**
+ * `granted` | `denied` | `default` | `unsupported`
+ *
+ * Synchronous, because the settings row reads it during render. The native
+ * permission is genuinely asynchronous, so it is mirrored here from the last
+ * read — `syncPermissionState()` refreshes it, and `subscribe()` updates it as a
+ * side effect of asking.
+ */
+let nativePermission = 'prompt'
+
 export function permissionState() {
+  if (isNative()) return nativePermission === 'prompt' ? 'default' : nativePermission
   if (!isSupported()) return 'unsupported'
   return Notification.permission
 }
+
+/**
+ * Read the real OS permission and update the mirror above.
+ *
+ * A no-op on the web, where `Notification.permission` is already synchronous.
+ */
+export async function syncPermissionState() {
+  if (!isNative()) return permissionState()
+  nativePermission = await native.permissionState()
+  return permissionState()
+}
+
+/**
+ * Whether an alert can arrive while the app is fully closed.
+ *
+ * True on the web, where the service worker receives a push with the app shut.
+ * False in the APK, which posts its notifications itself and therefore has to be
+ * running: that needs Firebase Cloud Messaging, which this project has not set
+ * up. Exposed so the settings row can describe what it actually does.
+ */
+export const isRemoteCapable = () => (isNative() ? native.isRemoteCapable() : isSupported())
 
 /** The push service wants the key as bytes, not base64url. */
 function urlBase64ToUint8Array(base64) {
@@ -55,6 +103,8 @@ export async function currentSubscription() {
 
 /** Is this device already receiving pushes? */
 export async function isSubscribed() {
+  // Natively the permission is the whole subscription; there is no endpoint.
+  if (isNative()) return (await syncPermissionState()) === 'granted'
   return permissionState() === 'granted' && !!(await currentSubscription())
 }
 
@@ -64,6 +114,23 @@ export async function isSubscribed() {
  * @throws {Error} with a sentence the settings card can show
  */
 export async function subscribe(user) {
+  // The Android shell asks the OS instead. There is no endpoint to register and
+  // no row to store: a local notification is posted by this app on this device,
+  // so the permission *is* the subscription.
+  if (isNative()) {
+    const state = await native.requestPermission()
+    nativePermission = state
+    if (state !== 'granted') {
+      throw new Error(
+        state === 'denied'
+          ? 'Notifications are blocked for this app. Turn them on in Android Settings › Apps › ' +
+            'ToolTrack AutoLab › Notifications, then try again.'
+          : 'Notifications were not allowed.',
+      )
+    }
+    return true
+  }
+
   if (!isSupported()) throw new Error('This browser cannot show push notifications.')
   if (!vapidPublicKey) {
     throw new Error('Push notifications are not configured for this installation.')
@@ -113,6 +180,11 @@ export async function subscribe(user) {
 
 /** Stop this device receiving pushes, and drop its row. */
 export async function unsubscribe() {
+  // Nothing to revoke natively: the permission belongs to Android, and only the
+  // person can withdraw it from the system settings. Saying so is better than
+  // pretending a toggle here did something.
+  if (isNative()) return false
+
   const subscription = await currentSubscription()
   if (!subscription) return false
   await db.removePushSubscription(subscription.endpoint)
@@ -128,8 +200,26 @@ export async function unsubscribe() {
  * row and decides who it is for — the browser cannot address a push at somebody
  * by asking.
  */
-export async function deliver(notificationId) {
+export async function deliver(notification) {
+  // Called with the whole record, or with just its id by anything older.
+  const record = typeof notification === 'string' ? { id: notification } : notification
+  const notificationId = record?.id
   if (!notificationId) return false
+
+  // In the APK there is no push service to ask: `/api/push` sends Web Push to a
+  // service-worker subscription, and this device has neither. The alert is
+  // posted here instead, by the app, on this device. Only the recipient's own
+  // device is running this code, so the addressing the server would have done is
+  // already correct.
+  if (isNative()) {
+    return native.show({
+      id: notificationId,
+      title: record.title ?? 'ToolTrack AutoLab',
+      body: record.message ?? '',
+      url: record.link ?? '/notifications',
+    })
+  }
+
   try {
     const token = await accessToken()
     if (!token) return false

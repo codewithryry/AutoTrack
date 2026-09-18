@@ -18,7 +18,6 @@ import { ValidationError } from '../services/tools'
 import {
   CATEGORIES,
   CONDITIONS,
-  LOCATIONS,
   SERIAL_CRITICAL_CATEGORIES,
   TOOL_STATUS,
   TOOL_STATUSES,
@@ -251,15 +250,19 @@ export default function ToolForm({ open, onClose, tool, onSaved }) {
               placeholder="Select a category"
               error={errors.category}
             />
-            <SelectField
+            {/* Typed rather than chosen from a list: the fixed set of shelves
+                and cabinets never covered where tools actually end up, so the
+                crib writes the place in its own words. Stored as the free text
+                it is typed as — the service only requires it to be non-empty. */}
+            <TextField
               label="Storage location"
               required
               value={form.location}
               onChange={setField('location')}
-              options={LOCATIONS}
-              placeholder="Select a location"
+              placeholder="Enter tool location"
               error={errors.location}
-              hint="Where the tool is returned to in the laboratory."
+              maxLength={80}
+              hint="Type where the tool is returned to in the laboratory."
             />
           </div>
 

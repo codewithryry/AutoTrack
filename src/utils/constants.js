@@ -19,7 +19,7 @@ export const APP_TITLE =
  * Shown on the loading screen. Kept in step with `package.json`; `npm run
  * verify` fails if the two drift apart.
  */
-export const APP_VERSION = '0.2.1'
+export const APP_VERSION = '0.2.5'
 export const APP_TAGLINE = 'Scan. Borrow. Track. Return.'
 
 /* ------------------------------------------------------------------ *

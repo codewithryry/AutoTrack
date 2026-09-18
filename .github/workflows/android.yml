@@ -31,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing tag to build and attach the APK to (e.g. 0.2.1)'
+        description: 'Existing tag to build and attach the APK to (e.g. 0.2.5)'
         required: false
         type: string
 
@@ -337,6 +337,60 @@ jobs:
           # the certificate digests, none of which are secret.
           "$APKSIGNER" verify --verbose --print-certs "$APK"
           echo "APK signature verified."
+
+      # What the APK actually asks the device for, read back out of the built
+      # APK rather than from the manifest source - the manifest merger folds in
+      # every library's manifest, so the source file is not the final answer.
+      #
+      # The list is pinned: a plugin update that starts merging in a new
+      # permission fails the build here instead of being discovered by a user
+      # seeing a Play Protect warning. To add one deliberately, add it to
+      # EXPECTED below and say why in the app manifest.
+      - name: Verify the APK requests only the expected permissions
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          AAPT="$(find "$ANDROID_HOME/build-tools" -name aapt2 -type f | sort -V | tail -1)"
+
+          cat > /tmp/expected-permissions <<'PERMS'
+          android.permission.ACCESS_COARSE_LOCATION
+          android.permission.ACCESS_FINE_LOCATION
+          android.permission.CAMERA
+          android.permission.INTERNET
+          android.permission.POST_NOTIFICATIONS
+          PERMS
+          sed -i 's/^[[:space:]]*//' /tmp/expected-permissions
+          sort -u -o /tmp/expected-permissions /tmp/expected-permissions
+
+          "$AAPT" dump permissions "$APK" \
+            | sed -n "s/^uses-permission: name='\([^']*\)'.*/\1/p" \
+            | sort -u > /tmp/actual-permissions
+
+          echo "Permissions in the APK:"
+          sed 's/^/  /' /tmp/actual-permissions
+
+          if ! diff /tmp/expected-permissions /tmp/actual-permissions >/dev/null; then
+            echo "" >&2
+            echo "The APK's permissions differ from the expected set." >&2
+            diff /tmp/expected-permissions /tmp/actual-permissions >&2 || true
+            echo "" >&2
+            echo "A line marked > is newly requested - usually merged in by a" >&2
+            echo "plugin. Remove it with tools:node=\"remove\" in the app" >&2
+            echo "manifest, or add it to EXPECTED here if it is really needed." >&2
+            exit 1
+          fi
+          echo "Permissions match the expected set."
+
+      # A release APK must never be debuggable: it opens the running app to any
+      # process on the device, and it is one of the things a scanner looks at.
+      - name: Verify the APK is a release build
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          AAPT="$(find "$ANDROID_HOME/build-tools" -name aapt2 -type f | sort -V | tail -1)"
+          if "$AAPT" dump badging "$APK" | grep -q "application-debuggable"; then
+            echo "This APK is debuggable - refusing to publish it." >&2
+            exit 1
+          fi
+          echo "Not debuggable."
 
       # Named for the build it came from, so a downloaded APK is identifiable
       # rather than being one more `app-release.apk` in a downloads folder.

@@ -35,11 +35,19 @@ function floorOf() {
   return window.innerHeight
 }
 
-/** Where the shell's sticky header ends, so a bubble is never tucked behind it. */
+/**
+ * Where the shell's sticky header ends, so a bubble is never tucked behind it.
+ *
+ * Cleared by more than the usual gap: a bubble landing immediately under the bar
+ * reads as part of it, and the header carries a border and the page title right
+ * along that edge. The extra few pixels keep the two clearly separate.
+ */
+const HEADER_GAP = GAP + 6
+
 function ceilingOf() {
   const header = document.querySelector('header')
   const box = header?.getBoundingClientRect()
-  return box?.height && box.top <= 0 ? box.bottom + GAP : 0
+  return box?.height && box.top <= 0 ? box.bottom + HEADER_GAP : 0
 }
 
 export default function Tooltip({ label, children, className }) {

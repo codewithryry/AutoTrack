@@ -13,6 +13,8 @@
  * tool was between two readings.
  */
 
+import { isNative } from './native'
+
 /** Why a reading could not be taken. The UI maps these to its own copy. */
 export const GEO_ERROR = {
   UNSUPPORTED: 'unsupported',
@@ -71,6 +73,13 @@ export const isApproximate = (location) =>
  * @param {{ timeoutMs?: number, maximumAgeMs?: number }} [options]
  */
 export function captureLocation({ timeoutMs = 15000, maximumAgeMs = 0 } = {}) {
+  // The Android shell answers this itself. `navigator.geolocation` exists in the
+  // WebView but the OS permission behind it is never requested, so the call sits
+  // there and times out — which is what made Location look broken in the APK
+  // while working in the browser. The plugin asks Android for the runtime
+  // permission properly, then takes the same one-shot fix.
+  if (isNative()) return captureLocationNative({ timeoutMs, maximumAgeMs })
+
   return new Promise((resolve, reject) => {
     // Client only. On a server render there is no `navigator` to ask, and the
     // call must not be treated as a device that refused.
@@ -127,6 +136,75 @@ export function captureLocation({ timeoutMs = 15000, maximumAgeMs = 0 } = {}) {
   })
 }
 
+/**
+ * One reading, through the Android shell.
+ *
+ * Same resolved shape and the same `GEO_ERROR` rejections as the browser path,
+ * so every caller — `LocationCapture`, `ToolDetailPage`, the settings row — is
+ * unchanged and cannot tell the two apart.
+ *
+ * The permission is requested explicitly rather than left to the geolocation
+ * call, because Android only shows the system dialog when something asks for it.
+ * A refusal is reported as `DENIED`, which the UI already knows how to explain.
+ */
+async function captureLocationNative({ timeoutMs, maximumAgeMs }) {
+  let Geolocation
+  try {
+    ;({ Geolocation } = await import('@capacitor/geolocation'))
+  } catch (err) {
+    throw fail(GEO_ERROR.UNSUPPORTED, { detail: `plugin unavailable: ${err?.message}` })
+  }
+
+  try {
+    // `checkPermissions` first: asking again when it is already granted is a
+    // no-op, but reading the state lets a permanent refusal be reported as such
+    // instead of silently prompting nothing.
+    let status = await Geolocation.checkPermissions()
+    if (status.location !== 'granted' && status.coarseLocation !== 'granted') {
+      status = await Geolocation.requestPermissions({ permissions: ['location'] })
+    }
+
+    if (status.location === 'denied' && status.coarseLocation === 'denied') {
+      // Android stops showing the dialog once the person has refused twice; from
+      // then on the only way back is the app's settings screen. The UI's
+      // `blocked` copy already says exactly that.
+      throw fail(GEO_ERROR.DENIED, { detail: 'the Android location permission was refused' })
+    }
+
+    const position = await Geolocation.getCurrentPosition({
+      enableHighAccuracy: true,
+      timeout: timeoutMs,
+      maximumAge: maximumAgeMs,
+    })
+
+    const { latitude, longitude, accuracy } = position.coords ?? {}
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      throw fail(GEO_ERROR.UNAVAILABLE, { detail: 'coords were not finite numbers' })
+    }
+
+    return {
+      lat: round(latitude),
+      lng: round(longitude),
+      accuracy: Number.isFinite(accuracy) ? Math.round(accuracy * 10) / 10 : null,
+      capturedAt: new Date(position.timestamp ?? Date.now()).toISOString(),
+    }
+  } catch (err) {
+    // Already one of ours — a mapped reason, thrown above.
+    if (err instanceof GeolocationCaptureError) throw err
+
+    // The plugin reports its reasons as text. Location switched off system-wide
+    // is a different problem from a refused permission, and the person has to do
+    // a different thing about it, so the two are told apart here.
+    const text = `${err?.message ?? ''} ${err?.code ?? ''}`.toLowerCase()
+    const reason = /denied|permission/.test(text)
+      ? GEO_ERROR.DENIED
+      : /timeout|timed out/.test(text)
+        ? GEO_ERROR.TIMEOUT
+        : GEO_ERROR.UNAVAILABLE
+    throw fail(reason, { detail: err?.message })
+  }
+}
+
 /** Names for the numeric codes the API rejects with, so a log reads as English. */
 const CODE_NAMES = { 1: 'PERMISSION_DENIED', 2: 'POSITION_UNAVAILABLE', 3: 'TIMEOUT' }
 
@@ -162,6 +240,25 @@ const round = (value) => Math.round(value * 1e6) / 1e6
  * normal answer and never blocks anything.
  */
 export async function locationPermissionState() {
+  // The WebView's Permissions API reports on the *page*, not on the app, so in
+  // the APK it answers `granted` while Android has never been asked — the state
+  // the settings row would then show is simply untrue. The plugin reports the
+  // real OS permission.
+  if (isNative()) {
+    try {
+      const { Geolocation } = await import('@capacitor/geolocation')
+      const status = await Geolocation.checkPermissions()
+      const state = status.location === 'prompt-with-rationale' ? 'prompt' : status.location
+      if (state === 'granted' || state === 'denied' || state === 'prompt') return state
+      // Coarse-only counts as granted: a fix is still available, and
+      // `isApproximate` already labels a low-accuracy reading wherever it shows.
+      return status.coarseLocation === 'granted' ? 'granted' : 'unknown'
+    } catch (err) {
+      console.warn('[geo] the native permission state could not be read', err)
+      return 'unknown'
+    }
+  }
+
   if (typeof navigator === 'undefined' || !navigator.geolocation) return 'unsupported'
   if (!navigator.permissions?.query) return 'unknown'
   try {

@@ -41,7 +41,7 @@ import { useToast } from '../context/ToastContext'
 import { useDebounced, useLocalStorage, useMediaQuery, useTools } from '../hooks'
 import * as toolService from '../services/tools'
 import { isStaff, isStudent, PERM } from '../utils/permissions'
-import { CATEGORIES, CONDITIONS, LOCATIONS, TOOL_STATUS, TOOL_STATUSES } from '../utils/constants'
+import { CATEGORIES, CONDITIONS, TOOL_STATUS, TOOL_STATUSES } from '../utils/constants'
 import { cx } from '../utils/helpers'
 import { formatDate } from '../utils/dates'
 
@@ -167,6 +167,20 @@ export default function ToolsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, category])
 
+  // Locations are typed by hand on the tool form rather than picked from a
+  // fixed list, so the filter offers what the inventory actually uses — every
+  // distinct location currently on a tool, in alphabetical order. A location
+  // nobody has typed yet is not a filter worth offering, and one that is typed
+  // appears here without a constants edit.
+  const locationOptions = useMemo(() => {
+    const seen = new Map()
+    for (const tool of tools) {
+      const value = tool.location?.trim()
+      if (value && !seen.has(value.toLowerCase())) seen.set(value.toLowerCase(), value)
+    }
+    return [...seen.values()].sort((a, b) => a.localeCompare(b))
+  }, [tools])
+
   const filtered = useMemo(
     () =>
       toolService.filterTools(tools, {
@@ -224,7 +238,7 @@ export default function ToolsPage() {
       label: 'Location',
       value: location,
       onChange: setLocation,
-      options: [{ value: 'all', label: 'All locations' }, ...LOCATIONS],
+      options: [{ value: 'all', label: 'All locations' }, ...locationOptions],
     },
     { key: 'sort', label: 'Sort', value: sort, onChange: setSort, options: SORT_OPTIONS },
   ]
@@ -400,7 +414,7 @@ export default function ToolsPage() {
               label="Location"
               value={location}
               onChange={setLocation}
-              options={[{ value: 'all', label: 'All locations' }, ...LOCATIONS]}
+              options={[{ value: 'all', label: 'All locations' }, ...locationOptions]}
             />
             <FilterSelect label="Sort" value={sort} onChange={setSort} options={SORT_OPTIONS} />
             {hasFilters && (

@@ -254,14 +254,23 @@ function PushNotificationRow() {
       return
     }
 
-    const syncState = () => {
-      const permission = pushService.permissionState()
-      setState(
-        permission === 'granted' ? 'granted' : permission === 'denied' ? 'denied' : 'prompt',
-      )
-    }
+    let alive = true
+    // Asynchronous because the Android permission is: the WebView cannot answer
+    // for the OS, so it has to be asked. On the web this resolves immediately
+    // with `Notification.permission`, exactly as before.
+    pushService
+      .syncPermissionState()
+      .then((permission) => {
+        if (!alive) return
+        setState(
+          permission === 'granted' ? 'granted' : permission === 'denied' ? 'denied' : 'prompt',
+        )
+      })
+      .catch(() => alive && setState('prompt'))
 
-    syncState()
+    return () => {
+      alive = false
+    }
   }, [available])
 
   const enable = async () => {
@@ -271,7 +280,7 @@ function PushNotificationRow() {
       setState('granted')
       toast.success('Notifications are on for this device.')
     } catch (err) {
-      const permission = pushService.permissionState()
+      const permission = await pushService.syncPermissionState().catch(() => 'default')
       if (permission === 'denied') setState('denied')
       else setState('prompt')
       toast.info(err.message ?? 'Notifications could not be turned on.')

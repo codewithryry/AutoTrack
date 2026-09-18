@@ -504,8 +504,11 @@ export default function AppLayout() {
         >
           {/* A little more room from the edge on a phone than the page below
               takes, so the title and the avatar are not pressed against the
-              screen. The wider breakpoints are unchanged. */}
-          <div className="flex h-14 items-center gap-2 px-4 sm:px-5 lg:px-8">
+              screen. The phone inset is a touch wider still — at 15px the title
+              sat almost on the edge — and the right side keeps the old 1rem so
+              the extra room goes to the name rather than away from the controls.
+              The wider breakpoints are unchanged. */}
+          <div className="flex h-14 items-center gap-2 pl-5 pr-4 sm:px-5 lg:px-8">
             {/* No navigation control lives in the bar for any role: an
                 administrator opens their drawer from the Menu slot in the bottom
                 bar, and an instructor's and a student's bottom bar already
@@ -515,7 +518,10 @@ export default function AppLayout() {
             {/* The page name on its own: no glyph, no figure, no tile — the
                 account pill opposite is the only shape in the row. */}
             <div className="min-w-0 flex-1">
-              <h1 className="truncate text-[15px] font-extrabold tracking-tight">
+              {/* A step up from 15px on a phone: the page name is the one piece
+                  of text in the bar and read at arm's length. From `sm` the bar
+                  is unchanged. */}
+              <h1 className="truncate text-[17px] font-extrabold tracking-tight sm:text-[15px]">
                 {currentPage?.label ?? 'ToolTrack AutoLab'}
               </h1>
             </div>

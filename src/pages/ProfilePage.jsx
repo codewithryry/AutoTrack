@@ -21,6 +21,7 @@ import { ValidationError } from '../services/tools'
 import { ROLE, YEAR_LEVELS, PROGRAMMES, DEPARTMENTS, OTHER_OPTION } from '../utils/constants'
 import { cx } from '../utils/helpers'
 import { formatDate } from '../utils/dates'
+import { externalLinkProps } from '../utils/native'
 
 /**
  * The signed-in student's own profile.
@@ -605,6 +606,7 @@ export default function ProfilePage() {
                 href={settings.departmentUrl}
                 target="_blank"
                 rel="noreferrer noopener"
+                {...externalLinkProps(settings.departmentUrl)}
                 className="flex min-h-[44px] items-center gap-3 rounded-xl px-2 py-1.5
                            transition-colors hover:bg-black/5 dark:hover:bg-white/5"
               >

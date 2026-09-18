@@ -5,6 +5,7 @@ import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import * as pushService from '../services/push'
 import { isStandalone } from '../utils/pwa'
+import { webOrigin } from '../utils/native'
 
 /**
  * Device access and installation, in one place.
@@ -324,8 +325,13 @@ export function InstallAppCard() {
 
   // The address this copy of the app is served from — the same source
   // `localAuth` uses for its reset link, so there is no second URL to keep in
-  // step with the deployment.
-  const appUrl = typeof window === 'undefined' ? '' : `${window.location.origin}/`
+  // step with the deployment. In the APK the WebView's own origin is
+  // `https://localhost`, which would be a useless thing to share or print into a
+  // QR code, so `webOrigin()` answers with the deployed address there instead.
+  const appUrl = (() => {
+    const origin = webOrigin()
+    return origin ? `${origin}/` : ''
+  })()
   const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function'
 
   useEffect(() => {

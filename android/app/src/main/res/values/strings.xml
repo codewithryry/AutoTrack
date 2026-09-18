@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ToolTrack AutoLab</string>
+    <string name="title_activity_main">ToolTrack AutoLab</string>
+    <string name="package_name">ph.edu.autolab.tooltrack</string>
+    <string name="custom_url_scheme">ph.edu.autolab.tooltrack</string>
+</resources>

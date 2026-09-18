@@ -7,6 +7,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:android": "node scripts/build-android.mjs",
+    "android:sync": "node scripts/build-android.mjs && npx cap sync android",
     "preview": "vite preview --port 4173",
     "serve:dist": "node scripts/serve-static.mjs 4180",
     "verify": "node scripts/verify.mjs",
@@ -14,6 +16,9 @@
     "verify:sql": "node scripts/sql/verify-policies.mjs"
   },
   "dependencies": {
+    "@capacitor/app": "^8.1.1",
+    "@capacitor/browser": "^8.0.4",
+    "@capacitor/core": "^8.5.2",
     "@supabase/supabase-js": "^2.112.3",
     "html5-qrcode": "^2.3.8",
     "lucide-react": "^0.454.0",
@@ -25,6 +30,8 @@
     "web-push": "^3.6.7"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/cli": "^8.5.2",
     "@electric-sql/pglite": "^0.5.5",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",

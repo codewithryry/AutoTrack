@@ -1,5 +1,6 @@
 import * as db from './db'
 import { accessToken } from './localAuth'
+import { apiUrl } from '../utils/native'
 
 /**
  * Web Push — the phone-level half of the notification centre.
@@ -133,7 +134,7 @@ export async function deliver(notificationId) {
     const token = await accessToken()
     if (!token) return false
 
-    const response = await fetch('/api/push', {
+    const response = await fetch(apiUrl('/api/push'), {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
       body: JSON.stringify({ notificationId }),

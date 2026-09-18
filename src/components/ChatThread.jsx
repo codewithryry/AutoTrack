@@ -21,6 +21,7 @@ import * as messageService from '../services/messages'
 import { cx, initials } from '../utils/helpers'
 import { formatDate, formatTime, timeAgo } from '../utils/dates'
 import { CONVERSATION_KIND } from '../utils/constants'
+import { externalLinkProps } from '../utils/native'
 
 /**
  * One conversation, drawn the same way on a phone and beside the inbox on a
@@ -409,6 +410,7 @@ function Attachment({ message, className }) {
       href={href ?? undefined}
       target="_blank"
       rel="noreferrer noopener"
+      {...externalLinkProps(href)}
       className={cx(
         'flex min-h-[40px] items-center gap-2 rounded-xl bg-black/10 px-2.5 py-2 text-xs font-semibold',
         !href && 'pointer-events-none opacity-70',

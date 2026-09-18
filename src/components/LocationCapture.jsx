@@ -23,6 +23,7 @@ import {
 } from '../utils/geo'
 import { cx } from '../utils/helpers'
 import { formatDateTime } from '../utils/dates'
+import { externalLinkProps } from '../utils/native'
 
 /* ------------------------------------------------------------------ *
  * Location capture and display
@@ -375,6 +376,7 @@ function LocationRow({ icon: Icon, tone, label, meaning, location }) {
                 href={url}
                 target="_blank"
                 rel="noreferrer noopener"
+                {...externalLinkProps(url)}
                 className="btn btn-outline btn-sm mt-2"
               >
                 <ExternalLink className="h-3.5 w-3.5" />

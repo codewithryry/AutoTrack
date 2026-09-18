@@ -14,6 +14,17 @@ import { createClient } from '@supabase/supabase-js'
  * it is not read here, and no `VITE_` variable should ever hold it.
  */
 
+/**
+ * Whether this bundle is running inside the Capacitor shell.
+ *
+ * Deliberately not imported from `utils/native`: this module is the root of the
+ * import graph and is loaded by the static verification suites under Node, where
+ * `window` does not exist. The check is one line, so it is inlined rather than
+ * pulling a dependency into the root.
+ */
+const isNativeShell = () =>
+  typeof window !== 'undefined' && !!window.Capacitor?.isNativePlatform?.()
+
 const env = import.meta.env ?? {}
 
 export const supabaseUrl = env.VITE_SUPABASE_URL ?? ''
@@ -44,8 +55,16 @@ export const supabase = createClient(supabaseUrl || 'http://localhost', supabase
     persistSession: true,
     autoRefreshToken: true,
     // No OAuth redirect flow here; parsing the URL for tokens on every load
-    // would only misread the query strings the scanner uses.
+    // would only misread the query strings the scanner uses. In the native shell
+    // a redirect *does* come back — on the app's own scheme, which the WebView
+    // never navigates to — so it is read deliberately by `services/deepLinks.js`
+    // rather than automatically, and this stays false on both platforms.
     detectSessionInUrl: false,
+    // PKCE only in the native shell. A link that returns to the APK comes back
+    // as a `code`, and exchanging it needs the verifier this client stored when
+    // the flow began — which only happens under `pkce`. The web build keeps the
+    // flow it has always used, so nothing about signing in a browser changes.
+    ...(isNativeShell() ? { flowType: 'pkce' } : {}),
     storageKey: 'stms.auth',
   },
 })

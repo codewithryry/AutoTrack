@@ -13,6 +13,8 @@
  * no signal.
  */
 
+import { apiUrl } from '../utils/native'
+
 const ENDPOINT = '/api/assistant'
 /** Longer than this and the student is waiting on a tooltip. */
 const TIMEOUT_MS = 4000
@@ -43,7 +45,7 @@ export async function assistantLine(line, { page, role, offline = false } = {}) 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
   try {
-    const response = await fetch(ENDPOINT, {
+    const response = await fetch(apiUrl(ENDPOINT), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ line, page, role }),

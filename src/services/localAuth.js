@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 import { supabase, supabaseAnonKey, supabaseUrl } from '../supabase/config'
 import * as db from './db'
 import { COLLECTIONS } from './db'
+import { isNative, NATIVE_REDIRECT_URL } from '../utils/native'
 
 /**
  * Session and credentials — Supabase Auth.
@@ -215,11 +216,77 @@ export async function accessToken() {
   return data?.session?.access_token ?? null
 }
 
+/**
+ * Establish a session from a callback URL.
+ *
+ * The native shell receives authentication callbacks as a deep link rather than
+ * a page load, so the returned URL has to be turned into a session by hand.
+ * That is a credential operation, so it lives here with the rest of them —
+ * `services/deepLinks.js` only decides *when* to call it.
+ *
+ * Handles both shapes a callback can carry:
+ *   • `?code=`         — PKCE; the verifier is in this client's storage, so the
+ *                        exchange must happen on this client.
+ *   • `#access_token=` — a link carrying the session itself.
+ *
+ * Never throws: a callback that carries nothing usable is not an error the
+ * caller can act on, and the reason belongs in the console rather than on screen.
+ *
+ * @returns {Promise<boolean>} whether a session was established
+ */
+export async function completeAuthFromUrl(url) {
+  if (!url) return false
+
+  let parsed
+  try {
+    parsed = new URL(url)
+  } catch {
+    return false
+  }
+
+  // An error came back instead of a credential — a cancelled sign-in, or an
+  // expired link. There is no session to establish.
+  const failed = parsed.searchParams.get('error_description') ?? parsed.searchParams.get('error')
+  if (failed) {
+    console.warn('[auth] the callback did not carry a session', failed)
+    return false
+  }
+
+  const code = parsed.searchParams.get('code')
+  if (code) {
+    const { error } = await supabase.auth.exchangeCodeForSession(code)
+    if (error) {
+      console.warn('[auth] the code could not be exchanged', error)
+      return false
+    }
+    return true
+  }
+
+  const hash = parsed.hash?.startsWith('#') ? parsed.hash.slice(1) : parsed.hash
+  if (hash) {
+    const params = new URLSearchParams(hash)
+    const access_token = params.get('access_token')
+    const refresh_token = params.get('refresh_token')
+    if (access_token && refresh_token) {
+      const { error } = await supabase.auth.setSession({ access_token, refresh_token })
+      if (error) {
+        console.warn('[auth] the session could not be set', error)
+        return false
+      }
+      return true
+    }
+  }
+
+  return false
+}
+
 export async function sendPasswordReset(email) {
   const address = String(email ?? '').trim()
-  const { error } = await supabase.auth.resetPasswordForEmail(address, {
-    redirectTo: `${window.location.origin}/login`,
-  })
+  // In the APK `window.location.origin` is the WebView's own `https://localhost`,
+  // which is nowhere — the reset link has to come back on this app's scheme, and
+  // `services/deepLinks.js` is listening for it. The browser build is unchanged.
+  const redirectTo = isNative() ? NATIVE_REDIRECT_URL : `${window.location.origin}/login`
+  const { error } = await supabase.auth.resetPasswordForEmail(address, { redirectTo })
   if (error) throw toAuthError(error)
 }
 

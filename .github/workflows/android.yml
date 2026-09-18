@@ -1,0 +1,116 @@
+name: Android release APK
+
+# Builds the web app, wraps it with Capacitor, and produces a signed release APK.
+#
+# Nothing secret lives in this repository. The keystore arrives as a base64
+# secret, is decoded to a file outside the workspace, and is removed again when
+# the job ends. Every value that touches it is passed through the environment,
+# never interpolated into a command line — an `${{ secrets.* }}` inside a `run:`
+# would be substituted into the shell before it executes, and would then be
+# visible in a trace or a crash message.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Capacitor's CLI requires Node >= 22.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the web app for the native shell
+        env:
+          # The production values the APK is compiled against. These are build-time
+          # variables baked into the bundle: the Supabase URL and publishable key
+          # are public by design (Row Level Security is what protects the data),
+          # and no service-role key is read here or anywhere in the build.
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
+          VITE_VAPID_PUBLIC_KEY: ${{ secrets.VITE_VAPID_PUBLIC_KEY }}
+          VITE_SIGNUP_EMAIL_DOMAINS: ${{ vars.VITE_SIGNUP_EMAIL_DOMAINS }}
+          # Where the deployed web app lives, so the APK can reach the app's own
+          # /api/* endpoints — in the WebView a relative path would resolve
+          # against the shell's own origin, which serves nothing.
+          VITE_PUBLIC_APP_URL: ${{ vars.VITE_PUBLIC_APP_URL }}
+        run: npm run build:android
+
+      - name: Sync the native project
+        run: npx cap sync android
+
+      - name: Decode the keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "ANDROID_KEYSTORE_BASE64 is not set — cannot produce a signed APK." >&2
+            exit 1
+          fi
+          # Outside the workspace, so it can never be picked up by a later step
+          # that archives or uploads the checkout.
+          mkdir -p "$RUNNER_TEMP/signing"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/signing/release.jks"
+          echo "Keystore decoded ($(stat -c%s "$RUNNER_TEMP/signing/release.jks") bytes)."
+
+      - name: Build the signed release APK
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/signing/release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Verify the APK is signed
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          if [ ! -f "$APK" ]; then
+            echo "No APK was produced at $APK" >&2
+            exit 1
+          fi
+
+          # apksigner ships with the build-tools; find the newest copy.
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)"
+          if [ -z "$APKSIGNER" ]; then
+            echo "apksigner was not found in the Android SDK." >&2
+            exit 1
+          fi
+
+          # The real check: this fails the job on an unsigned or badly signed APK
+          # rather than shipping one. `--verbose` prints the scheme versions and
+          # the certificate digests, none of which are secret.
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+          echo "APK signature verified."
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: tooltrack-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+      - name: Remove the keystore
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/signing"

@@ -2,9 +2,29 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
+/**
+ * The Android (Capacitor) build differs from the web build in exactly one way:
+ * no service worker.
+ *
+ * In the APK the page is served from the shell's own `https://localhost`, and a
+ * worker registered there would precache that origin and then answer navigation
+ * requests ahead of Capacitor's own asset handler — which shows up as a stale or
+ * blank screen after an update, and is the reason the PWA and the native shell
+ * must not both try to own the assets. The APK is updated by installing a new
+ * APK; it has no use for the worker.
+ *
+ * Set by `npm run build:android`. The ordinary `npm run build` is untouched, so
+ * the installable web PWA keeps its worker exactly as before.
+ */
+const NATIVE = process.env.CAPACITOR_BUILD === 'true'
+
 export default defineConfig({
+  // Capacitor loads the app from a file-backed origin, so every asset must be
+  // requested relative to the page rather than from the server root.
+  base: NATIVE ? './' : '/',
   plugins: [
     react(),
+    !NATIVE &&
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'offline.html', 'icons/*.png', 'push-sw.js'],
@@ -75,7 +95,7 @@ export default defineConfig({
       },
       devOptions: { enabled: false },
     }),
-  ],
+  ].filter(Boolean),
   build: {
     // Split the heavy, rarely-changing libraries so the service worker can cache
     // them independently of the application code.

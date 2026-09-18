@@ -1,5 +1,6 @@
 import QRCode from 'qrcode'
 import { APP_NAME } from './constants'
+import { isNative } from './native'
 
 /**
  * QR payload contract.
@@ -133,12 +134,7 @@ export async function printQRLabels(tools, meta = {}) {
     }),
   )
 
-  const win = window.open('', '_blank', 'width=900,height=700')
-  if (!win) {
-    throw new Error('Your browser blocked the print window. Allow pop-ups and try again.')
-  }
-
-  win.document.write(`<!doctype html>
+  const document_ = `<!doctype html>
 <html><head><meta charset="utf-8" />
 <title>Tool QR Labels — ${escapeHtml(meta.labName || APP_NAME)}</title>
 <style>
@@ -183,8 +179,85 @@ export async function printQRLabels(tools, meta = {}) {
     setTimeout(function () { window.focus(); window.print(); }, 350);
   });
 </script>
-</body></html>`)
+</body></html>`
+
+  // Inside the Android WebView there is no second window to open — `window.open`
+  // returns null there, which used to surface as a "pop-ups are blocked" error
+  // on a phone that never blocked anything. The same sheet is rendered into a
+  // full-screen frame in the page instead, and printed from there.
+  if (isNative() || !canOpenWindow()) {
+    renderInPage(document_)
+    return
+  }
+
+  const win = window.open('', '_blank', 'width=900,height=700')
+  if (!win) {
+    renderInPage(document_)
+    return
+  }
+
+  win.document.write(document_)
   win.document.close()
+}
+
+/** Whether a separate window is even a possibility on this platform. */
+function canOpenWindow() {
+  return typeof window !== 'undefined' && typeof window.open === 'function'
+}
+
+/**
+ * The label sheet as an overlay in the current page.
+ *
+ * The fallback for anywhere a second window cannot be had: the APK, and a
+ * browser that refused the pop-up. The frame carries the same document, so the
+ * sheet is identical either way, with a bar to print it and to close it again.
+ */
+function renderInPage(html) {
+  const host = document.createElement('div')
+  host.setAttribute('role', 'dialog')
+  host.setAttribute('aria-label', 'Tool QR labels')
+  host.style.cssText =
+    'position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;background:#0B1220'
+
+  const bar = document.createElement('div')
+  bar.style.cssText =
+    'display:flex;gap:8px;justify-content:flex-end;padding:10px 12px;' +
+    'background:#0B1220;font:600 13px Inter,system-ui,sans-serif'
+
+  const frame = document.createElement('iframe')
+  frame.style.cssText = 'flex:1;width:100%;border:0;background:#eef1f6'
+
+  const button = (label, onClick) => {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.textContent = label
+    b.style.cssText =
+      'padding:8px 14px;border-radius:10px;border:0;cursor:pointer;' +
+      'font:inherit;background:#F7C948;color:#0B1220'
+    b.addEventListener('click', onClick)
+    return b
+  }
+
+  const close = () => host.remove()
+
+  bar.append(
+    button('Print', () => {
+      try {
+        frame.contentWindow?.focus()
+        frame.contentWindow?.print()
+      } catch (err) {
+        console.warn('[qr] the labels could not be printed', err)
+      }
+    }),
+    button('Close', close),
+  )
+
+  host.append(bar, frame)
+  document.body.append(host)
+
+  // `srcdoc` keeps the sheet on this origin, so the frame's own print script and
+  // the button above both reach it.
+  frame.srcdoc = html
 }
 
 function escapeHtml(value) {

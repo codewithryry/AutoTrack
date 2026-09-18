@@ -5,6 +5,7 @@ import AppLayout, { useStandalonePage } from './layouts/AppLayout'
 import InstallPrompt from './components/InstallPrompt'
 import { ErrorState } from './components/ui'
 import { useApp } from './context/AppContext'
+import { useAndroidBack } from './hooks/useAndroidBack'
 import { PERM } from './utils/permissions'
 
 import LoginPage from './pages/LoginPage'
@@ -103,6 +104,10 @@ function NotFound() {
 
 export default function App() {
   const { booting, bootError, retryBoot, continueWithoutBoot, isAuthenticated } = useApp()
+
+  // Android's back button means "go back one route", not "close the app".
+  // Nothing happens in a browser build.
+  useAndroidBack()
 
   // A boot that failed outright: the records or the stored session could not be
   // read, so there is nothing to route to yet. The ordinary error state carries

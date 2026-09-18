@@ -1,0 +1,17 @@
+{
+  "appId": "ph.edu.autolab.tooltrack",
+  "appName": "ToolTrack AutoLab",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": false
+  },
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "backgroundColor": "#0B1220",
+      "showSpinner": false
+    }
+  }
+}

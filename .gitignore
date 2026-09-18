@@ -39,3 +39,21 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# --- Android / Capacitor ----------------------------------------------------
+# Signing material never belongs in the repository. CI decodes the keystore from
+# a secret at build time and deletes it again; nothing below is ever committed.
+*.jks
+*.keystore
+android/keystore.properties
+android/key.properties
+
+# Build output and local tooling state. The `android/` project itself IS
+# committed — GitHub Actions builds from it — but everything Gradle generates is
+# not.
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/capacitor-cordova-android-plugins/

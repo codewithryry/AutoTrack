@@ -26,33 +26,80 @@ jobs:
       # Capacitor's CLI requires Node >= 22.
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: "22"
           cache: npm
 
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: "21"
 
-      - uses: android-actions/setup-android@v3
+      # Pinned to v3.2.2 and told exactly which packages to install.
+      #
+      # Left to itself the action resolves a default package set that still
+      # includes `tools` — the obsolete SDK Tools bundle, which Google removed
+      # from the repository. `sdkmanager` cannot find it and exits 1, which is
+      # the failure this pins away from. `log-accepted-android-sdk-licenses` is
+      # off so the licence hashes stay out of the build log.
+      - uses: android-actions/setup-android@v3.2.2
+        with:
+          packages: ""
+          log-accepted-android-sdk-licenses: false
+
+      # Only what this project actually builds against, read from the Gradle
+      # configuration rather than assumed:
+      #   • compileSdk/targetSdk 36 → android/variables.gradle
+      #   • build-tools 36.0.0      → the version AGP 8.13.0 defaults to
+      #   • platform-tools          → adb and friends, needed by the toolchain
+      # `--sdk_root` keeps the packages in the SDK the action just provisioned.
+      - name: Install the Android SDK packages
+        run: |
+          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
 
       - name: Install dependencies
         run: npm ci
 
       - name: Build the web app for the native shell
         env:
-          # The production values the APK is compiled against. These are build-time
-          # variables baked into the bundle: the Supabase URL and publishable key
-          # are public by design (Row Level Security is what protects the data),
-          # and no service-role key is read here or anywhere in the build.
+          # Every client-side variable the application actually reads, and
+          # nothing else. All four are compiled into the bundle, so all four are
+          # public by definition — an APK can be unzipped. That is fine for what
+          # is here and is why the server-only values are absent:
+          # COHERE_API_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT and
+          # SUPABASE_SERVICE_ROLE_KEY belong to `api/*` on the deployment and
+          # must never be given a VITE_ name or reach this build.
+          #
+          # Required — src/supabase/config.js throws without them. The
+          # publishable (anon) key authorises nothing on its own; Row Level
+          # Security is what protects the data.
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
-          VITE_VAPID_PUBLIC_KEY: ${{ secrets.VITE_VAPID_PUBLIC_KEY }}
-          VITE_SIGNUP_EMAIL_DOMAINS: ${{ vars.VITE_SIGNUP_EMAIL_DOMAINS }}
+          # Optional — the public half of the VAPID pair, read by
+          # src/services/push.js. Unset, `isAvailable()` is false and the app
+          # simply runs without push, so a missing secret must not fail the
+          # build. The private half (VAPID_PRIVATE_KEY) stays on the server.
+          #
+          # `||` supplies an empty string when the secret does not exist, which
+          # is also what stops an editor warning on a repository that has not
+          # defined it. Set the secret to switch push on in the APK:
+          #   gh secret set VITE_VAPID_PUBLIC_KEY --repo codewithryry/AutoTrack
+          # VITE_VAPID_PUBLIC_KEY: ${{ secrets.VITE_VAPID_PUBLIC_KEY || '' }}
           # Where the deployed web app lives, so the APK can reach the app's own
           # /api/* endpoints — in the WebView a relative path would resolve
-          # against the shell's own origin, which serves nothing.
-          VITE_PUBLIC_APP_URL: ${{ vars.VITE_PUBLIC_APP_URL }}
+          # against the shell's own origin, which serves nothing. A fixed
+          # deployment address rather than a repository variable: it is not a
+          # secret, and a missing variable would silently produce an APK whose
+          # /api/* calls go nowhere.
+          VITE_PUBLIC_APP_URL: https://autotracking.vercel.app
+          #
+          # VITE_SIGNUP_EMAIL_DOMAINS is deliberately not set here. It is an
+          # optional allowlist and is empty in .env; unset, sign-up accepts any
+          # address, which is the behaviour this project runs with. Leaving it
+          # out keeps the build from depending on a repository variable that
+          # does not need to exist.
         run: npm run build:android
 
       - name: Sync the native project

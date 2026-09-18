@@ -116,8 +116,116 @@ jobs:
           # Outside the workspace, so it can never be picked up by a later step
           # that archives or uploads the checkout.
           mkdir -p "$RUNNER_TEMP/signing"
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/signing/release.jks"
+          # `tr -d` strips the whitespace and newlines the GitHub secrets box
+          # adds to a pasted value; without it `base64 -d` can refuse the input
+          # or write a truncated keystore. The keystore is binary and is never
+          # echoed.
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '\r\n \t' | base64 -d > "$RUNNER_TEMP/signing/release.jks"
+
+          if [ ! -s "$RUNNER_TEMP/signing/release.jks" ]; then
+            echo "The decoded keystore is empty — ANDROID_KEYSTORE_BASE64 is not valid base64." >&2
+            exit 1
+          fi
           echo "Keystore decoded ($(stat -c%s "$RUNNER_TEMP/signing/release.jks") bytes)."
+
+      # Checks the shape of the credentials before Gradle gets them, so a bad
+      # secret is reported in one clear line instead of surfacing as
+      # "Get Key failed: getSecretKey failed: Password is not ASCII" from deep
+      # inside :app:packageRelease.
+      #
+      # Nothing here prints a value: only lengths, yes/no answers and the name of
+      # the offending variable reach the log.
+      - name: Validate the signing credentials
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          fail=0
+
+          check() {
+            name="$1"
+            value="$2"
+
+            if [ -z "$value" ]; then
+              echo "FAIL  $name is empty or not set."
+              fail=1
+              return
+            fi
+
+            # Raw byte length against the length with CR/LF/tab removed. A
+            # mismatch is the usual cause of this failure: a value pasted into
+            # the secrets box with a trailing newline.
+            raw=$(printf '%s' "$value" | wc -c)
+            trimmed=$(printf '%s' "$value" | tr -d '\r\n\t' | wc -c)
+            if [ "$raw" -ne "$trimmed" ]; then
+              echo "FAIL  $name contains a line break or tab."
+              echo "      Re-enter the secret with no trailing newline."
+              fail=1
+              return
+            fi
+
+            if printf '%s' "$value" | grep -qE '^[[:space:]]|[[:space:]]$'; then
+              echo "FAIL  $name has leading or trailing whitespace."
+              fail=1
+              return
+            fi
+
+            # The actual error being fixed: Java's keystore loader accepts ASCII
+            # only. This catches smart quotes pasted from a document, accented
+            # characters, and any other non-ASCII byte.
+            if LC_ALL=C printf '%s' "$value" | grep -q '[^ -~]'; then
+              echo "FAIL  $name contains a non-ASCII or control character."
+              echo "      Retype it by hand rather than pasting from a document."
+              fail=1
+              return
+            fi
+
+            # A password that is really the base64 keystore in the wrong box. The
+            # keystore is thousands of characters, so length alone is a reliable
+            # and non-revealing signal.
+            if [ "$raw" -gt 256 ]; then
+              echo "FAIL  $name is too long for a password or alias."
+              echo "      Check it is not the ANDROID_KEYSTORE_BASE64 value."
+              fail=1
+              return
+            fi
+
+            echo "ok    $name is present and ASCII."
+          }
+
+          check ANDROID_KEYSTORE_PASSWORD "$ANDROID_KEYSTORE_PASSWORD"
+          check ANDROID_KEY_ALIAS         "$ANDROID_KEY_ALIAS"
+          check ANDROID_KEY_PASSWORD      "$ANDROID_KEY_PASSWORD"
+
+          if [ "$fail" -ne 0 ]; then
+            echo "" >&2
+            echo "One or more signing secrets are malformed. Fix them under" >&2
+            echo "Settings -> Secrets and variables -> Actions, then re-run." >&2
+            exit 1
+          fi
+          echo "All signing credentials are well-formed."
+
+      # Proves the keystore, its password and the alias actually agree, before a
+      # full Gradle build is spent finding out. `keytool -list` exits non-zero on
+      # a wrong password or a missing alias; its output is discarded so no
+      # certificate detail reaches the log.
+      - name: Verify the keystore opens with these credentials
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if keytool -list \
+              -keystore "$RUNNER_TEMP/signing/release.jks" \
+              -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+              -alias "$ANDROID_KEY_ALIAS" >/dev/null 2>&1; then
+            echo "The keystore opens and contains the expected alias."
+          else
+            echo "The keystore could not be opened with ANDROID_KEYSTORE_PASSWORD," >&2
+            echo "or it does not contain the alias named by ANDROID_KEY_ALIAS." >&2
+            echo "This keystore was generated with the alias 'android'." >&2
+            exit 1
+          fi
 
       - name: Build the signed release APK
         env:

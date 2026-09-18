@@ -30,10 +30,23 @@ android {
         release {
             def storePath = System.getenv("ANDROID_KEYSTORE_PATH")
             if (storePath) {
+                // Surrounding whitespace is stripped from every credential.
+                //
+                // A secret pasted into the GitHub secrets box very often carries
+                // a trailing newline, and Java's keystore loader rejects that
+                // byte with "Password is not ASCII" from inside packageRelease —
+                // an error that names neither the variable nor the character.
+                // Trimming here is what makes a correct password with an
+                // invisible newline behave as the password it is meant to be.
+                //
+                // Only the edges are touched: a password with a space inside it
+                // is left exactly as typed.
+                def env = { name -> System.getenv(name)?.trim() }
+
                 storeFile file(storePath)
-                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
-                keyAlias System.getenv("ANDROID_KEY_ALIAS")
-                keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+                storePassword env("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias env("ANDROID_KEY_ALIAS")
+                keyPassword env("ANDROID_KEY_PASSWORD")
             }
         }
     }

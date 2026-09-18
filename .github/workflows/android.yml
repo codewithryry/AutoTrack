@@ -9,12 +9,36 @@ name: Android release APK
 # would be substituted into the shell before it executes, and would then be
 # visible in a trace or a crash message.
 
+# A release is cut by pushing a version tag, not by pushing to main:
+#
+#   git tag 0.2.2 && git push origin 0.2.2      # or v0.2.2
+#
+# Both spellings are matched. `v*` alone would have missed the `0.2.1` tag that
+# this repository actually uses, and a tag that matches no pattern does not fail
+# — it simply never runs, which is how a Release came to exist with no APK
+# attached to it.
+#
+# main and pull requests still build and sign, so breakage is found before a tag
+# is cut — but they publish nothing. Only a version tag touches a Release.
 on:
   push:
     branches: [main]
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+*'
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and attach the APK to (e.g. 0.2.1)'
+        required: false
+        type: string
+
+# The Release step needs to write to the repository; nothing else does. Declared
+# here so the job's token carries no more authority than the one step requires.
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -22,6 +46,61 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Auto-generated release notes are written from the commits since the
+          # previous tag, which the default shallow clone does not contain.
+          fetch-depth: 0
+
+      # Establishes, once, whether this run is a release, and refuses a tag that
+      # disagrees with the version the APK will report.
+      #
+      # `versionName` in the APK comes from the project, not from the tag, so a
+      # v0.3.0 tag cut while package.json still says 0.2.1 would publish a
+      # release whose APK calls itself something else. Catching that here costs a
+      # second; catching it after the APK is in someone's hands does not.
+      - name: Resolve the release version
+        id: release
+        env:
+          # A tag given by hand, to attach an APK to a Release that already
+          # exists without cutting a new tag for it.
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            tag="$GITHUB_REF_NAME"
+          elif [ -n "$INPUT_TAG" ]; then
+            tag="$INPUT_TAG"
+            # A hand-typed tag has to exist, or the Release step would create an
+            # empty one under a name nobody meant.
+            if ! git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+              echo "The tag ${tag} does not exist in this repository." >&2
+              exit 1
+            fi
+          else
+            tag=""
+          fi
+
+          if [ -n "$tag" ]; then
+            # Both `0.2.1` and `v0.2.1` are accepted; the leading v is optional
+            # and is stripped for the comparison either way.
+            version="${tag#v}"
+            # Read with sed rather than node: this step runs before setup-node,
+            # and the version is the first "version" key at the top level.
+            package="$(sed -n 's/^  "version": "\(.*\)",$/\1/p' package.json | head -1)"
+
+            if [ "$version" != "$package" ]; then
+              echo "The tag ${tag} does not match the version in package.json (${package})." >&2
+              echo "Set the version in package.json to ${version}, or tag ${package}." >&2
+              exit 1
+            fi
+
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+            echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+            echo "version=${version}" >> "$GITHUB_OUTPUT"
+            echo "Building release ${tag}."
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "Not a tag — building for verification only; nothing will be published."
+          fi
 
       # Capacitor's CLI requires Node >= 22.
       - uses: actions/setup-node@v4
@@ -259,12 +338,71 @@ jobs:
           "$APKSIGNER" verify --verbose --print-certs "$APK"
           echo "APK signature verified."
 
-      - name: Upload the APK
+      # Named for the build it came from, so a downloaded APK is identifiable
+      # rather than being one more `app-release.apk` in a downloads folder.
+      - name: Name the APK
+        id: apk
+        run: |
+          if [ "${{ steps.release.outputs.is_release }}" = "true" ]; then
+            name="tooltrack-${{ steps.release.outputs.tag }}.apk"
+          else
+            name="tooltrack-${GITHUB_SHA:0:7}.apk"
+          fi
+          cp android/app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/$name"
+          echo "path=$RUNNER_TEMP/$name" >> "$GITHUB_OUTPUT"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "Prepared $name"
+
+      # Every run keeps the APK as a build artifact, tagged or not — that is what
+      # makes a main-branch run useful without publishing anything.
+      - name: Upload the APK as a build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tooltrack-release-apk
-          path: android/app/build/outputs/apk/release/app-release.apk
+          name: ${{ steps.apk.outputs.name }}
+          path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
+
+      # Attaches the signed APK to the Release for this tag, creating that
+      # Release only if it does not already exist.
+      #
+      # A push to main reaches this step and skips it, so main is still verified
+      # end to end without ever touching a Release.
+      #
+      # `gh` rather than a third-party action, because the requirement is
+      # precisely "upload to the release that is already there": `gh release
+      # view` answers whether it exists, `gh release upload --clobber` adds or
+      # replaces the asset without disturbing the notes somebody may have
+      # written, and `gh release create` is reached only for a tag that has no
+      # Release yet. No duplicate Release is possible.
+      - name: Attach the APK to the GitHub Release
+        if: steps.release.outputs.is_release == 'true'
+        env:
+          # The token is scoped by the `permissions: contents: write` above.
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          APK: ${{ steps.apk.outputs.path }}
+          NAME: ${{ steps.apk.outputs.name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — uploading the APK to it."
+            gh release upload "$TAG" "$APK#$NAME" --clobber
+          else
+            echo "No release for $TAG yet — creating it with the APK attached."
+            gh release create "$TAG" "$APK#$NAME" \
+              --title "ToolTrack AutoLab $TAG" \
+              --generate-notes
+          fi
+
+          # Confirm the asset is actually listed, rather than trusting that the
+          # upload command succeeded. This is the check whose absence let a
+          # Release exist with nothing under Assets.
+          if gh release view "$TAG" --json assets \
+               --jq '.assets[].name' | grep -qx "$NAME"; then
+            echo "Verified: $NAME is attached to release $TAG."
+          else
+            echo "The APK was not attached to release $TAG." >&2
+            exit 1
+          fi
 
       - name: Remove the keystore
         if: always()

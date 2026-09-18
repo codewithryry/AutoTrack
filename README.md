@@ -7,6 +7,30 @@ code; students and instructors scan it to borrow and return equipment, and the s
 inventory, transaction history, overdue alerts and maintenance schedule consistent across every
 device in the laboratory.
 
+---
+
+## Download the Android app
+
+### ➤ **[Download APK](https://github.com/codewithryry/AutoTrack/releases/latest)**
+
+[![Latest release](https://img.shields.io/github/v/release/codewithryry/AutoTrack?label=latest%20version&color=0B1220&style=for-the-badge)](https://github.com/codewithryry/AutoTrack/releases/latest)
+
+<!-- latest-version:start -->
+**Latest version: 0.2.5**
+<!-- latest-version:end -->
+
+Open the link, then download the `.apk` file listed under **Assets**. Android will ask you to
+allow installing from this source the first time — the APK is signed, so every later version
+installs as an update over it.
+
+> The link always points at the newest release, so it never goes stale. Every release is built
+> and signed by [the Android workflow](.github/workflows/android.yml); the APK is attached to the
+> release it was built from.
+
+Prefer the browser? The web app installs as a PWA — see [Running it](#running-it) below.
+
+---
+
 Authentication is **Supabase Auth**, data is **Supabase Postgres**, and access is enforced by
 **Row Level Security** — not only by the interface.
 

@@ -51,13 +51,11 @@ jobs:
           # previous tag, which the default shallow clone does not contain.
           fetch-depth: 0
 
-      # Establishes, once, whether this run is a release, and refuses a tag that
-      # disagrees with the version the APK will report.
+      # Establishes, once, whether this run is a release and which version it is.
       #
-      # `versionName` in the APK comes from the project, not from the tag, so a
-      # v0.3.0 tag cut while package.json still says 0.2.1 would publish a
-      # release whose APK calls itself something else. Catching that here costs a
-      # second; catching it after the APK is in someone's hands does not.
+      # The tag is the source of truth. A later step applies it to the project,
+      # so `0.2.6` is the only thing anybody has to type in order to ship 0.2.6 —
+      # no Android file, and no version in the source, has to be edited first.
       - name: Resolve the release version
         id: release
         env:
@@ -80,23 +78,27 @@ jobs:
           fi
 
           if [ -n "$tag" ]; then
-            # Both `0.2.1` and `v0.2.1` are accepted; the leading v is optional
-            # and is stripped for the comparison either way.
+            # Both `0.2.6` and `v0.2.6` name the same release; the leading v is
+            # not part of the version and is dropped here once, for everything
+            # downstream.
             version="${tag#v}"
-            # Read with sed rather than node: this step runs before setup-node,
-            # and the version is the first "version" key at the top level.
-            package="$(sed -n 's/^  "version": "\(.*\)",$/\1/p' package.json | head -1)"
 
-            if [ "$version" != "$package" ]; then
-              echo "The tag ${tag} does not match the version in package.json (${package})." >&2
-              echo "Set the version in package.json to ${version}, or tag ${package}." >&2
-              exit 1
-            fi
+            # Android needs MAJOR.MINOR.PATCH to build a versionCode from. A tag
+            # that cannot produce one is refused now rather than part-way through
+            # the Gradle build.
+            case "$version" in
+              [0-9]*.[0-9]*.[0-9]*) ;;
+              *)
+                echo "The tag ${tag} is not a version Android can build from." >&2
+                echo "Expected MAJOR.MINOR.PATCH, for example 0.2.6 or v0.2.6." >&2
+                exit 1
+                ;;
+            esac
 
             echo "is_release=true" >> "$GITHUB_OUTPUT"
             echo "tag=${tag}" >> "$GITHUB_OUTPUT"
             echo "version=${version}" >> "$GITHUB_OUTPUT"
-            echo "Building release ${tag}."
+            echo "Building release ${tag} as version ${version}."
           else
             echo "is_release=false" >> "$GITHUB_OUTPUT"
             echo "Not a tag — building for verification only; nothing will be published."
@@ -140,6 +142,29 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # Writes the tag's version into the project, before anything reads it.
+      #
+      # `package.json` is what `android/app/build.gradle` parses for
+      # `versionName` and packs into `versionCode`, and `APP_VERSION` in
+      # `src/utils/constants.js` is what Settings → About and the loading screen
+      # show. Setting both here is what makes tagging 0.2.6 enough on its own:
+      # no Android file holds a version, and none has to be edited to ship one.
+      #
+      # The edit stays in the runner's workspace and is never committed. The tag
+      # is already the record of the version; a commit saying the same thing
+      # would only be a second place for it to drift.
+      #
+      # Skipped entirely on a push to main, which has no release version — that
+      # build reports whatever the branch already says.
+      - name: Apply the release version
+        if: steps.release.outputs.is_release == 'true'
+        run: |
+          node scripts/set-version.mjs "${{ steps.release.outputs.version }}"
+
+          # Prove it took, from the files themselves rather than from the script
+          # that just wrote them.
+          node scripts/set-version.mjs "${{ steps.release.outputs.version }}" --check
 
       - name: Build the web app for the native shell
         env:
@@ -338,6 +363,60 @@ jobs:
           "$APKSIGNER" verify --verbose --print-certs "$APK"
           echo "APK signature verified."
 
+      # Where each merged permission came from.
+      #
+      # The manifest merger records, line by line, which library contributed
+      # every element it folded in. Printing it turns "the APK asks for
+      # something unexpected" into "this dependency added it", which is the one
+      # piece of information needed to decide whether a permission is legitimate
+      # or wants removing at source.
+      #
+      # Informational: it never fails the build. The step below is the gate.
+      - name: Show where each merged permission came from
+        if: always()
+        run: |
+          REPORT=android/app/build/outputs/logs/manifest-merger-release-report.txt
+          if [ ! -f "$REPORT" ]; then
+            echo "No merger report at $REPORT — skipping."
+            exit 0
+          fi
+
+          echo "Permissions in the merged manifest, with the library that added each:"
+          echo ""
+          # A `uses-permission#<name>` line opens a block; the ADDED / MERGED /
+          # IMPLIED lines under it name the manifest each contribution came from.
+          # Those provenance lines start at column 0 in the real report, so the
+          # block ends at the next element rather than at the next unindented
+          # line. Attribute lines (indented, tab-led) are skipped: they describe
+          # the XML attributes, not the source.
+          awk '
+            /^uses-permission#/ {
+              name = $0
+              sub(/^uses-permission#/, "", name)
+              print "  " name
+              inperm = 1
+              next
+            }
+            /^(ADDED|MERGED|IMPLIED|REJECTED) from/ {
+              if (inperm) {
+                line = $0
+                sub(/:[0-9]+:[0-9]+-[0-9]+$/, "", line)   # drop line:col noise
+                print "      " line
+              }
+              next
+            }
+            /^[[:space:]]/ { next }                        # attribute detail
+            /^[a-zA-Z]/ { inperm = 0 }                     # a different element
+          ' "$REPORT"
+
+      - name: Upload the manifest merger report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifest-merger-report
+          path: android/app/build/outputs/logs/manifest-merger-release-report.txt
+          if-no-files-found: ignore
+
       # What the APK actually asks the device for, read back out of the built
       # APK rather than from the manifest source - the manifest merger folds in
       # every library's manifest, so the source file is not the final answer.
@@ -351,12 +430,44 @@ jobs:
           APK=android/app/build/outputs/apk/release/app-release.apk
           AAPT="$(find "$ANDROID_HOME/build-tools" -name aapt2 -type f | sort -V | tail -1)"
 
+          # Asked for by this app, in its own manifest, each backed by a feature:
+          #   ACCESS_FINE_LOCATION / ACCESS_COARSE_LOCATION
+          #     one-shot fix recorded with a borrow or return (utils/geo.js)
+          #   CAMERA          the QR scanner
+          #   INTERNET        Supabase, and the app's own /api/* endpoints
+          #   POST_NOTIFICATIONS  Android 13+ runtime permission for the alerts
+          #                       services/nativeNotifications.js posts
+          #
+          # Merged in by a library, kept deliberately — neither can be removed
+          # without breaking the thing that declares it, and neither is a
+          # privacy-relevant grant:
+          #
+          #   ACCESS_NETWORK_STATE
+          #     Normal protection level: granted at install, never prompts, and
+          #     shows in no permission screen. It reads whether a network is up —
+          #     not its traffic — which is what a WebView stack checks before
+          #     loading, and what the offline mode in this app depends on being
+          #     able to answer. Declared by a library in the Capacitor/AndroidX
+          #     stack; the merger report printed by the step above names which.
+          #
+          #   ph.edu.autolab.tooltrack.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION
+          #     Declared by androidx.core (1.17.0) — verified in its own
+          #     AndroidManifest.xml, where it is defined with
+          #     protectionLevel="signature" and immediately requested.
+          #     It is this app's OWN permission, namespaced under its
+          #     application id, and signature-level means only code signed with
+          #     the same key can hold it: no other app can. androidx.core uses it
+          #     to register runtime receivers as not-exported on Android 13+,
+          #     which is a hardening measure — removing it would make
+          #     ContextCompat.registerReceiver throw at runtime.
           cat > /tmp/expected-permissions <<'PERMS'
           android.permission.ACCESS_COARSE_LOCATION
           android.permission.ACCESS_FINE_LOCATION
+          android.permission.ACCESS_NETWORK_STATE
           android.permission.CAMERA
           android.permission.INTERNET
           android.permission.POST_NOTIFICATIONS
+          ph.edu.autolab.tooltrack.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION
           PERMS
           sed -i 's/^[[:space:]]*//' /tmp/expected-permissions
           sort -u -o /tmp/expected-permissions /tmp/expected-permissions
@@ -373,9 +484,16 @@ jobs:
             echo "The APK's permissions differ from the expected set." >&2
             diff /tmp/expected-permissions /tmp/actual-permissions >&2 || true
             echo "" >&2
-            echo "A line marked > is newly requested - usually merged in by a" >&2
-            echo "plugin. Remove it with tools:node=\"remove\" in the app" >&2
-            echo "manifest, or add it to EXPECTED here if it is really needed." >&2
+            echo "A line marked > is newly requested; a line marked < was" >&2
+            echo "expected but is gone." >&2
+            echo "" >&2
+            echo "Do not reach for tools:node=\"remove\" first. Read the merger" >&2
+            echo "report printed above (and uploaded as an artifact) to see which" >&2
+            echo "library added it, then decide:" >&2
+            echo "  • a library needs it to work  -> add it to the list here," >&2
+            echo "    with a line saying which library and why" >&2
+            echo "  • our own config asked for it and nothing uses it" >&2
+            echo "    -> remove it at the source that declared it" >&2
             exit 1
           fi
           echo "Permissions match the expected set."
@@ -391,6 +509,45 @@ jobs:
             exit 1
           fi
           echo "Not debuggable."
+
+      # The APK must call itself what the tag called it.
+      #
+      # Read back out of the built APK, not from the files that fed it: this is
+      # the only check that proves the whole chain — tag, package.json, Gradle —
+      # actually arrived at the version somebody will see in Android's app info
+      # and in Settings → About.
+      - name: Verify the APK reports the release version
+        if: steps.release.outputs.is_release == 'true'
+        env:
+          EXPECTED: ${{ steps.release.outputs.version }}
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          AAPT="$(find "$ANDROID_HOME/build-tools" -name aapt2 -type f | sort -V | tail -1)"
+
+          badging="$("$AAPT" dump badging "$APK")"
+          name="$(printf '%s' "$badging" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")"
+          code="$(printf '%s' "$badging" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")"
+
+          echo "APK versionName: ${name}"
+          echo "APK versionCode: ${code}"
+
+          if [ "$name" != "$EXPECTED" ]; then
+            echo "" >&2
+            echo "The APK reports ${name}, but the tag asked for ${EXPECTED}." >&2
+            exit 1
+          fi
+
+          # A versionCode of 0 or empty would install once and then refuse every
+          # later build as a downgrade.
+          if [ -z "$code" ] || [ "$code" -le 0 ]; then
+            echo "The APK has no usable versionCode (${code})." >&2
+            exit 1
+          fi
+
+          # And the About screen, which reads APP_VERSION rather than the APK.
+          node scripts/set-version.mjs "$EXPECTED" --check
+
+          echo "The APK reports ${EXPECTED} (versionCode ${code})."
 
       # Named for the build it came from, so a downloaded APK is identifiable
       # rather than being one more `app-release.apk` in a downloads folder.
@@ -456,6 +613,79 @@ jobs:
           else
             echo "The APK was not attached to release $TAG." >&2
             exit 1
+          fi
+
+      # Keeps the README's plain-text version line in step with the release.
+      #
+      # The badge beside it already reads the latest release live, so the page a
+      # visitor sees is correct the moment the release is published — this is for
+      # the text under it, which is what shows in raw markdown and with images
+      # blocked. Only the bytes between the latest-version markers are rewritten.
+      #
+      # Runs last, and only after the APK is genuinely attached: a README that
+      # advertises a version whose download failed would be worse than one a
+      # release behind.
+      #
+      # No infinite loop is possible, by three separate mechanisms:
+      #
+      #   1. This workflow triggers on `push` to main and on tags. The commit
+      #      below is pushed to main, so at most it could start ONE more run —
+      #      and that run is not a tag build, so `is_release` is false and this
+      #      step is skipped. The chain stops after one hop even if 2 and 3 fail.
+      #   2. `[skip ci]` in the message, which GitHub honours by not starting a
+      #      run for that commit at all.
+      #   3. The push is skipped entirely when the README already says the right
+      #      version, so a re-run of the same release commits nothing.
+      - name: Update the README's latest version
+        if: steps.release.outputs.is_release == 'true'
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          # Nothing to do if it already says the right thing. This is what makes
+          # re-running a release a no-op rather than an empty commit.
+          if node scripts/update-readme-version.mjs "$VERSION" --check; then
+            echo "The README already says ${VERSION}; nothing to push."
+            exit 0
+          fi
+
+          node scripts/update-readme-version.mjs "$VERSION"
+
+          if git diff --quiet -- README.md; then
+            echo "No change to README.md after the rewrite; nothing to push."
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # The tag build is checked out at the tag, which is a detached HEAD —
+          # committing here would leave the change on no branch at all. The
+          # single changed file is carried onto a fresh checkout of main instead.
+          README_BODY="$(cat README.md)"
+          git stash push --quiet -- README.md 2>/dev/null || true
+          git fetch --quiet origin main
+          git checkout --quiet -B readme-update origin/main
+          printf '%s\n' "$README_BODY" > README.md
+
+          # main may already carry this version — someone could have edited it by
+          # hand, or an earlier run pushed it.
+          if git diff --quiet -- README.md; then
+            echo "main already says ${VERSION}; nothing to push."
+            exit 0
+          fi
+
+          git add README.md
+          git commit -m "docs: latest version ${VERSION} [skip ci]"
+
+          # A plain push, not a force: if main moved while this built, the push
+          # is rejected and the release still stands. The README is one release
+          # behind until the next one, which is a cosmetic lag rather than a
+          # reason to overwrite somebody's commit.
+          if git push origin readme-update:main; then
+            echo "README updated to ${VERSION} on main."
+          else
+            echo "::warning::main moved while this built, so the README was not" \
+                 "updated to ${VERSION}. Re-run this workflow, or edit the line by hand."
           fi
 
       - name: Remove the keystore

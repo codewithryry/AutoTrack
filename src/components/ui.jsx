@@ -270,14 +270,22 @@ export const Spinner = ({ className, ...props }) => (
   <Loader2 className={cx('h-4 w-4 animate-spin', className)} {...props} />
 )
 
-export function LoadingBlock({ label = 'Loading…', className }) {
-  return (
-    <div className={cx('flex items-center justify-center gap-2 py-12', className)}>
-      <Spinner className="h-5 w-5" style={{ color: 'rgb(var(--accent))' }} />
-      <span className="muted text-sm">{label}</span>
-    </div>
-  )
-}
+/*
+ * `LoadingBlock` — a centred spinner with a "Loading…" label — used to live
+ * here and was removed deliberately.
+ *
+ * It was the application's second loading design: a page that used it looked
+ * nothing like a page that used a skeleton, and nothing like the branded
+ * start-up screen. There are now exactly two states, each with one job:
+ *
+ *   • `AppLoader`     the whole application is starting (session restore).
+ *                     Rendered once, at the root, and nowhere else.
+ *   • `Skeleton` &c.  a screen that is already open is waiting for its data,
+ *                     or for its own code chunk.
+ *
+ * `Spinner` above is still correct inside a button or an inline control, where
+ * it reports one action rather than a whole screen.
+ */
 
 export const Skeleton = ({ className }) => <div className={cx('skeleton', className)} />
 
@@ -291,6 +299,35 @@ export function SkeletonRows({ rows = 5, columns = 4 }) {
           ))}
         </div>
       ))}
+    </div>
+  )
+}
+
+/**
+ * The placeholder shown while a page's own code chunk is being fetched.
+ *
+ * Pages are loaded on first visit rather than at start-up, so there is a short
+ * moment on a first navigation where the route exists but its module has not
+ * arrived. This fills it.
+ *
+ * Deliberately not a spinner and deliberately not the branded start-up loader:
+ * the shell is already painted by this point, so the whole application is not
+ * starting — only one page is arriving. It uses the same `skeleton` treatment
+ * the pages themselves use for their data, so a first visit and a refresh of an
+ * already-loaded page look like the same thing rather than two different states.
+ */
+export function PageSkeleton() {
+  return (
+    <div className="min-w-0 px-3 pt-4 sm:px-5" aria-hidden="true">
+      {/* A page header — the title block every screen opens with. */}
+      <Skeleton className="h-7 w-44" />
+      <Skeleton className="mt-2 h-4 w-64" />
+      {/* And the body beneath it. */}
+      <div className="mt-5 space-y-2.5">
+        <Skeleton className="h-24 rounded-xl" />
+        <Skeleton className="h-24 rounded-xl" />
+        <Skeleton className="h-24 rounded-xl" />
+      </div>
     </div>
   )
 }

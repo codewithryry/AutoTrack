@@ -600,7 +600,7 @@ jobs:
           else
             echo "No release for $TAG yet — creating it with the APK attached."
             gh release create "$TAG" "$APK#$NAME" \
-              --title "ToolTrack AutoLab $TAG" \
+              --title "ToolTrack $TAG" \
               --generate-notes
           fi
 

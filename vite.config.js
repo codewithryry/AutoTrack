@@ -30,11 +30,13 @@ export default defineConfig({
       includeAssets: ['favicon.svg', 'offline.html', 'icons/*.png', 'push-sw.js'],
       manifest: {
         id: '/',
-        name: 'ToolTrack AutoLab',
-        // Home-screen labels are truncated around 12 characters.
+        name: 'ToolTrack',
+        // Home-screen labels are truncated around 12 characters, which the
+        // product name now fits inside — so the long and short forms are the
+        // same and a launcher shows the whole name either way.
         short_name: 'ToolTrack',
         description:
-          'ToolTrack AutoLab: QR-Based Automotive Laboratory Tool Monitoring System. ' +
+          'ToolTrack: QR-Based Automotive Laboratory Tool Monitoring System. ' +
           'Scan. Borrow. Track. Return.',
         // The launch screen is painted in `background_color` before a single
         // line of the app runs, so it is the same navy the shell's rail and the

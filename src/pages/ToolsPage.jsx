@@ -39,6 +39,8 @@ import { QRCodeModal } from '../components/QRCodeDisplay'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import { useDebounced, useLocalStorage, useMediaQuery, useTools } from '../hooks'
+import { useVisibleRows } from '../hooks/useVisibleRows'
+import InventoryActions from '../components/InventoryActions'
 import * as toolService from '../services/tools'
 import { isStaff, isStudent, PERM } from '../utils/permissions'
 import { CATEGORIES, CONDITIONS, TOOL_STATUS, TOOL_STATUSES } from '../utils/constants'
@@ -197,6 +199,12 @@ export default function ToolsPage() {
     [tools, debouncedSearch, status, category, condition, location, sort, studentViewer],
   )
 
+
+  // Long lists are rendered a screenful at a time. `filtered` is untouched —
+  // search, the counts and the offline cache still see every row; only the
+  // number of cards mounted at once is capped, which is what costs a modest
+  // phone its scrolling.
+  const { visible: visibleTools, hasMore, remaining, showMore } = useVisibleRows(filtered)
   const hasFilters =
     !!debouncedSearch ||
     status !== 'all' ||
@@ -346,6 +354,11 @@ export default function ToolsPage() {
               <Plus className="h-4 w-4" />
               Add tool
             </button>
+            {/* Bulk actions, beside the primary one and deliberately
+                quieter: the same permission gates all four, and the
+                component renders nothing without it. `filtered` is passed
+                so Export and Print follow what the page is showing. */}
+            <InventoryActions tools={tools} filtered={filtered} />
           </PageHeader>
         </div>
       )}
@@ -506,7 +519,7 @@ export default function ToolsPage() {
           />
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-            {filtered.map((tool) => (
+            {visibleTools.map((tool) => (
               <ToolCard
                 key={tool.id}
                 tool={tool}
@@ -518,6 +531,16 @@ export default function ToolsPage() {
                 user={user}
               />
             ))}
+          </div>
+        )}
+
+        {/* Only shown when the list is longer than what is on screen. The
+            rows already exist in `filtered`; this mounts the next batch. */}
+        {hasMore && view !== 'table' && (
+          <div className="mt-4 flex justify-center">
+            <button type="button" onClick={showMore} className="btn btn-outline">
+              Show more ({remaining})
+            </button>
           </div>
         )}
       </div>

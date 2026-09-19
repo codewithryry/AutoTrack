@@ -3,7 +3,7 @@ import { Html5Qrcode } from 'html5-qrcode'
 import { Camera, CameraOff, Keyboard, RefreshCw, ScanLine, SwitchCamera } from 'lucide-react'
 import { Spinner } from './ui'
 import { cx } from '../utils/helpers'
-import { parseQRPayload } from '../utils/qr'
+import { parseQRPayload } from '../utils/qrPayload'
 
 const REGION_ID = 'stms-qr-region'
 

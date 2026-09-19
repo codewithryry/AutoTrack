@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createContext, Suspense, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   Bell,
@@ -14,7 +14,7 @@ import {
 import { AppearanceToggleButton } from '../components/AccountSettings'
 import ErrorBoundary from '../components/ErrorBoundary'
 import Avatar from '../components/Avatar'
-import { RoleBadge } from '../components/ui'
+import { PageSkeleton, RoleBadge } from '../components/ui'
 import {
   ACCOUNT_NAV,
   accountNavLabel,
@@ -522,7 +522,7 @@ export default function AppLayout() {
                   of text in the bar and read at arm's length. From `sm` the bar
                   is unchanged. */}
               <h1 className="truncate text-[17px] font-extrabold tracking-tight sm:text-[15px]">
-                {currentPage?.label ?? 'ToolTrack AutoLab'}
+                {currentPage?.label ?? 'ToolTrack'}
               </h1>
             </div>
 
@@ -771,8 +771,13 @@ export default function AppLayout() {
         >
           {/* Keyed on the path so navigating away from a failed page clears
               the error rather than sticking on it. */}
+          {/* Pages are loaded on first visit rather than all at start-up, so the
+              page area may briefly have nothing to render while its chunk
+              arrives. The shell around it is already painted. */}
           <ErrorBoundary key={location.pathname}>
-            <Outlet />
+            <Suspense fallback={<PageSkeleton />}>
+              <Outlet />
+            </Suspense>
           </ErrorBoundary>
         </main>
       </div>

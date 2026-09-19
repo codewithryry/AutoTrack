@@ -17,9 +17,9 @@ import { BarChart3, RotateCcw } from 'lucide-react'
 import {
   EmptyState,
   ErrorState,
-  LoadingBlock,
   ProgressBar,
   SectionCard,
+  SkeletonCards,
   StatusBadge,
   TableWrap,
   TextField,
@@ -144,7 +144,10 @@ export default function ReportsPage() {
       </>
     )
   }
-  if (loading && !report) return <LoadingBlock label="Building the laboratory report…" />
+  // A skeleton rather than a spinner with its own wording: every other screen
+  // shows this shape while its data arrives, and the report is not a different
+  // kind of wait. The branded loader belongs to start-up alone.
+  if (loading && !report) return <SkeletonCards count={4} className="p-1" />
   if (!report) return null
 
   const { stats, metrics, monthly, status, category, condition, mostBorrowed, activeUsers, utilization } =

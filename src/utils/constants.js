@@ -5,7 +5,7 @@
  */
 
 /** The product name, as it appears in the interface. */
-export const APP_NAME = 'ToolTrack AutoLab'
+export const APP_NAME = 'ToolTrack'
 
 /**
  * The full project title. Only for places where a formal title belongs — the
@@ -13,13 +13,13 @@ export const APP_NAME = 'ToolTrack AutoLab'
  * inside the interface, where it would crowd out everything else.
  */
 export const APP_TITLE =
-  'ToolTrack AutoLab: QR-Based Automotive Laboratory Tool Monitoring System'
+  'ToolTrack: QR-Based Automotive Laboratory Tool Monitoring System'
 
 /**
  * Shown on the loading screen. Kept in step with `package.json`; `npm run
  * verify` fails if the two drift apart.
  */
-export const APP_VERSION = '0.2.5'
+export const APP_VERSION = '0.2.6'
 export const APP_TAGLINE = 'Scan. Borrow. Track. Return.'
 
 /* ------------------------------------------------------------------ *

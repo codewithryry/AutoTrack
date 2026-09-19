@@ -20,7 +20,7 @@ self.addEventListener('push', (event) => {
     payload = { message: event.data ? event.data.text() : '' }
   }
 
-  const title = payload.title || 'ToolTrack AutoLab'
+  const title = payload.title || 'ToolTrack'
   event.waitUntil(
     self.registration.showNotification(title, {
       body: payload.message || '',

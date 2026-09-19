@@ -124,7 +124,7 @@ export async function subscribe(user) {
       throw new Error(
         state === 'denied'
           ? 'Notifications are blocked for this app. Turn them on in Android Settings › Apps › ' +
-            'ToolTrack AutoLab › Notifications, then try again.'
+            'ToolTrack › Notifications, then try again.'
           : 'Notifications were not allowed.',
       )
     }
@@ -214,7 +214,7 @@ export async function deliver(notification) {
   if (isNative()) {
     return native.show({
       id: notificationId,
-      title: record.title ?? 'ToolTrack AutoLab',
+      title: record.title ?? 'ToolTrack',
       body: record.message ?? '',
       url: record.link ?? '/notifications',
     })

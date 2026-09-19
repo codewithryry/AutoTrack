@@ -35,6 +35,7 @@ import AccountAvatar from '../components/Avatar'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import { useDebounced, useTransactions, useUsers } from '../hooks'
+import { useVisibleRows } from '../hooks/useVisibleRows'
 import * as userService from '../services/users'
 import { ValidationError } from '../services/tools'
 import {
@@ -157,6 +158,10 @@ export default function UsersPage() {
     [users, debouncedSearch, role, status, sort],
   )
 
+
+  // The directory is rendered a screenful at a time on the phone list. The
+  // full `filtered` set still backs search, the counts and the table view.
+  const { visible: visibleUsers, hasMore, remaining, showMore } = useVisibleRows(filtered)
   const hasFilters = !!debouncedSearch || role !== 'all' || status !== 'all'
 
   const resetFilters = () => {
@@ -565,7 +570,7 @@ export default function UsersPage() {
           <>
             {/* mobile */}
             <ul className="divide-y sm:hidden">
-              {filtered.map((row) => (
+              {visibleUsers.map((row) => (
                 <li key={row.id} className="flex items-center gap-1 pr-2">
                   <button
                     type="button"
@@ -618,6 +623,14 @@ export default function UsersPage() {
                 </li>
               ))}
             </ul>
+            {/* Phone list only: the table below renders its own rows. */}
+            {hasMore && (
+              <div className="flex justify-center py-3 sm:hidden">
+                <button type="button" onClick={showMore} className="btn btn-outline btn-sm">
+                  Show more ({remaining})
+                </button>
+              </div>
+            )}
 
             {/* desktop */}
             <TableWrap className="hidden sm:block">

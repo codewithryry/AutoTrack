@@ -1,34 +1,51 @@
+import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AlertTriangle, ShieldOff } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import AppLayout, { useStandalonePage } from './layouts/AppLayout'
 import InstallPrompt from './components/InstallPrompt'
+import AppLoader from './components/AppLoader'
 import { ErrorState } from './components/ui'
 import { useApp } from './context/AppContext'
 import { useAndroidBack } from './hooks/useAndroidBack'
 import { PERM } from './utils/permissions'
 
+/*
+ * The sign-in screens are the first thing every session renders, so they are
+ * part of the initial bundle. Everything behind the session is loaded when it is
+ * first visited.
+ *
+ * This is the single largest thing that was slowing the app down on a modest
+ * phone. Every page was imported statically, which made Vite preload the whole
+ * application — including the QR scanner (334 kB) and the charting library
+ * (400 kB) — before the login form could paint, on a screen that uses neither.
+ * A 2 GB device paid for parsing and holding all of it just to type a password.
+ *
+ * The chunks the router now pulls in on demand are the same files as before;
+ * only the moment they arrive has changed.
+ */
 import LoginPage from './pages/LoginPage'
 import SignUpPage from './pages/SignUpPage'
-import DashboardPage from './pages/DashboardPage'
-import ToolsPage from './pages/ToolsPage'
-import ToolDetailPage from './pages/ToolDetailPage'
-import ToolHistoryPage from './pages/ToolHistoryPage'
-import ScanPage from './pages/ScanPage'
-import BorrowPage from './pages/BorrowPage'
-import ReturnPage from './pages/ReturnPage'
-import TransactionsPage from './pages/TransactionsPage'
-import UsersPage from './pages/UsersPage'
-import ActivityPage from './pages/ActivityPage'
-import NotificationsPage from './pages/NotificationsPage'
-import MaintenancePage from './pages/MaintenancePage'
-import ReportsPage from './pages/ReportsPage'
-import SettingsPage from './pages/SettingsPage'
-import ProfilePage from './pages/ProfilePage'
-import RequestsPage from './pages/RequestsPage'
-import NewRequestPage from './pages/NewRequestPage'
-import RequestDetailPage from './pages/RequestDetailPage'
-import MessagesPage from './pages/MessagesPage'
+
+const DashboardPage = lazy(() => import('./pages/DashboardPage'))
+const ToolsPage = lazy(() => import('./pages/ToolsPage'))
+const ToolDetailPage = lazy(() => import('./pages/ToolDetailPage'))
+const ToolHistoryPage = lazy(() => import('./pages/ToolHistoryPage'))
+const ScanPage = lazy(() => import('./pages/ScanPage'))
+const BorrowPage = lazy(() => import('./pages/BorrowPage'))
+const ReturnPage = lazy(() => import('./pages/ReturnPage'))
+const TransactionsPage = lazy(() => import('./pages/TransactionsPage'))
+const UsersPage = lazy(() => import('./pages/UsersPage'))
+const ActivityPage = lazy(() => import('./pages/ActivityPage'))
+const NotificationsPage = lazy(() => import('./pages/NotificationsPage'))
+const MaintenancePage = lazy(() => import('./pages/MaintenancePage'))
+const ReportsPage = lazy(() => import('./pages/ReportsPage'))
+const SettingsPage = lazy(() => import('./pages/SettingsPage'))
+const ProfilePage = lazy(() => import('./pages/ProfilePage'))
+const RequestsPage = lazy(() => import('./pages/RequestsPage'))
+const NewRequestPage = lazy(() => import('./pages/NewRequestPage'))
+const RequestDetailPage = lazy(() => import('./pages/RequestDetailPage'))
+const MessagesPage = lazy(() => import('./pages/MessagesPage'))
 
 /**
  * Blocks unauthenticated access and remembers where the user was heading.
@@ -135,10 +152,14 @@ export default function App() {
   }
 
   // Routing is still held until the stored session has been read — that is what
-  // stops a refresh bouncing a signed-in user to the login page. The installed
-  // PWA's own OS-level launch screen remains the only splash; the app itself
-  // moves straight in once the session state is ready.
-  if (booting) return null
+  // stops a refresh bouncing a signed-in user to the login page.
+  //
+  // This used to render nothing, which on a cold start left the background
+  // colour and an empty page for as long as the session took to restore. The
+  // loader fills that moment instead. In the installed PWA and the APK it
+  // follows the OS launch screen, which is painted in the same background, so
+  // the hand-over is one continuous colour.
+  if (booting) return <AppLoader />
 
   return (
     <>
@@ -160,6 +181,10 @@ export default function App() {
         />
 
         {/* ---------------------------- protected ---------------------------- */}
+        {/* One boundary around the whole protected tree, inside the shell: the
+            rail, top bar and bottom bar paint immediately and only the page area
+            waits for its chunk. On a fast connection the chunk is usually there
+            before this ever shows. */}
         <Route
           element={
             <RequireAuth>

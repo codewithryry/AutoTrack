@@ -603,14 +603,14 @@ export default function SettingsPage() {
 
   /* ---------------------------------- about ---------------------------------
      The last category, and the only one every role sees alongside Device: what
-     this application is, who wrote it, and the two links out. `APP_NAME` and
+     this application is and the two links out. `APP_NAME` and
      `APP_VERSION` are read from `utils/constants` rather than written here, so
      the version shown can never drift from the one the verification suite
      checks against package.json. */
 
   const aboutSection = (
     <>
-      <SectionCard title={`About ${APP_NAME}`} description="Version and attribution">
+      <SectionCard title={`About ${APP_NAME}`} description="What this application is">
         <div className="flex items-start gap-3">
           <span
             className="grid h-11 w-11 shrink-0 place-items-center rounded-xl"
@@ -627,14 +627,6 @@ export default function SettingsPage() {
                 treatment record identifiers get everywhere else in the app. */}
             <p className="subtle mt-1.5 font-mono text-[11px]">Version {APP_VERSION}</p>
           </div>
-        </div>
-
-        <div className="mt-4 border-t pt-3">
-          <p className="subtle text-[11px] font-bold uppercase tracking-wider">Developer</p>
-          <p className="mt-1 text-sm font-semibold">Reymel Mislang</p>
-          <p className="subtle mt-0.5 text-xs leading-snug">
-            Designed and developed by Reymel Mislang.
-          </p>
         </div>
       </SectionCard>
 

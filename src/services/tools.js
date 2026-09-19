@@ -16,7 +16,7 @@ import {
 import { PERM, assertCan } from '../utils/permissions'
 import { matchesQuery, padId, sortBy } from '../utils/helpers'
 import { nowISO, toDate } from '../utils/dates'
-import { buildQRPayload } from '../utils/qr'
+import { buildQRPayload } from '../utils/qrPayload'
 
 /**
  * Tool inventory service. Owns tool identity (ids and QR codes), validation,

@@ -1,72 +1,32 @@
 import QRCode from 'qrcode'
 import { APP_NAME } from './constants'
 import { isNative } from './native'
+import { buildQRPayload } from './qrPayload'
 
 /**
- * QR payload contract.
+ * The payload helpers live in `utils/qrPayload.js` and are re-exported here.
  *
- * Codes printed by this app carry JSON so a scanner can tell a tool code apart
- * from any other QR the camera happens to see:
+ * They are pure string work; this module also imports the `qrcode` library to
+ * draw and print labels. Keeping them together meant anything that merely built
+ * a payload string — `services/tools.js`, reached from every screen — pulled
+ * the drawing library in with it. The re-export keeps every existing import
+ * path working unchanged.
  *
- *   { "type": "tool", "toolId": "TOOL-00001", "v": 1 }
- *
- * `parseQRPayload` is deliberately permissive on the way in: a plain
- * `TOOL-00001` string typed into the manual fallback, or a URL ending in a tool
- * id, both resolve to the same tool.
+ * `buildQRPayload` is *imported* above as well as re-exported below, and the two
+ * lines are not redundant: `export { x } from './m'` forwards the name to this
+ * module's consumers without binding it inside this module, so the calls in
+ * `toDataURL` and `drawToCanvas` below would throw "buildQRPayload is not
+ * defined" at runtime — which is exactly what they did. The import is what makes
+ * the name usable here; the re-export is what keeps `utils/qr` a valid source of
+ * it for everything else.
  */
-
-export const QR_VERSION = 1
-export const TOOL_ID_PATTERN = /^TOOL-\d{5,}$/i
-
-export function buildQRPayload(toolId) {
-  return JSON.stringify({ type: 'tool', toolId: String(toolId).toUpperCase(), v: QR_VERSION })
-}
-
-/**
- * @returns {{ ok: true, toolId: string } | { ok: false, error: string }}
- */
-export function parseQRPayload(raw) {
-  const text = String(raw ?? '').trim()
-  if (!text) return { ok: false, error: 'Empty QR code.' }
-
-  // 1. Native JSON payload
-  if (text.startsWith('{')) {
-    try {
-      const data = JSON.parse(text)
-      if (data?.type !== 'tool') {
-        return { ok: false, error: 'This QR code is not an equipment tag.' }
-      }
-      const id = normalizeToolId(data.toolId)
-      if (!id) return { ok: false, error: 'QR code is missing a valid Tool ID.' }
-      return { ok: true, toolId: id }
-    } catch {
-      return { ok: false, error: 'QR code contains unreadable data.' }
-    }
-  }
-
-  // 2. A URL that ends in /tools/TOOL-00001
-  if (/^https?:\/\//i.test(text)) {
-    const match = text.match(/TOOL-\d{5,}/i)
-    if (match) return { ok: true, toolId: match[0].toUpperCase() }
-    return { ok: false, error: 'This link does not point to a laboratory tool.' }
-  }
-
-  // 3. A bare tool id, with or without the prefix
-  const id = normalizeToolId(text)
-  if (id) return { ok: true, toolId: id }
-
-  return { ok: false, error: 'Unrecognised code. Expected a laboratory tool tag.' }
-}
-
-/** Accepts `TOOL-00014`, `tool-14`, or `14` and returns the canonical id. */
-export function normalizeToolId(value) {
-  const raw = String(value ?? '').trim().toUpperCase()
-  if (!raw) return null
-  if (TOOL_ID_PATTERN.test(raw)) return raw
-  const digits = raw.replace(/^TOOL[-\s]?/, '')
-  if (/^\d{1,6}$/.test(digits)) return `TOOL-${digits.padStart(5, '0')}`
-  return null
-}
+export {
+  QR_VERSION,
+  TOOL_ID_PATTERN,
+  buildQRPayload,
+  parseQRPayload,
+  normalizeToolId,
+} from './qrPayload'
 
 /* --------------------------- rendering --------------------------- */
 
@@ -108,8 +68,10 @@ const slug = (s) =>
 
 /**
  * Open a print window containing one or more asset labels.
- * Labels are sized for a 60 × 80 mm sticker — big enough to scan from a metre
- * away, small enough to fit on a wrench rack.
+ *
+ * Each label carries the QR code, the tool id and the tool name, and nothing
+ * else. Three fit across an A4 sheet; the code is 46mm square, which is large
+ * enough to read from across a workshop and to survive a scuffed sticker.
  */
 export async function printQRLabels(tools, meta = {}) {
   const list = Array.isArray(tools) ? tools : [tools]
@@ -118,18 +80,16 @@ export async function printQRLabels(tools, meta = {}) {
   const labels = await Promise.all(
     list.map(async (tool) => {
       const img = await toDataURL(tool.id, { size: 420 })
+      // The code, the id, the name. Nothing else: a label is read at arm's
+      // length in a workshop, and every extra line was space the code could
+      // have used. The branding, category and location were dropped for that
+      // reason — the id is what identifies the tool, and the name is what a
+      // person recognises it by.
       return `
         <div class="label">
-          <div class="label-head">
-            <span class="label-lab">${escapeHtml(meta.labName || APP_NAME)}</span>
-          </div>
           <img src="${img}" alt="QR code for ${escapeHtml(tool.name)}" />
           <div class="label-id">${escapeHtml(tool.id)}</div>
           <div class="label-name">${escapeHtml(tool.name)}</div>
-          <div class="label-meta">
-            <span>${escapeHtml(tool.category ?? '')}</span>
-            <span>${escapeHtml(tool.location ?? '')}</span>
-          </div>
         </div>`
     }),
   )
@@ -145,28 +105,26 @@ export async function printQRLabels(tools, meta = {}) {
     font-family: Inter, "Segoe UI", system-ui, sans-serif;
   }
   .sheet { display: flex; flex-wrap: wrap; gap: 6mm; padding: 4mm; }
+  /* Sized to the page rather than by eye. An A4 sheet is 210mm; the 10mm @page
+     margins and the sheet's own 4mm padding leave 182mm, and with the 6mm
+     gutter three 56mm cards fit exactly (3 × 56 + 2 × 6 = 180mm). The old 60mm
+     card only ever fitted two across, so this prints more labels per sheet and
+     a larger code on each. */
   .label {
-    width: 60mm; padding: 3mm; border: 1.5pt solid #0B1220; border-radius: 3mm;
+    width: 56mm; padding: 4mm; border: 1.5pt solid #0B1220; border-radius: 3mm;
     text-align: center; break-inside: avoid; page-break-inside: avoid;
   }
-  .label-head {
-    background: #0B1220; color: #F7C948; margin: -3mm -3mm 2.5mm; padding: 1.6mm 2mm;
-    border-radius: 2mm 2mm 0 0; font-size: 7pt; font-weight: 800;
-    letter-spacing: .08em; text-transform: uppercase;
-  }
-  .label img { width: 34mm; height: 34mm; display: block; margin: 0 auto; }
+  /* 34mm before; the header and metadata rows that used to sit above and below
+     it are gone, so the code takes the space they occupied. A bigger code is a
+     code that scans from further away and survives a scuffed label. */
+  .label img { width: 46mm; height: 46mm; display: block; margin: 0 auto; }
   .label-id {
-    font-family: "JetBrains Mono", Consolas, monospace; font-size: 10pt;
-    font-weight: 700; margin-top: 1.5mm; letter-spacing: .04em;
+    font-family: "JetBrains Mono", Consolas, monospace; font-size: 11pt;
+    font-weight: 700; margin-top: 2mm; letter-spacing: .04em;
   }
   .label-name {
-    font-size: 8.5pt; font-weight: 700; margin-top: 1mm; line-height: 1.25;
+    font-size: 9pt; font-weight: 700; margin-top: 1mm; line-height: 1.25;
     min-height: 8mm;
-  }
-  .label-meta {
-    display: flex; justify-content: space-between; gap: 2mm; margin-top: 1.5mm;
-    padding-top: 1.5mm; border-top: .6pt dashed #94a3b8;
-    font-size: 6.5pt; color: #475569; text-align: left;
   }
   @media screen {
     body { background: #eef1f6; padding: 12px; }
@@ -175,9 +133,35 @@ export async function printQRLabels(tools, meta = {}) {
 </style></head>
 <body><div class="sheet">${labels.join('')}</div>
 <script>
-  window.addEventListener('load', function () {
-    setTimeout(function () { window.focus(); window.print(); }, 350);
-  });
+  /* Print only once every QR image has actually decoded.
+     A fixed timer used to stand in for this, which is a guess rather than a
+     guarantee: on a long sheet, or a slow device, the dialog could open while
+     images were still decoding and the preview would show blank squares where
+     the codes should be. decode() resolves per image when it is ready to
+     paint, so the wait is exactly as long as it needs to be and no longer. */
+  (function () {
+    function ready(img) {
+      if (img.decode) return img.decode().catch(function () {});
+      if (img.complete) return Promise.resolve();
+      return new Promise(function (done) {
+        img.addEventListener('load', done, { once: true });
+        img.addEventListener('error', done, { once: true });
+      });
+    }
+    function go() {
+      var images = Array.prototype.slice.call(document.images);
+      Promise.all(images.map(ready)).then(function () {
+        /* One frame, so the decoded images are painted before the dialog
+           freezes the page. */
+        requestAnimationFrame(function () {
+          window.focus();
+          window.print();
+        });
+      });
+    }
+    if (document.readyState === 'complete') go();
+    else window.addEventListener('load', go, { once: true });
+  })();
 </script>
 </body></html>`
 

@@ -178,7 +178,7 @@ export function DeviceAccessControl() {
         } else if (result === 'denied') {
           toast.info(
             'Location is blocked for this app. Turn it on in Android Settings › Apps › ' +
-              'ToolTrack AutoLab › Permissions, then come back.',
+              'ToolTrack › Permissions, then come back.',
           )
         } else {
           toast.info('Location was not allowed.')
@@ -247,7 +247,7 @@ export function DeviceAccessControl() {
         } else if (result === 'denied') {
           toast.info(
             'Camera access is blocked. Turn it on in Android Settings › Apps › ' +
-              'ToolTrack AutoLab › Permissions, then come back.',
+              'ToolTrack › Permissions, then come back.',
           )
         } else {
           toast.info('Camera access was not allowed.')
@@ -280,7 +280,7 @@ export function DeviceAccessControl() {
         toast.info(
           isNative()
             ? 'Camera access is blocked. Turn it on in Android Settings › Apps › ' +
-              'ToolTrack AutoLab › Permissions, then come back.'
+              'ToolTrack › Permissions, then come back.'
             : 'Camera access is blocked. Allow it from your browser’s site settings.',
         )
       }
@@ -509,7 +509,7 @@ export function InstallAppCard() {
   const share = async () => {
     if (!canShare) return copyLink()
     try {
-      await navigator.share({ title: 'ToolTrack AutoLab', url: appUrl })
+      await navigator.share({ title: 'ToolTrack', url: appUrl })
     } catch (err) {
       // Dismissing the sheet is a choice, not a failure.
       if (err?.name !== 'AbortError') await copyLink()

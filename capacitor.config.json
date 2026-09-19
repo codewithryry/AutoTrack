@@ -1,6 +1,6 @@
 {
   "appId": "ph.edu.autolab.tooltrack",
-  "appName": "ToolTrack AutoLab",
+  "appName": "ToolTrack",
   "webDir": "dist",
   "android": {
     "allowMixedContent": false

@@ -136,7 +136,7 @@ export async function show({ title, body, id, url }) {
           // notification replaces its banner rather than stacking a duplicate.
           id: toNotificationId(id),
           channelId: CHANNEL.id,
-          title: title || 'ToolTrack AutoLab',
+          title: title || 'ToolTrack',
           body: body || '',
           // Must name a real drawable: Android drops a notification whose small
           // icon cannot be resolved, without telling the app. See

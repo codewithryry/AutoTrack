@@ -32,7 +32,7 @@ import * as toolService from '../services/tools'
 import * as txnService from '../services/transactions'
 import { isInstructor, isStudent, PERM } from '../utils/permissions'
 import { NON_BORROWABLE_REASON, TOOL_STATUS } from '../utils/constants'
-import { parseQRPayload } from '../utils/qr'
+import { parseQRPayload } from '../utils/qrPayload'
 import { cx } from '../utils/helpers'
 import { dueLabel, formatDate } from '../utils/dates'
 

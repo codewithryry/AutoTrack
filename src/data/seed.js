@@ -1,6 +1,6 @@
 import * as db from '../services/db'
 import { COLLECTIONS } from '../services/db'
-import { buildQRPayload } from '../utils/qr'
+import { buildQRPayload } from '../utils/qrPayload'
 import { generateTxnId, padId, uid } from '../utils/helpers'
 import { addDaysISO, nowISO } from '../utils/dates'
 import { PERM, assertCan } from '../utils/permissions'

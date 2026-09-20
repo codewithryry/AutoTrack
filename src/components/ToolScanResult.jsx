@@ -7,7 +7,6 @@ import {
   ClipboardList,
   HardHat,
   MapPin,
-  Pencil,
   RotateCcw,
   Undo2,
   UserCheck,
@@ -248,17 +247,19 @@ export default function ToolScanResult({ tool, loan, can, onNavigate, onReset })
         )}
 
         {/* ----------------------------- actions -----------------------------
-            The one large primary action first, then the supporting ones. Each
-            is gated on the permission the workflow behind it enforces. */}
+            The same action language as the tool's own page: one filled primary
+            for the state's dominant action, Report and Edit as a smaller
+            outlined pair beneath it, then the record and navigation links.
+            Each is gated on the permission the workflow behind it enforces. */}
         <div className="mt-5 space-y-2">
           {mayReceive && (
             <button
               type="button"
               onClick={() => onNavigate(`/return?tool=${tool.id}`)}
-              className="btn btn-success btn-lg w-full"
+              className="btn btn-success w-full"
             >
               <Undo2 className="h-4 w-4" />
-              Receive return
+              Return tool
             </button>
           )}
 
@@ -267,7 +268,7 @@ export default function ToolScanResult({ tool, loan, can, onNavigate, onReset })
               type="button"
               onClick={() => onNavigate(`/return?tool=${tool.id}`)}
               className={cx(
-                'btn btn-lg w-full',
+                'btn w-full',
                 txnService.returnRequested(activeLoan) ? 'btn-outline' : 'btn-success',
               )}
             >
@@ -280,32 +281,49 @@ export default function ToolScanResult({ tool, loan, can, onNavigate, onReset })
             <button
               type="button"
               onClick={() => onNavigate(`/borrow?tool=${tool.id}`)}
-              className="btn btn-primary btn-lg w-full"
+              className="btn btn-primary w-full"
             >
               <UserCheck className="h-4 w-4" />
-              Borrow for a student
+              Borrow tool
             </button>
           )}
 
           {/* Scanning identifies the tool; a student's borrowing still starts as
-              one request, on the one page that creates them. No leading icon:
-              a filled, full-width primary already reads as the one thing to do
-              here, and an arrow beside plain English was decoration rather
-              than information. */}
+              one request, on the one page that creates them. No leading icon,
+              matching the tool page's own primary: a filled, full-width button
+              already reads as the one thing to do here. */}
           {mayBorrow && (
             <button
               type="button"
               onClick={() => onNavigate(`/requests/new?tool=${tool.id}`)}
-              className="btn btn-primary btn-lg w-full"
+              className="btn btn-primary w-full"
             >
               Request to borrow
             </button>
           )}
 
+          {/* Report and Edit share one line at equal, smaller weight — the same
+              pair the tool page's own actions use. Editing lives on the tool's
+              page (one form, one write path), so that button leads there. */}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setReporting(true)}
+              className="btn btn-outline btn-sm min-w-0 flex-1"
+            >
+              <span className="truncate">Report a problem</span>
+            </button>
+            {mayEdit && (
+              <Link to={detailHref} className="btn btn-outline btn-sm min-w-0 flex-1">
+                <span className="truncate">Edit tool</span>
+              </Link>
+            )}
+          </div>
+
           {activeLoan && mayReadAllTxns && (
             <Link to={`/transactions?tool=${tool.id}`} className="btn btn-outline w-full">
               <ClipboardList className="h-4 w-4" />
-              Open transaction record
+              View history
             </Link>
           )}
 
@@ -316,16 +334,13 @@ export default function ToolScanResult({ tool, loan, can, onNavigate, onReset })
             </Link>
           )}
 
-          {/* Editing and the QR label both live on the tool's own page, which
-              already gates them and already owns the form. Linking there rather
-              than repeating either here keeps one write path and one label
+          {/* The full record — dates, notes, the QR label — lives on the tool's
+              own page, which already gates editing and printing. Linking there
+              rather than repeating it here keeps one write path and one label
               workshop, so there is nothing to keep in step. */}
-          {mayEdit && (
-            <Link to={detailHref} className="btn btn-outline w-full">
-              <Pencil className="h-4 w-4" />
-              Manage this tool
-            </Link>
-          )}
+          <Link to={detailHref} className="btn btn-outline w-full">
+            View tool details
+          </Link>
 
           {activeLoan && !mayReceive && !mayReturnOwn && (
             <p className="subtle text-center text-xs">
@@ -333,25 +348,17 @@ export default function ToolScanResult({ tool, loan, can, onNavigate, onReset })
             </p>
           )}
 
-          {/* Every role may report: a student holding a tool is the most
-              likely person to notice something wrong with it. What a report
-              may contain is decided by the database, not by this button.
-              Icon-free, matching the primary above: outlined and full-width
-              already reads as secondary next to it. */}
           <button
             type="button"
-            onClick={() => setReporting(true)}
-            className="btn btn-outline w-full"
+            onClick={onReset}
+            className="btn btn-ghost w-full"
           >
-            Report a problem
+            <RotateCcw className="h-4 w-4" />
+            Scan another tool
           </button>
 
-          <Link to={detailHref} className="btn btn-outline w-full">
-            Tool details
-          </Link>
-
-          {/* A navigation row, not a third button: the tool's timeline is
-              laboratory record-keeping, offered to whoever may read everyone's
+          {/* A navigation row, not a button: the tool's timeline is laboratory
+              record-keeping, offered to whoever may read everyone's
               transactions. No icon on the left — the label alone says what
               this is — and only the chevron on the right as an affordance,
               matching the equivalent row on the tool's own page. */}
@@ -366,11 +373,6 @@ export default function ToolScanResult({ tool, loan, can, onNavigate, onReset })
               <ArrowRight className="h-4 w-4 shrink-0 opacity-40" />
             </Link>
           )}
-
-          <button type="button" onClick={onReset} className="btn btn-ghost w-full">
-            <RotateCcw className="h-4 w-4" />
-            Scan another tool
-          </button>
         </div>
       </div>
 

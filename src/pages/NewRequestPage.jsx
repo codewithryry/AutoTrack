@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Send, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import {
   ErrorState,
   SearchInput,
@@ -471,7 +471,7 @@ export default function NewRequestPage() {
             phone, where the shell already reserves the room. */}
         <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           <button type="submit" className="btn btn-primary" disabled={busy}>
-            {busy ? <Spinner /> : <Send className="h-4 w-4" />}
+            {busy && <Spinner />}
             Send request
           </button>
         </div>

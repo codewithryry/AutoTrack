@@ -12,11 +12,13 @@ import {
   NOTIF_TYPE,
   REQUEST_STATUS,
   RETURN_CONDITIONS,
+  RETURN_DECISION,
+  RETURN_ISSUE_TYPES,
   TOOL_STATUS,
   TXN_STATUS,
 } from '../utils/constants'
 import { PERM, assertCan, can, canBorrowFor, canReturnTransaction } from '../utils/permissions'
-import { generateTxnId, matchesQuery, sortBy } from '../utils/helpers'
+import { generateTxnId, matchesQuery, randomToken, sortBy } from '../utils/helpers'
 import {
   daysBetween,
   isOverdue,
@@ -632,13 +634,39 @@ async function notifyParties({ staff, personal }, actor, recipientId) {
 
 /** Columns added by `0019_return_requests.sql`. */
 const RETURN_REQUEST_COLUMN = 'returnRequestedAt'
+/** Columns added by `0036_return_qr.sql`. */
+const RETURN_QR_COLUMN = 'returnQrToken'
 
 /** Whether this database has the return-request columns `0019` adds. */
 export const returnRequestsAvailable = () =>
   db.supportsColumn(COLLECTIONS.transactions, RETURN_REQUEST_COLUMN)
 
+/** Whether this database has the return-QR columns `0036` adds. */
+export const returnQrAvailable = () =>
+  db.supportsColumn(COLLECTIONS.transactions, RETURN_QR_COLUMN)
+
 /** Has this loan already been handed in and is only waiting on the counter? */
 export const returnRequested = (txn) => !!txn?.returnRequestedAt
+
+/** Has this request already been decided — accepted, accepted with an issue, or rejected? */
+export const returnDecided = (txn) => !!txn?.returnDecision
+
+/**
+ * The return request a QR code, or the manual-search fallback, resolves to.
+ *
+ * Looked up by the opaque token alone — never by the transaction id — so a
+ * code that merely displays cannot be turned into a database key by whoever
+ * sees it. Any signed-in staff account may call this: the token is the
+ * credential, and finding a request is not the same as deciding it, which
+ * `acceptReturn()` / `acceptReturnWithIssue()` / `rejectReturn()` still gate
+ * on `PERM.BORROW_FOR_OTHERS` before writing anything.
+ */
+export async function getByReturnQrToken(token) {
+  const clean = String(token ?? '').trim()
+  if (!clean) return null
+  const rows = await db.findWhere(COLLECTIONS.transactions, [['returnQrToken', '==', clean]])
+  return rows[0] ?? null
+}
 
 /**
  * Ask to hand a tool back.
@@ -646,11 +674,14 @@ export const returnRequested = (txn) => !!txn?.returnRequestedAt
  * What a student does instead of closing the loan themselves: the tool is still
  * out and the record still says `Borrowed` — only now the counter knows it is
  * coming back, in what condition the borrower says it is, and when they asked.
- * Staff confirm the actual return with `returnTool()`, which is the one place a
- * transaction is closed and a tool goes back on the shelf.
+ * A QR code is minted in the same write, so the request the counter sees and
+ * the code the borrower shows are the same row from the moment either exists.
+ * Staff decide the actual return with `acceptReturn()` / `acceptReturnWithIssue()`
+ * / `rejectReturn()`, which are the only places a transaction is closed.
  *
- * One request per loan: asking again while one is open is refused rather than
- * overwriting the first, so the counter's queue cannot be re-stamped.
+ * One request per loan: asking again while one is open returns the existing
+ * request — QR and all — rather than raising an error or minting a second
+ * code for the same loan.
  */
 export async function requestReturn({ transactionId, condition, notes }, actor) {
   assertCan(actor, PERM.RETURN, 'Your role is not allowed to return tools.')
@@ -663,9 +694,9 @@ export async function requestReturn({ transactionId, condition, notes }, actor) 
   if (!canReturnTransaction(actor, txn)) {
     throw new Error('You can only hand back tools that you borrowed yourself.')
   }
-  if (returnRequested(txn)) {
-    throw new Error('A return has already been requested for this tool. Staff will confirm it.')
-  }
+  // Already open: the existing request (and its QR) is what the borrower
+  // should see, not a second one layered on top of it.
+  if (returnRequested(txn)) return txn
   if (!RETURN_CONDITIONS.includes(condition)) {
     throw new ValidationError({ condition: 'Select the condition of the tool you are handing back.' })
   }
@@ -676,16 +707,21 @@ export async function requestReturn({ transactionId, condition, notes }, actor) 
   }
 
   const timestamp = nowISO()
-  const updated = await db.update(COLLECTIONS.transactions, txn.id, {
+  const qrAvailable = await returnQrAvailable()
+  const patch = {
     returnRequestedAt: timestamp,
     returnRequestCondition: condition,
     returnRequestNotes: notes?.trim() ?? '',
     updatedAt: timestamp,
-  })
+    // Omitted entirely on a database that has not had `0036` applied yet, so
+    // the request still works exactly as it did before the QR existed.
+    ...(qrAvailable ? { returnQrToken: `RQR${randomToken(24)}` } : {}),
+  }
+  const updated = await db.update(COLLECTIONS.transactions, txn.id, patch)
 
   await afterWrite('return request follow-up', async () => {
     await activity.log({
-      action: ACTIVITY.TOOL_RETURNED,
+      action: ACTIVITY.RETURN_REQUEST_CREATED,
       toolId: txn.toolId,
       toolName: txn.toolName,
       userId: txn.userId,
@@ -697,13 +733,14 @@ export async function requestReturn({ transactionId, condition, notes }, actor) 
 
     // The laboratory-wide alert is a staff write, so it is raised only when
     // staff are the ones asking; a student's request reaches the counter
-    // through the return desk's own list, which reads the same column.
+    // through the return desk's own list and the return-QR scan page, which
+    // both read the same columns.
     await notifyParties(
       {
         staff: {
           type: NOTIF_TYPE.REQUEST,
           title: 'Return requested',
-          message: `${txn.userName} is handing ${txn.toolName} back. Confirm it at the return desk.`,
+          message: `${txn.userName} is handing ${txn.toolName} back. Scan their QR or confirm it at the return desk.`,
           toolId: txn.toolId,
           toolName: txn.toolName,
           transactionId: txn.id,
@@ -715,7 +752,7 @@ export async function requestReturn({ transactionId, condition, notes }, actor) 
     )
   })
 
-  return updated ?? { ...txn, returnRequestedAt: timestamp, returnRequestCondition: condition }
+  return updated ?? { ...txn, ...patch }
 }
 
 /**
@@ -849,6 +886,315 @@ export async function returnTool({ transactionId, condition, notes, returnLocati
   }
 
   return updatedTxn
+}
+
+/**
+ * Shared groundwork for the three ways a scanned or manually opened return
+ * request can be decided: load the transaction, check it is actually a live,
+ * undecided request, and confirm the actor works the counter. Every branch
+ * below (`acceptReturn`, `acceptReturnWithIssue`, `rejectReturn`) starts here
+ * so "already processed", "not a request", and the permission check can never
+ * drift between the three.
+ */
+async function loadOpenReturnRequest(transactionId, actor) {
+  assertCan(actor, PERM.RETURN, 'Your role is not allowed to return tools.')
+  if (!can(actor, PERM.BORROW_FOR_OTHERS)) {
+    throw new Error(
+      'Only laboratory staff can decide a return request. Ask a member of staff to scan or open it.',
+    )
+  }
+
+  const txn = await getById(transactionId)
+  if (!txn) throw new Error('Return request not found.')
+  if (!ACTIVE_TXN_STATUSES.includes(txn.status)) {
+    throw new Error('This tool has already been returned.')
+  }
+  if (!returnRequested(txn)) {
+    throw new Error('This loan has no return request open for it.')
+  }
+  if (returnDecided(txn)) {
+    throw new Error('This return request has already been processed.')
+  }
+  return txn
+}
+
+/**
+ * Record that a return request's QR was scanned, independent of what staff
+ * then decide to do with it. Best-effort and never a reason the scan itself
+ * fails — a missed log line is not worth blocking the counter over.
+ */
+export async function logReturnQrScan(txn, actor) {
+  await afterWrite('return QR scan log', () =>
+    activity.log({
+      action: ACTIVITY.RETURN_QR_SCANNED,
+      toolId: txn.toolId,
+      toolName: txn.toolName,
+      userId: actor?.id,
+      userName: actor?.fullName,
+      transactionId: txn.id,
+      message: `${actor?.fullName ?? 'Staff'} scanned the return QR for ${txn.toolName}.`,
+      meta: { role: actor?.role ?? null },
+    }),
+  )
+}
+
+/**
+ * Accept a scanned or manually opened return request: the tool came back in
+ * good order. This is `returnTool()`'s atomic close-out, plus the
+ * `return_decision`/`return_processed_*` columns `0036` adds so the request
+ * itself — not only the loan — records who decided it and when.
+ */
+export async function acceptReturn({ transactionId, condition, notes, returnLocation }, actor) {
+  const txn = await loadOpenReturnRequest(transactionId, actor)
+  if (!RETURN_CONDITIONS.includes(condition)) {
+    throw new ValidationError({ condition: 'Select the condition of the returned tool.' })
+  }
+
+  const timestamp = nowISO()
+  const damaged = condition === CONDITION.DAMAGED
+  const wasOverdue = txn.status === TXN_STATUS.OVERDUE
+  const qrAvailable = await returnQrAvailable()
+
+  const closingLocation = (await locationTrackingAvailable())
+    ? toStoredLocation(returnLocation, actor)
+    : null
+
+  const patch = {
+    ...(closingLocation ? { returnLocation: closingLocation } : {}),
+    returnDate: timestamp,
+    status: damaged ? TXN_STATUS.DAMAGED : TXN_STATUS.RETURNED,
+    conditionIn: condition,
+    wasOverdue,
+    notes: [txn.notes, notes?.trim()].filter(Boolean).join(' — '),
+    receivedById: actor?.id ?? null,
+    receivedByName: actor?.fullName ?? null,
+    updatedAt: timestamp,
+    ...(qrAvailable
+      ? {
+          returnDecision: RETURN_DECISION.ACCEPTED,
+          returnProcessedAt: timestamp,
+          returnProcessedById: actor?.id ?? null,
+          returnProcessedByName: actor?.fullName ?? null,
+        }
+      : {}),
+  }
+
+  const tool = await db.runAtomic(async (atomic) => {
+    const current = await atomic.get(COLLECTIONS.transactions, txn.id)
+    if (!current) throw new Error('Transaction not found.')
+    if (!ACTIVE_TXN_STATUSES.includes(current.status)) {
+      throw new Error('This tool has already been returned.')
+    }
+    if (qrAvailable && current.returnDecision) {
+      throw new Error('This return request has already been processed.')
+    }
+
+    atomic.update(COLLECTIONS.transactions, txn.id, patch)
+
+    const toolRecord = await atomic.get(COLLECTIONS.tools, current.toolId)
+    if (toolRecord) {
+      atomic.update(COLLECTIONS.tools, toolRecord.id, {
+        status: damaged ? TOOL_STATUS.DAMAGED : TOOL_STATUS.AVAILABLE,
+        condition,
+        currentBorrowerId: null,
+        currentTransactionId: null,
+        updatedAt: timestamp,
+      })
+    }
+    return toolRecord
+  })
+
+  const updatedTxn = { ...txn, ...patch }
+
+  if (tool) {
+    await afterWrite('return accept follow-up', async () => {
+      await activity.log({
+        action: ACTIVITY.RETURN_ACCEPTED,
+        toolId: tool.id,
+        toolName: tool.name,
+        userId: actor?.id,
+        userName: actor?.fullName,
+        transactionId: txn.id,
+        message: `Return accepted for ${txn.toolName}, handed in by ${txn.userName}.`,
+        meta: { condition, wasOverdue },
+      })
+
+      const borrower = txn.userId === actor?.id ? actor : { fullName: txn.userName }
+      await notifyParties(
+        {
+          staff: notifications.templates.returned(tool, updatedTxn, borrower),
+          personal: notifications.templates.returnedByYou(tool, updatedTxn, txn.userId, {
+            damaged: false,
+          }),
+        },
+        actor,
+        txn.userId,
+      )
+      await clearAlertsFor(txn.id)
+    })
+  }
+
+  return updatedTxn
+}
+
+/**
+ * Accept a return, but the tool has a problem — damaged, missing a part,
+ * dirty, incomplete, or something else worth a note. The loan still closes
+ * (the tool is physically back, whatever state it is in); what differs from a
+ * clean `acceptReturn()` is that the tool is pulled from circulation rather
+ * than put back on the shelf, and the issue is written onto both the
+ * transaction and the tool's own condition.
+ */
+export async function acceptReturnWithIssue(
+  { transactionId, issueType, description, condition, notes, returnLocation },
+  actor,
+) {
+  const txn = await loadOpenReturnRequest(transactionId, actor)
+  if (!RETURN_ISSUE_TYPES.includes(issueType)) {
+    throw new ValidationError({ issueType: 'Select what is wrong with the tool.' })
+  }
+  const resolvedCondition = RETURN_CONDITIONS.includes(condition) ? condition : CONDITION.DAMAGED
+
+  const timestamp = nowISO()
+  const wasOverdue = txn.status === TXN_STATUS.OVERDUE
+  // Every issue type pulls the tool out of circulation — even "Dirty" and
+  // "Incomplete", which are not damage: the tool still needs attention before
+  // the next borrower can be handed it, and `Damaged` is the status that keeps
+  // it out of the Available pool until staff act on it.
+
+  const closingLocation = (await locationTrackingAvailable())
+    ? toStoredLocation(returnLocation, actor)
+    : null
+
+  const issueNote = `Issue reported on return: ${issueType}${description ? ` — ${description.trim()}` : ''}`
+
+  const patch = {
+    ...(closingLocation ? { returnLocation: closingLocation } : {}),
+    returnDate: timestamp,
+    status: TXN_STATUS.DAMAGED,
+    conditionIn: resolvedCondition,
+    wasOverdue,
+    notes: [txn.notes, issueNote, notes?.trim()].filter(Boolean).join(' — '),
+    receivedById: actor?.id ?? null,
+    receivedByName: actor?.fullName ?? null,
+    updatedAt: timestamp,
+    returnDecision: RETURN_DECISION.ACCEPTED_WITH_ISSUE,
+    returnIssueType: issueType,
+    returnProcessedAt: timestamp,
+    returnProcessedById: actor?.id ?? null,
+    returnProcessedByName: actor?.fullName ?? null,
+  }
+
+  const tool = await db.runAtomic(async (atomic) => {
+    const current = await atomic.get(COLLECTIONS.transactions, txn.id)
+    if (!current) throw new Error('Transaction not found.')
+    if (!ACTIVE_TXN_STATUSES.includes(current.status)) {
+      throw new Error('This tool has already been returned.')
+    }
+    if (current.returnDecision) {
+      throw new Error('This return request has already been processed.')
+    }
+
+    atomic.update(COLLECTIONS.transactions, txn.id, patch)
+
+    const toolRecord = await atomic.get(COLLECTIONS.tools, current.toolId)
+    if (toolRecord) {
+      atomic.update(COLLECTIONS.tools, toolRecord.id, {
+        status: TOOL_STATUS.DAMAGED,
+        condition: resolvedCondition,
+        currentBorrowerId: null,
+        currentTransactionId: null,
+        updatedAt: timestamp,
+      })
+    }
+    return toolRecord
+  })
+
+  const updatedTxn = { ...txn, ...patch }
+
+  if (tool) {
+    await afterWrite('return accept-with-issue follow-up', async () => {
+      await activity.log({
+        action: ACTIVITY.RETURN_ACCEPTED_WITH_ISSUE,
+        toolId: tool.id,
+        toolName: tool.name,
+        userId: actor?.id,
+        userName: actor?.fullName,
+        transactionId: txn.id,
+        message: `Return accepted with an issue (${issueType}) for ${txn.toolName}, handed in by ${txn.userName}.`,
+        meta: { issueType, description, wasOverdue },
+      })
+
+      const borrower = txn.userId === actor?.id ? actor : { fullName: txn.userName }
+      await notifyParties(
+        {
+          staff: notifications.templates.damaged(tool, updatedTxn, borrower),
+          personal: notifications.templates.returnedByYou(tool, updatedTxn, txn.userId, {
+            damaged: true,
+          }),
+        },
+        actor,
+        txn.userId,
+      )
+      await clearAlertsFor(txn.id)
+    })
+  }
+
+  return updatedTxn
+}
+
+/**
+ * Reject a return request: the physical tool does not match what was scanned
+ * or opened, or the request should not be honoured at all. The loan stays
+ * exactly as it was — still open, still the borrower's — and the request
+ * columns are cleared rather than closed, so the borrower can ask again once
+ * whatever went wrong is sorted out.
+ */
+export async function rejectReturn({ transactionId, reason }, actor) {
+  const txn = await loadOpenReturnRequest(transactionId, actor)
+  const cleanReason = String(reason ?? '').trim()
+  if (!cleanReason) {
+    throw new ValidationError({ reason: 'Select or describe why this return is refused.' })
+  }
+
+  const timestamp = nowISO()
+  const patch = {
+    returnRequestedAt: null,
+    returnRequestCondition: null,
+    returnRequestNotes: null,
+    returnQrToken: null,
+    returnDecision: RETURN_DECISION.REJECTED,
+    returnRejectionReason: cleanReason,
+    returnProcessedAt: timestamp,
+    returnProcessedById: actor?.id ?? null,
+    returnProcessedByName: actor?.fullName ?? null,
+    updatedAt: timestamp,
+  }
+
+  const updated = await db.update(COLLECTIONS.transactions, txn.id, patch)
+
+  await afterWrite('return reject follow-up', async () => {
+    await activity.log({
+      action: ACTIVITY.RETURN_REJECTED,
+      toolId: txn.toolId,
+      toolName: txn.toolName,
+      userId: actor?.id,
+      userName: actor?.fullName,
+      transactionId: txn.id,
+      message: `Return request rejected for ${txn.toolName} (${cleanReason}). The loan stays open.`,
+      meta: { reason: cleanReason },
+    })
+
+    const tool = await db.get(COLLECTIONS.tools, txn.toolId).catch(() => null)
+    if (tool) {
+      await notifications.create({
+        ...notifications.templates.returnRejected(tool, txn, cleanReason),
+        userId: txn.userId,
+      })
+    }
+  })
+
+  return updated ?? { ...txn, ...patch }
 }
 
 /** Remove the open alerts tied to a transaction once it is closed. */

@@ -310,6 +310,19 @@ export const templates = {
     link: `/tools/${tool.id}`,
   }),
 
+  /** The borrower's own copy: their return request was refused and the loan stays open. */
+  returnRejected: (tool, txn, reason) => ({
+    type: NOTIF_TYPE.SYSTEM,
+    title: 'Return not accepted',
+    message: `${tool.name} was not accepted as returned${reason ? ` — ${reason}` : ''}. The tool is still on your record.`,
+    dedupeKey: `return-rejected:${txn?.id ?? ''}:${nowISO()}`,
+    toolId: tool.id,
+    toolName: tool.name,
+    userId: txn?.userId ?? null,
+    transactionId: txn?.id ?? null,
+    link: `/tools/${tool.id}`,
+  }),
+
   maintenance: (tool, record) => ({
     type: NOTIF_TYPE.MAINTENANCE,
     title: 'Maintenance scheduled',

@@ -14,6 +14,8 @@ import {
   MAINTENANCE_STATUS_STYLES,
   REQUEST_STATUS_STYLES,
   RESERVATION_STATUS_STYLES,
+  RETURN_DECISION_LABELS,
+  RETURN_DECISION_STYLES,
   ROLE_STYLES,
   STATUS_STYLES,
   TXN_STATUS_STYLES,
@@ -75,6 +77,12 @@ export const ReservationStatusBadge = ({ status, dot = true }) => (
 export const MaintenanceStatusBadge = ({ status }) => (
   <Badge className={MAINTENANCE_STATUS_STYLES[status]} dot>
     {status}
+  </Badge>
+)
+
+export const ReturnDecisionBadge = ({ decision, dot = true }) => (
+  <Badge className={RETURN_DECISION_STYLES[decision]} dot={dot}>
+    {RETURN_DECISION_LABELS[decision] ?? decision}
   </Badge>
 )
 
@@ -266,20 +274,17 @@ export function ErrorState({ title = 'Something went wrong', description, onRetr
   )
 }
 
-export const Spinner = ({ className, ...props }) => (
-  <Loader2 className={cx('h-4 w-4 animate-spin', className)} {...props} />
-)
+export const Spinner = () => null
 
 /*
  * `LoadingBlock` — a centred spinner with a "Loading…" label — used to live
  * here and was removed deliberately.
  *
  * It was the application's second loading design: a page that used it looked
- * nothing like a page that used a skeleton, and nothing like the branded
- * start-up screen. There are now exactly two states, each with one job:
+ * nothing like a page that used a skeleton. The whole-app start-up loader was
+ * removed too — the system launch screen already covers that moment — so there
+ * is now exactly one loading design, with one job:
  *
- *   • `AppLoader`     the whole application is starting (session restore).
- *                     Rendered once, at the root, and nowhere else.
  *   • `Skeleton` &c.  a screen that is already open is waiting for its data,
  *                     or for its own code chunk.
  *
@@ -316,18 +321,14 @@ export function SkeletonRows({ rows = 5, columns = 4 }) {
  * the pages themselves use for their data, so a first visit and a refresh of an
  * already-loaded page look like the same thing rather than two different states.
  */
-export function PageSkeleton() {
+export function PageLoading() {
+  // Shown only while a lazy page's chunk arrives, inside the shell's content
+  // column — the rail, top bar and bottom bar are already painted and stay
+  // interactive, so the indicator never covers them and the page area it
+  // occupies holds its shape rather than reflowing.
   return (
-    <div className="min-w-0 px-3 pt-4 sm:px-5" aria-hidden="true">
-      {/* A page header — the title block every screen opens with. */}
-      <Skeleton className="h-7 w-44" />
-      <Skeleton className="mt-2 h-4 w-64" />
-      {/* And the body beneath it. */}
-      <div className="mt-5 space-y-2.5">
-        <Skeleton className="h-24 rounded-xl" />
-        <Skeleton className="h-24 rounded-xl" />
-        <Skeleton className="h-24 rounded-xl" />
-      </div>
+    <div className="grid min-h-[45vh] place-items-center" aria-hidden="true">
+      <Skeleton className="h-6 w-32 rounded" />
     </div>
   )
 }

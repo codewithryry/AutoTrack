@@ -12,6 +12,36 @@ About screen, `android/app/build.gradle` derives the Android `versionName` and `
 it, and `npm run verify` fails if the two drift apart. `scripts/set-version.mjs` writes all of
 them together.
 
+## 0.2.7
+
+### Returns
+
+- **QR-first return workflow.** Requesting a return now generates a return QR code, shown on the
+  return page as soon as the request exists. Staff scan it from a dedicated Scan Return QR page to
+  pull up the request instantly, instead of searching the return desk by hand. The manual return
+  desk remains available as a fallback and shares the same underlying request/decide logic — there
+  is no separate code path for the two.
+- Scanning a return QR leads straight into inspection: staff can **Accept** the return, **Accept
+  with an issue** (recording a damage/issue note against the loan and the tool's condition), or
+  **Reject** it, sending the tool back to the borrower without closing the loan.
+- A return request cannot be created twice for the same loan, and a QR that has already been
+  decided is reported back as already processed rather than being actioned again.
+- Every scan and decision — accepted, accepted with an issue, or rejected — is written to the
+  activity log, alongside the existing borrow/return trail, so a tool's condition and handling
+  history stays traceable end to end.
+- Accepting or rejecting a return keeps the transaction, the tool's status, and the request in sync
+  in one step, so the inventory can never show a tool as available while its loan is still open, or
+  the reverse.
+- The Scan page's camera flow was extended to recognise return QR codes on top of tool QR codes,
+  without changing how an ordinary tool scan behaves.
+
+### Fixed
+
+- **Returned loans no longer block a new request for the same tool.** A tool with a past loan that
+  has already been returned (or cancelled) is treated as available again; only a loan or reservation
+  that is still active and genuinely overlaps the requested dates is treated as a conflict. A tool
+  borrowed and returned Sept 10–12, for example, no longer refuses a fresh request for Sept 15–18.
+
 ## 0.2.6
 
 ### Inventory

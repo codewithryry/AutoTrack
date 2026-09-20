@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   ArrowRight,
   CalendarClock,
+  ChevronDown,
   ClipboardList,
   HardHat,
   MapPin,
@@ -20,8 +21,11 @@ import {
   EmptyState,
   MaintenanceStatusBadge,
   SectionCard,
+  SelectField,
   Skeleton,
+  Spinner,
   StatusBadge,
+  TextAreaField,
 } from '../components/ui'
 import Walkthrough, { usePageTour } from '../components/Walkthrough'
 import { QRCodePanel } from '../components/QRCodeDisplay'
@@ -33,11 +37,12 @@ import ToolImage from '../components/ToolImage'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import { useMediaQuery, useTool, useToolMaintenance, useToolTransactions } from '../hooks'
+import * as maintenanceService from '../services/maintenance'
 import * as toolService from '../services/tools'
 import * as txnService from '../services/transactions'
 import { AutoLocationNotice, LocationTrail, useAutoLocation } from '../components/LocationCapture'
 import { canReturnTransaction, isStaff, isStudent, PERM } from '../utils/permissions'
-import { TOOL_STATUS, SERIAL_CRITICAL_CATEGORIES } from '../utils/constants'
+import { MAINTENANCE_TYPES, TOOL_STATUS, SERIAL_CRITICAL_CATEGORIES } from '../utils/constants'
 import { cx } from '../utils/helpers'
 import { formatCoords, isLocation } from '../utils/geo'
 import { daysBetween, dueLabel, formatDate, formatDateTime, timeAgo } from '../utils/dates'
@@ -143,8 +148,8 @@ export default function ToolDetailPage() {
   const tour = usePageTour('tool-detail', user?.id)
   const tourSteps = useMemo(() => toolDetailTour(isStudent(user)), [user])
 
-  // The actions render twice below — once beside the header for `lg:` and up,
-  // once after the tool summary for anything narrower — so exactly one of the
+  // The actions render twice below — once beside the record card for `lg:`
+  // and up, once after it for anything narrower — so exactly one of the
   // two copies of `data-tour="detail-action"` (and "detail-edit") must exist
   // at a time. `Walkthrough` resolves a target with a plain
   // `document.querySelector`, which always returns the first match in the
@@ -167,6 +172,13 @@ export default function ToolDetailPage() {
 
   const [editing, setEditing] = useState(false)
   const [reporting, setReporting] = useState(false)
+  // A phone opens the same form in place, inside its own bordered action
+  // list, instead of the modal `reporting` opens for desktop — same reason
+  // Scan Result's mobile "Report a problem" row now expands instead of
+  // popping a dialog. Kept as its own flag rather than reusing `reporting`
+  // so the two layouts (rendered at different widths, sometimes both mounted
+  // briefly during a resize) can never fight over one boolean.
+  const [reportingInline, setReportingInline] = useState(false)
   const [selectedTxn, setSelectedTxn] = useState(null)
   const [confirm, setConfirm] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -285,70 +297,126 @@ export default function ToolDetailPage() {
         {backLabel}
       </Link>
 
-      {/* The heading is a card matching the Tool record card below it — same
-          surface, same header strip, same border and radius — so the page reads
-          as one record: the tool named on its card, then the record itself. The
-          name keeps the page-title size rather than the card's small section
-          title.
-
-          The actions beside it here are the desktop shape only. On a phone —
-          and on a tablet up to `lg:`, matching Scan Result's own breakpoint —
-          they render in a completely different place: after a compact
-          identity summary, before the Tool Record, not just a narrower
-          version of this same row; see the block below. */}
+      {/* The tool's whole record is one merged card: identity — picture, name,
+          category/brand and status badges — in the header strip, then the
+          identifying fields, and the maintenance and borrowing metadata, in
+          one body. The actions beside it here are the desktop shape only. On a
+          phone — and on a tablet up to `lg:` — they render after the card
+          instead; see the block below. */}
       <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <section className="card min-w-0 flex-1 overflow-hidden">
-          <header className="border-b px-4 py-3" style={{ background: 'rgb(var(--surface-2))' }}>
-            <h1 className="truncate text-xl font-extrabold tracking-tight sm:text-2xl">
-              {tool.name}
-            </h1>
-            <p className="muted mt-1 text-sm">
-              {tool.category} · {tool.brand || 'Unbranded'}
-            </p>
+        <section className="card min-w-0 flex-1 overflow-hidden" data-tour="detail-record">
+          <header
+            className="flex items-start gap-3 border-b px-4 py-3.5"
+            style={{ background: 'rgb(var(--surface-2))' }}
+          >
+            <ToolImage
+              tool={tool}
+              rounded="rounded-xl"
+              className="h-16 w-16 sm:h-20 sm:w-20"
+              alt={`Picture of ${tool.name}`}
+            />
+            <div className="min-w-0 flex-1">
+              <h1 className="truncate text-xl font-extrabold tracking-tight sm:text-2xl">
+                {tool.name}
+              </h1>
+              <p className="muted mt-1 text-sm">
+                {tool.category} · {tool.brand || 'Unbranded'}
+              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <StatusBadge status={tool.status} />
+                <ConditionBadge condition={tool.condition} />
+              </div>
+            </div>
           </header>
+
+          <div className="p-4">
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">
+              <DetailItem label="Tool ID" className="min-w-0" mono>
+                <span className="block truncate">{tool.id}</span>
+              </DetailItem>
+              <DetailItem label="Model" className="min-w-0">
+                <span className="block truncate">{tool.model || '—'}</span>
+              </DetailItem>
+              <DetailItem label="Location" className="min-w-0">
+                <span className="flex items-center gap-1.5">
+                  <MapPin className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                  <span className="truncate">{tool.location}</span>
+                </span>
+              </DetailItem>
+            </dl>
+
+            <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 border-t pt-4 sm:grid-cols-3">
+              {showSerial && (
+                <DetailItem label="Serial number" className="min-w-0" mono>
+                  <span className="block truncate">{tool.serialNumber || '—'}</span>
+                </DetailItem>
+              )}
+              <DetailItem label="Purchased" mono>
+                {formatDate(tool.purchaseDate)}
+              </DetailItem>
+              <DetailItem label="Last maintenance" mono>
+                {formatDate(tool.lastMaintenanceDate)}
+              </DetailItem>
+              <DetailItem label="Next maintenance" mono>
+                <span className={cx(maintenanceDue && 'text-orange-600 dark:text-orange-400')}>
+                  {formatDate(tool.nextMaintenanceDate)}
+                </span>
+              </DetailItem>
+              <DetailItem label="Times borrowed" mono>
+                {transactions.length}
+              </DetailItem>
+            </dl>
+
+            {tool.description && (
+              <div className="mt-4 border-t pt-4">
+                <DetailItem label="Description">
+                  <span className="muted font-normal">{tool.description}</span>
+                </DetailItem>
+              </div>
+            )}
+            {tool.notes && (
+              <div className="mt-4 border-t pt-4">
+                <DetailItem label="Notes">
+                  <span className="muted whitespace-pre-wrap font-normal">{tool.notes}</span>
+                </DetailItem>
+              </div>
+            )}
+          </div>
         </section>
         {/* Desktop only — `lg:` and up, the same width this page's own body
             grid and Scan Result's phone/desktop split both switch at. On
-            anything narrower the actions render in a different place entirely
-            (see below): a compact identity summary first, then the actions
-            right after it, matching Scan Result's own flow, before the fuller
-            Tool Record. */}
-        <div className="hidden lg:block">
-          <ToolActions
-            layout="desktop"
-            isStaffUser={isStaff(user)}
-            tool={tool}
-            activeLoan={activeLoan}
-            eligibility={eligibility}
-            can={can}
-            historyHref={historyHref}
-            onReport={() => setReporting(true)}
-            onEdit={() => setEditing(true)}
-            tourEnabled={isDesktopWidth}
-          />
-        </div>
+            anything narrower the actions render after the record card instead.
+
+            Dropped entirely when this page was opened from a scan result:
+            Request to borrow, Return tool and Report a problem already sit
+            one tap back on the scan result screen, so repeating them here
+            would be the same action offered twice. Arriving from a scan makes
+            this page purely a detail read — what the tool is, not what to do
+            about it. */}
+        {!fromScan && (
+          <div className="hidden lg:block">
+            <ToolActions
+              layout="desktop"
+              isStaffUser={isStaff(user)}
+              tool={tool}
+              activeLoan={activeLoan}
+              eligibility={eligibility}
+              can={can}
+              historyHref={historyHref}
+              onReport={() => setReporting(true)}
+              onEdit={() => setEditing(true)}
+              tourEnabled={isDesktopWidth}
+            />
+          </div>
+        )}
       </div>
 
-      {/* ---------------------------------------------------------------------
-          Below `lg:` — phone and tablet alike, matching the width Scan
-          Result's own `lg:hidden` switches its layout at. A scanned tool and
-          an inventory-opened tool are the same record, so they read the same
-          way at the same widths: a compact identity — image, status,
-          condition, the few fields that say what this is — immediately
-          followed by the action, before anything longer. The full Tool
-          Record with dates, description and notes still exists below; this
-          is not a shorter version of it, it is the part of it that a
-          decision actually needs, promoted above the part that does not.
-
-          `ToolSummary` duplicates a few fields the Tool Record card also
-          shows (image, ID, brand, model, location) rather than the Tool
-          Record hiding them below `lg:`: the record is one coherent block
-          whichever width it renders at, and what changes between Scan Result
-          and this page is only where the actions sit relative to it, not
-          which card owns which field. --------------------------------------- */}
-      <div className="mb-4 lg:hidden">
-        <ToolSummary tool={tool} />
-        <div className="mt-4">
+      {/* Below `lg:` — phone and tablet alike — the action rows sit right
+          beneath the record card, which already carries the compact identity
+          (image, status, ID, location, brand/model) that used to precede them.
+          Same `fromScan` rule as the desktop copy above. */}
+      {!fromScan && (
+        <div className="mb-4 lg:hidden">
           <ToolActions
             layout="mobile"
             isStaffUser={isStaff(user)}
@@ -357,12 +425,17 @@ export default function ToolDetailPage() {
             eligibility={eligibility}
             can={can}
             historyHref={historyHref}
-            onReport={() => setReporting(true)}
+            reportingInline={reportingInline}
+            onToggleReportInline={() => setReportingInline((v) => !v)}
+            onReportedInline={() => {
+              setReportingInline(false)
+              reload()
+            }}
             onEdit={() => setEditing(true)}
             tourEnabled={!isDesktopWidth}
           />
         </div>
-      </div>
+      )}
 
       {/* ------------------------------- alerts ------------------------------- */}
       <div className="mb-4 space-y-2">
@@ -408,97 +481,6 @@ export default function ToolDetailPage() {
               }}
             />
           )}
-
-          <SectionCard title="Tool record" data-tour="detail-record">
-            {/* One layout at every width: a fixed square thumbnail with the
-                badges beside it, so a phone reads the same way the desktop does
-                instead of giving a picture the whole width and pushing the
-                record down. `min-w-0` on the text side is what lets the badges
-                wrap inside the card rather than widening it. A tool without a
-                picture keeps the icon tile, at the same size. */}
-            <div className="mb-4 flex items-start gap-3">
-              <ToolImage
-                tool={tool}
-                rounded="rounded-xl"
-                className="h-20 w-20 border sm:h-24 sm:w-24"
-                alt={`Picture of ${tool.name}`}
-              />
-              {/* The space beside the thumbnail carries the badges and the
-                  three fields that identify the tool, so the column is used
-                  rather than left blank and the grid below starts shorter. */}
-              <div className="min-w-0 flex-1 space-y-2.5">
-                <div className="flex flex-wrap items-center gap-2">
-                  <StatusBadge status={tool.status} />
-                  <ConditionBadge condition={tool.condition} />
-                  <span
-                    className="badge border-transparent"
-                    style={{ background: 'rgb(var(--surface-3))', color: 'rgb(var(--text-muted))' }}
-                  >
-                    {tool.category}
-                  </span>
-                </div>
-                {/* Two up on a phone with Model on its own line beneath, three
-                    across from `sm` where the row has the width for it. */}
-                {/* `min-w-0` on each cell: a grid item sizes to its content by
-                    default, so without it a long brand or model name widens the
-                    row instead of ellipsing inside it. */}
-                <dl className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">
-                  <DetailItem label="Tool ID" className="min-w-0" mono>
-                    <span className="block truncate">{tool.id}</span>
-                  </DetailItem>
-                  <DetailItem label="Brand" className="min-w-0">
-                    <span className="block truncate">{tool.brand || '—'}</span>
-                  </DetailItem>
-                  <DetailItem label="Model" className="col-span-2 min-w-0 sm:col-span-1">
-                    <span className="block truncate">{tool.model || '—'}</span>
-                  </DetailItem>
-                </dl>
-              </div>
-            </div>
-
-            <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-              {showSerial && (
-                <DetailItem label="Serial number" className="min-w-0" mono>
-                  <span className="block truncate">{tool.serialNumber || '—'}</span>
-                </DetailItem>
-              )}
-              <DetailItem label="Location" className="col-span-2 min-w-0 sm:col-span-1">
-                <span className="flex items-center gap-1.5">
-                  <MapPin className="h-3.5 w-3.5 shrink-0 opacity-60" />
-                  <span className="truncate">{tool.location}</span>
-                </span>
-              </DetailItem>
-              <DetailItem label="Purchased" mono>
-                {formatDate(tool.purchaseDate)}
-              </DetailItem>
-              <DetailItem label="Last maintenance" mono>
-                {formatDate(tool.lastMaintenanceDate)}
-              </DetailItem>
-              <DetailItem label="Next maintenance" mono>
-                <span className={cx(maintenanceDue && 'text-orange-600 dark:text-orange-400')}>
-                  {formatDate(tool.nextMaintenanceDate)}
-                </span>
-              </DetailItem>
-              <DetailItem label="Times borrowed" mono>
-                {transactions.length}
-              </DetailItem>
-            </dl>
-
-            {tool.description && (
-              <div className="mt-4 border-t pt-4">
-                <DetailItem label="Description">
-                  <span className="muted font-normal">{tool.description}</span>
-                </DetailItem>
-              </div>
-            )}
-            {tool.notes && (
-              <div className="mt-4 border-t pt-4">
-                <DetailItem label="Notes">
-                  <span className="muted whitespace-pre-wrap font-normal">{tool.notes}</span>
-                </DetailItem>
-              </div>
-            )}
-          </SectionCard>
 
           {/* Staff only: a student's borrowings of this tool are the Borrow
               history page above, and showing the newest three here as well
@@ -718,67 +700,10 @@ export default function ToolDetailPage() {
 }
 
 /**
- * The compact identity a phone sees before the action — image, status,
- * condition and category, the tool's own three identifying fields, and where
- * it lives. Everything a "can I take this?" decision actually needs, and
- * nothing that decision does not: dates, notes and the description are still
- * only in the Tool Record below, which this is not a smaller copy of.
- *
- * This is what makes the flow match Scan Result's own: identity, then the
- * action, then more detail for whoever wants it. A tool opened from the
- * inventory is the same record as one just scanned, so the same shape of
- * information should come before the same shape of action, whichever door it
- * was opened through.
- */
-function ToolSummary({ tool }) {
-  return (
-    <section className="card overflow-hidden">
-      <div className="p-4">
-        <div className="flex items-start gap-3">
-          <ToolImage
-            tool={tool}
-            rounded="rounded-xl"
-            className="h-20 w-20 border"
-            alt={`Picture of ${tool.name}`}
-          />
-          <div className="min-w-0 flex-1 space-y-2.5">
-            <div className="flex flex-wrap items-center gap-2">
-              <StatusBadge status={tool.status} />
-              <ConditionBadge condition={tool.condition} />
-              <span
-                className="badge border-transparent"
-                style={{ background: 'rgb(var(--surface-3))', color: 'rgb(var(--text-muted))' }}
-              >
-                {tool.category}
-              </span>
-            </div>
-            <p className="subtle mono truncate text-xs">{tool.id}</p>
-          </div>
-        </div>
-
-        <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 border-t pt-3">
-          <DetailItem label="Location" className="min-w-0">
-            <span className="flex items-center gap-1.5">
-              <MapPin className="h-3.5 w-3.5 shrink-0 opacity-60" />
-              <span className="truncate">{tool.location}</span>
-            </span>
-          </DetailItem>
-          <DetailItem label="Brand / model" className="min-w-0">
-            <span className="block truncate">
-              {[tool.brand, tool.model].filter(Boolean).join(' · ') || '—'}
-            </span>
-          </DetailItem>
-        </dl>
-      </div>
-    </section>
-  )
-}
-
-/**
  * Picks the one action set this person gets — staff's or a student's — and
  * the one shape it renders in — desktop's compact buttons, or a phone's
  * list rows — so neither of the two places that render actions (the desktop
- * header row and the phone's post-summary row) has to repeat either decision.
+ * header row and the phone's row below the record card) has to repeat either decision.
  * All four combinations stay in one place this way: change who gets what, or
  * how a layout presents it, and every call site follows.
  *
@@ -803,6 +728,12 @@ function ToolActions({
   historyHref,
   onReport,
   onEdit,
+  // Mobile only: the inline report form's own open flag and handlers, in
+  // place of `onReport` opening the desktop modal — see the note on
+  // `reportingInline` where this page keeps its state.
+  reportingInline,
+  onToggleReportInline,
+  onReportedInline,
   // Whether THIS copy is the one allowed to carry `data-tour`. Exactly one of
   // the two responsive instances should ever be `true` at a time — see the
   // note beside `isDesktopWidth` above.
@@ -816,7 +747,9 @@ function ToolActions({
         eligibility={eligibility}
         can={can}
         historyHref={historyHref}
-        onReport={onReport}
+        reporting={reportingInline}
+        onToggleReport={onToggleReportInline}
+        onReported={onReportedInline}
         onEdit={onEdit}
         tourEnabled={tourEnabled}
       />
@@ -826,7 +759,9 @@ function ToolActions({
         activeLoan={activeLoan}
         eligibility={eligibility}
         can={can}
-        onReport={onReport}
+        reporting={reportingInline}
+        onToggleReport={onToggleReportInline}
+        onReported={onReportedInline}
         tourEnabled={tourEnabled}
       />
     )
@@ -1019,12 +954,18 @@ function StaffActions({ tool, activeLoan, eligibility, can, historyHref, onRepor
  * the list looks like one thing with several rows rather than several things
  * that happen to be stacked. `as` renders it as whichever element the action
  * actually is: a `Link` when it goes somewhere, a `button` when it opens a
- * dialog in place, matching what the row does rather than what is convenient.
+ * dialog elsewhere, matching what the row does rather than what is convenient.
+ *
+ * `expanded` is for the one row that does neither — Report a problem opens in
+ * place now, so its arrow becomes a chevron that rotates with the row's own
+ * open state, the same affordance the Settings accordion and Scan Result's
+ * report row already use.
  */
-function ActionRow({ as: Tag = 'button', divided = true, children, ...props }) {
+function ActionRow({ as: Tag = 'button', divided = true, expanded, children, ...props }) {
   return (
     <Tag
       type={Tag === 'button' ? 'button' : undefined}
+      aria-expanded={expanded}
       className={cx(
         'flex min-h-[46px] w-full items-center justify-between gap-3 px-3 text-left text-[14px]',
         'font-semibold transition-colors hover:bg-black/5 dark:hover:bg-white/5',
@@ -1034,8 +975,117 @@ function ActionRow({ as: Tag = 'button', divided = true, children, ...props }) {
       {...props}
     >
       {children}
-      <ArrowRight className="h-4 w-4 shrink-0 opacity-40" />
+      {expanded === undefined ? (
+        <ArrowRight className="h-4 w-4 shrink-0 opacity-40" />
+      ) : (
+        <ChevronDown
+          className={cx('h-4 w-4 shrink-0 opacity-40 transition-transform', expanded && 'rotate-180')}
+        />
+      )}
     </Tag>
+  )
+}
+
+/**
+ * The report form itself, laid out beneath its row rather than in a modal —
+ * the phone counterpart of `ReportProblemDialog`, sharing the same service
+ * call (`maintenanceService.reportProblem`) and fields. Collapsed with the
+ * same grid-rows technique the Settings accordion uses, so a variable-height
+ * form (an error message, a longer description) still animates smoothly.
+ */
+function ReportProblemInlineRow({ tool, open, onReported, onCancel }) {
+  return (
+    <div
+      className="grid transition-[grid-template-rows] duration-300 ease-in-out motion-reduce:transition-none"
+      style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
+    >
+      <div className="overflow-hidden">
+        <div className="border-t" style={{ borderColor: 'rgb(var(--border))' }}>
+          <ReportProblemInline tool={tool} open={open} onReported={onReported} onCancel={onCancel} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ReportProblemInline({ tool, open, onReported, onCancel }) {
+  const toast = useToast()
+  const [type, setType] = useState('Corrective')
+  const [description, setDescription] = useState('')
+  const [errors, setErrors] = useState({})
+  const [busy, setBusy] = useState(false)
+
+  // A fresh form each time it opens, so a previous draft never attaches
+  // itself to a different tool.
+  useEffect(() => {
+    if (!open) return
+    setType('Corrective')
+    setDescription('')
+    setErrors({})
+    setBusy(false)
+  }, [open, tool?.id])
+
+  const submit = async (event) => {
+    event.preventDefault()
+    if (busy) return
+    setBusy(true)
+    setErrors({})
+    try {
+      await maintenanceService.reportProblem({ toolId: tool.id, type, description })
+      toast.success('Thank you — the laboratory staff have been notified.', {
+        title: 'Problem reported',
+      })
+      onReported?.()
+    } catch (err) {
+      if (err?.errors) setErrors(err.errors)
+      else toast.error(err?.message ?? 'The report could not be sent.')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="space-y-3 p-3.5">
+      <div
+        className="flex items-start gap-2.5 rounded-lg border p-3"
+        style={{ background: 'rgb(var(--surface-2))' }}
+      >
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-orange-500" />
+        <p className="subtle text-xs leading-relaxed">
+          This report is filed against <span className="font-semibold">{tool.name}</span> and goes
+          to the laboratory staff. The tool's status is not changed by reporting it.
+        </p>
+      </div>
+
+      <SelectField
+        label="What kind of problem?"
+        value={type}
+        onChange={(e) => setType(e.target.value)}
+        options={MAINTENANCE_TYPES}
+        error={errors.type}
+        required
+      />
+
+      <TextAreaField
+        label="What is wrong?"
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+        error={errors.description}
+        hint="What you noticed, and when. Staff see this on the service log."
+        rows={3}
+        maxLength={500}
+        required
+      />
+
+      <div className="flex justify-end gap-2 pt-1">
+        <button type="button" onClick={onCancel} className="btn btn-ghost" disabled={busy}>
+          Cancel
+        </button>
+        <button type="submit" className="btn btn-primary" disabled={busy}>
+          {busy && <Spinner />}
+          Send report
+        </button>
+      </div>
+    </form>
   )
 }
 
@@ -1045,7 +1095,7 @@ function ActionRow({ as: Tag = 'button', divided = true, children, ...props }) {
  * pattern below, kept in its own bordered box so it still reads as a distinct
  * group rather than a stray line of text under the button.
  */
-function MobileStudentActions({ tool, activeLoan, eligibility, can, onReport, tourEnabled }) {
+function MobileStudentActions({ tool, activeLoan, eligibility, can, reporting, onToggleReport, onReported, tourEnabled }) {
   const tourTarget = tourEnabled ? { 'data-tour': 'detail-action' } : {}
 
   return (
@@ -1091,9 +1141,15 @@ function MobileStudentActions({ tool, activeLoan, eligibility, can, onReport, to
         className="overflow-hidden rounded-xl shadow-card"
         style={{ background: 'rgb(var(--surface))', border: '1px solid rgb(var(--border))' }}
       >
-        <ActionRow onClick={onReport} divided={false}>
+        <ActionRow onClick={onToggleReport} divided={false} expanded={reporting}>
           Report a problem
         </ActionRow>
+        <ReportProblemInlineRow
+          tool={tool}
+          open={reporting}
+          onReported={onReported}
+          onCancel={onToggleReport}
+        />
       </div>
     </div>
   )
@@ -1110,7 +1166,7 @@ function MobileStudentActions({ tool, activeLoan, eligibility, can, onReport, to
  * lets its position — last — say that it is the one that leads elsewhere
  * rather than changing something.
  */
-function MobileStaffActions({ tool, activeLoan, eligibility, can, historyHref, onReport, onEdit, tourEnabled }) {
+function MobileStaffActions({ tool, activeLoan, eligibility, can, historyHref, reporting, onToggleReport, onReported, onEdit, tourEnabled }) {
   const actionTarget = tourEnabled ? { 'data-tour': 'detail-action' } : {}
   const editTarget = tourEnabled ? { 'data-tour': 'detail-edit' } : {}
   const canEdit = can(PERM.TOOL_EDIT)
@@ -1155,9 +1211,15 @@ function MobileStaffActions({ tool, activeLoan, eligibility, can, historyHref, o
         className="overflow-hidden rounded-xl shadow-card"
         style={{ background: 'rgb(var(--surface))', border: '1px solid rgb(var(--border))' }}
       >
-        <ActionRow onClick={onReport} divided={false}>
+        <ActionRow onClick={onToggleReport} divided={false} expanded={reporting}>
           Report a problem
         </ActionRow>
+        <ReportProblemInlineRow
+          tool={tool}
+          open={reporting}
+          onReported={onReported}
+          onCancel={onToggleReport}
+        />
         {canEdit && (
           <ActionRow onClick={onEdit} {...editTarget}>
             Edit tool

@@ -16,10 +16,10 @@ export const APP_TITLE =
   'ToolTrack: QR-Based Automotive Laboratory Tool Monitoring System'
 
 /**
- * Shown on the loading screen. Kept in step with `package.json`; `npm run
+ * Shown in Settings → About app. Kept in step with `package.json`; `npm run
  * verify` fails if the two drift apart.
  */
-export const APP_VERSION = '0.2.6'
+export const APP_VERSION = '0.2.7'
 export const APP_TAGLINE = 'Scan. Borrow. Track. Return.'
 
 /* ------------------------------------------------------------------ *
@@ -66,6 +66,37 @@ export const RETURN_CONDITIONS = [
   CONDITION.GOOD,
   CONDITION.FAIR,
   CONDITION.DAMAGED,
+]
+
+/**
+ * How staff decided a scanned or manually opened return request — the
+ * `return_decision` column `0036` adds to `transactions`. Accepting and
+ * accepting-with-issue both close the loan (`status` becomes `Returned` or
+ * `Damaged`, exactly as `returnTool()` already did); rejecting leaves it open.
+ */
+export const RETURN_DECISION = {
+  ACCEPTED: 'accepted',
+  ACCEPTED_WITH_ISSUE: 'accepted_with_issue',
+  REJECTED: 'rejected',
+}
+
+/** What staff record when a returned tool has a problem. */
+export const RETURN_ISSUE_TYPES = [
+  'Damaged',
+  'Missing Part',
+  'Broken',
+  'Dirty',
+  'Incomplete',
+  'Other',
+]
+
+/** Why a scanned or manually opened return request was refused. */
+export const RETURN_REJECTION_REASONS = [
+  'Wrong Tool',
+  'Wrong Quantity',
+  'Tool Not Presented',
+  'Invalid Request',
+  'Other',
 ]
 
 /* ------------------------------------------------------------------ *
@@ -311,6 +342,11 @@ export const ACTIVITY = {
   USER_DELETED: 'user_deleted',
   LOGIN: 'login',
   SYSTEM: 'system',
+  RETURN_REQUEST_CREATED: 'return_request_created',
+  RETURN_QR_SCANNED: 'return_qr_scanned',
+  RETURN_ACCEPTED: 'return_accepted',
+  RETURN_ACCEPTED_WITH_ISSUE: 'return_accepted_with_issue',
+  RETURN_REJECTED: 'return_rejected',
 }
 
 /* ------------------------------------------------------------------ *
@@ -340,6 +376,19 @@ export const TXN_STATUS_STYLES = {
   [TXN_STATUS.OVERDUE]: STATUS_STYLES[TOOL_STATUS.OVERDUE],
   [TXN_STATUS.DAMAGED]: STATUS_STYLES[TOOL_STATUS.DAMAGED],
   [TXN_STATUS.LOST]: STATUS_STYLES[TOOL_STATUS.LOST],
+}
+
+/** How a decided return request reads on the scan/manual decision screens. */
+export const RETURN_DECISION_STYLES = {
+  [RETURN_DECISION.ACCEPTED]: STATUS_STYLES[TOOL_STATUS.AVAILABLE],
+  [RETURN_DECISION.ACCEPTED_WITH_ISSUE]: STATUS_STYLES[TOOL_STATUS.DAMAGED],
+  [RETURN_DECISION.REJECTED]: STATUS_STYLES[TOOL_STATUS.OVERDUE],
+}
+
+export const RETURN_DECISION_LABELS = {
+  [RETURN_DECISION.ACCEPTED]: 'Accepted',
+  [RETURN_DECISION.ACCEPTED_WITH_ISSUE]: 'Accepted with issue',
+  [RETURN_DECISION.REJECTED]: 'Rejected',
 }
 
 export const CONDITION_STYLES = {

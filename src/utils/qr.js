@@ -1,7 +1,7 @@
 import QRCode from 'qrcode'
 import { APP_NAME } from './constants'
 import { isNative } from './native'
-import { buildQRPayload } from './qrPayload'
+import { buildQRPayload, buildReturnQRPayload } from './qrPayload'
 
 /**
  * The payload helpers live in `utils/qrPayload.js` and are re-exported here.
@@ -23,9 +23,13 @@ import { buildQRPayload } from './qrPayload'
 export {
   QR_VERSION,
   TOOL_ID_PATTERN,
+  RETURN_QR_PREFIX,
   buildQRPayload,
   parseQRPayload,
   normalizeToolId,
+  buildReturnQRPayload,
+  isReturnQRPayload,
+  parseReturnQRPayload,
 } from './qrPayload'
 
 /* --------------------------- rendering --------------------------- */
@@ -48,6 +52,17 @@ export async function drawToCanvas(canvas, toolId, { size = 320 } = {}) {
     ...BASE_OPTIONS,
     width: size,
   })
+}
+
+/** PNG data URL for a return request's QR — same rendering, a different payload. */
+export async function returnQRDataURL(token, { size = 320 } = {}) {
+  return QRCode.toDataURL(buildReturnQRPayload(token), { ...BASE_OPTIONS, width: size, scale: 8 })
+}
+
+/** Draw a return request's QR straight into a canvas element. */
+export async function drawReturnQRToCanvas(canvas, token, { size = 320 } = {}) {
+  if (!canvas) return
+  await QRCode.toCanvas(canvas, buildReturnQRPayload(token), { ...BASE_OPTIONS, width: size })
 }
 
 export async function downloadQR(tool) {

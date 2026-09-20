@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
+  AlertTriangle,
   Bell,
+  CheckCircle2,
   ChevronDown,
   Database,
   Download,
@@ -9,13 +11,13 @@ import {
   FlaskConical,
   Github,
   Info,
+  RefreshCw,
   RotateCcw,
   Save,
-  Smartphone,
   Trash2,
   Upload,
 } from 'lucide-react'
-import { DeviceAccessControl, InstallAppCard } from '../components/DeviceAccess'
+import { DeviceAccessControl } from '../components/DeviceAccess'
 import { resetTours } from '../components/Walkthrough'
 import {
   ConfirmDialog,
@@ -26,7 +28,9 @@ import {
 } from '../components/ui'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
+import { useMediaQuery } from '../hooks'
 import * as db from '../services/db'
+import { getLatestRelease, RELEASES_PAGE } from '../services/releases'
 import * as settingsService from '../services/settings'
 import { seedDatabase } from '../data/seed'
 import { PERM } from '../utils/permissions'
@@ -34,6 +38,7 @@ import { cx, downloadBlob, downloadCSV, readFileAsText } from '../utils/helpers'
 import { APP_NAME, APP_VERSION } from '../utils/constants'
 import { externalLinkProps } from '../utils/native'
 import { formatDateTime } from '../utils/dates'
+import { compareVersions } from '../utils/version'
 import { TOOLS_CSV_COLUMNS } from './ToolsPage'
 import { TRANSACTIONS_CSV_COLUMNS } from './TransactionsPage'
 import { USERS_CSV_COLUMNS } from './UsersPage'
@@ -42,15 +47,19 @@ import * as reportService from '../services/reports'
 
 export default function SettingsPage() {
   const { user, can, settings, saveSettings, offlineMode, setOfflineMode } = useApp()
-  // Which category is expanded, if any. Collapsed is the resting state.
-  // `undefined` is "not chosen yet", which is what lets a role with a single
-  // category — a student's and an instructor's Device and app — open on it
-  // instead of on a closed row with nothing beside it. Collapsing it still
-  // works: that stores `null`.
-  const [open, setOpen] = useState(undefined)
   const toast = useToast()
   const navigate = useNavigate()
   const fileRef = useRef(null)
+  const location = useLocation()
+
+  // Two-column desktop layout, stacked groups on smaller screens. The content
+  // is the same set of sections either way; only the frame around it changes.
+  const isDesktop = useMediaQuery('(min-width: 1024px)')
+  // Below 768px only: every group collapses into a single-open accordion so
+  // the page is not one long scroll of every card at once. Tablet widths keep
+  // the existing stacked-flat layout untouched.
+  const isMobile = useMediaQuery('(max-width: 768px)')
+  const [openAccordion, setOpenAccordion] = useState('device')
 
   const [form, setForm] = useState(settings)
   const [errors, setErrors] = useState({})
@@ -58,6 +67,12 @@ export default function SettingsPage() {
   const [confirm, setConfirm] = useState(null)
   const [busy, setBusy] = useState(false)
   const [counts, setCounts] = useState(null)
+
+  // Where the release check sits: idle until the button is pressed, then one of
+  // checking, uptodate, available or error. The result is page-local so it can
+  // never collide with another account's or a later version's settings.
+  const [updateState, setUpdateState] = useState('idle')
+  const [latestRelease, setLatestRelease] = useState(null)
 
   const canEdit = can(PERM.SETTINGS_EDIT)
   const canManageData = can(PERM.DATA_MANAGE)
@@ -70,6 +85,25 @@ export default function SettingsPage() {
     resetTours(user?.id)
     toast.success('The walkthrough will start again from the dashboard.')
     navigate('/dashboard')
+  }
+
+  /**
+   * Asks GitHub for the latest published release and compares it against the
+   * installed version. One check at a time (the button is disabled while it
+   * runs), and every press is a fresh request — there is no cache to go stale.
+   * Failing is not a crash path: the outcome is just the 'error' state, which
+   * the section below shows as its own message.
+   */
+  const checkForUpdates = async () => {
+    if (updateState === 'checking') return
+    setUpdateState('checking')
+    try {
+      const release = await getLatestRelease()
+      setLatestRelease(release)
+      setUpdateState(compareVersions(release.version, APP_VERSION) > 0 ? 'available' : 'uptodate')
+    } catch {
+      setUpdateState('error')
+    }
   }
 
   useEffect(() => setForm(settings), [settings])
@@ -265,18 +299,18 @@ export default function SettingsPage() {
       },
     })
 
-  /* ------------------------------- categories -------------------------------
-     One entry per category: the card on the index and the focused view behind
-     it come from the same definition, so a category can never appear in the
-     list without a page or be reachable without its permission. */
+/* --------------------------------- groups ---------------------------------
+     One section per group, arranged by audience so each role sees only its own:
+     every role gets Device & access and About app; staff adds the Laboratory
+     and Notifications groups; the administrator alone gets the Data management
+     group. The desktop sidebar and the mobile group list come from the same
+     array, so a group can never be reachable without its permission. */
 
   const deviceSection = (
     <>
       <SectionCard title="Permissions" description="Camera and location access">
         <DeviceAccessControl />
       </SectionCard>
-
-      <InstallAppCard />
 
       <SectionCard title="Offline mode" description="Working without a connection">
         <Toggle
@@ -304,6 +338,9 @@ export default function SettingsPage() {
       </SectionCard>
     </>
   )
+
+  /* The theme choice already lives in the header bar (the AppearanceToggleButton
+     on this page), so there is no separate Appearance group here. */
 
   const laboratorySection = (
     <form onSubmit={submit}>
@@ -601,14 +638,14 @@ export default function SettingsPage() {
     </>
   )
 
-  /* ---------------------------------- about ---------------------------------
-     The last category, and the only one every role sees alongside Device: what
-     this application is and the two links out. `APP_NAME` and
+  /* --------------------------------- app -----------------------------------
+     The last group, and the only one every role sees alongside Device and
+     Appearance: what this application is and the two links out. `APP_NAME` and
      `APP_VERSION` are read from `utils/constants` rather than written here, so
      the version shown can never drift from the one the verification suite
      checks against package.json. */
 
-  const aboutSection = (
+  const appSection = (
     <>
       <SectionCard title={`About ${APP_NAME}`} description="What this application is">
         <div className="flex items-start gap-3">
@@ -623,9 +660,6 @@ export default function SettingsPage() {
             <p className="subtle mt-0.5 text-xs leading-snug">
               QR-Based Automotive Laboratory Tool Monitoring System
             </p>
-            {/* The version reads as data rather than prose, which is the same
-                treatment record identifiers get everywhere else in the app. */}
-            <p className="subtle mt-1.5 font-mono text-[11px]">Version {APP_VERSION}</p>
           </div>
         </div>
       </SectionCard>
@@ -646,72 +680,216 @@ export default function SettingsPage() {
           />
         </div>
       </SectionCard>
+
+      {/* The update check is a live question rather than a link, so it gets its
+          own card: it needs a space for the outcome to speak its own sentence.
+          Everything it reports — loaded version, latest version, the GitHub
+          page — reads from the same helpers the rest of the app uses, and every
+          failure is a message here rather than a broken page. */}
+      <SectionCard
+        title="App updates"
+        description="Check whether a newer release is available"
+      >
+        <div className="space-y-3.5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-bold">Current version</p>
+              {/* The version reads as data rather than prose, matching the
+                  record identifiers everywhere else in the app. */}
+              <p className="subtle mt-0.5 font-mono text-xs">v{APP_VERSION}</p>
+            </div>
+            {updateState === 'available' ? (
+              <a
+                href={latestRelease?.htmlUrl ?? RELEASES_PAGE}
+                target="_blank"
+                rel="noreferrer noopener"
+                {...externalLinkProps(latestRelease?.htmlUrl ?? RELEASES_PAGE)}
+                className="btn btn-primary btn-sm shrink-0"
+              >
+                <Download className="h-3.5 w-3.5" />
+                View update
+              </a>
+            ) : (
+              <button
+                type="button"
+                onClick={checkForUpdates}
+                disabled={updateState === 'checking'}
+                className="btn btn-outline btn-sm shrink-0"
+              >
+                {updateState === 'checking' ? (
+                  <>
+                    <Spinner /> Checking…
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    {updateState === 'error' ? 'Try again' : 'Check for updates'}
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+
+          {/* `aria-live` lets a screen reader announce the outcome without the
+              focus having to move, while the coloured frames below speak the
+              same message to sighted users. */}
+          <div aria-live="polite">
+            {updateState === 'uptodate' && (
+              <div className="flex items-start gap-2.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-3 text-sm text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200">
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                <div className="min-w-0">
+                  <p className="font-bold">You're up to date</p>
+                  <p className="mt-0.5 text-xs leading-snug opacity-80">
+                    You're using the latest version.
+                  </p>
+                </div>
+              </div>
+            )}
+            {updateState === 'available' && (
+              <div className="flex items-start gap-2.5 rounded-xl border border-blue-200 bg-blue-50 px-3.5 py-3 text-sm text-blue-800 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-200">
+                <Download className="mt-0.5 h-4 w-4 shrink-0" />
+                <div className="min-w-0">
+                  <p className="font-bold">Update available</p>
+                  <p className="mt-0.5 text-xs leading-snug opacity-80">
+                    Version v{latestRelease?.version} is available.
+                  </p>
+                </div>
+              </div>
+            )}
+            {updateState === 'error' && (
+              <div className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 px-3.5 py-3 text-sm text-red-800 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <div className="min-w-0">
+                  <p className="font-bold">Unable to check for updates</p>
+                  <p className="mt-0.5 text-xs leading-snug opacity-80">
+                    Please try again later.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </SectionCard>
     </>
   )
 
-  const categories = [
+  const sections = [
     {
       slug: 'device',
-      icon: Smartphone,
-      title: 'Device and app',
-      description: 'Camera and location access, installation, offline mode and the walkthroughs.',
+      label: 'Device & access',
       content: deviceSection,
     },
     canViewLab && {
       slug: 'laboratory',
-      icon: FlaskConical,
-      title: 'Laboratory',
-      description: 'The laboratory record, the department link and the borrowing limits.',
+      label: 'Laboratory',
       content: laboratorySection,
     },
     canViewLab && {
       slug: 'notifications',
-      icon: Bell,
-      title: 'Notifications',
-      description: 'Which alerts the system raises, and how early it warns.',
+      label: 'Notifications',
       content: notificationsSection,
     },
     canManageData && {
       slug: 'data',
-      icon: Database,
-      title: 'Data management',
-      description: 'Exports, backups, demo data and the stored collections.',
+      label: 'Data management',
       content: dataSection,
     },
-    // Last, and open to every role: nothing here is a setting, so it belongs
-    // below the controls rather than among them.
+    // Last, and open to every role: what this app is, its version and the
+    // project links.
     {
       slug: 'about',
-      icon: Info,
-      title: 'About',
-      description: 'Version, the developer and the project links.',
-      content: aboutSection,
+      label: 'About app',
+      content: appSection,
     },
   ].filter(Boolean)
 
-  // The page opens on its first category — Device and app for every role — so
-  // its controls are readable straight away rather than behind a row that looks
-  // inert until it is clicked. Collapsing it still works: that stores `null`.
-  const openSlug = open === undefined ? (categories[0]?.slug ?? null) : open
+  // On desktop the hash picks the visible section; a stale or missing hash
+  // falls back to the first one for this role, and the About app group can
+  // never be the resting view.
+  const requested = location.hash.replace(/^#/, '')
+  const activeSlug = sections.some((s) => s.slug === requested)
+    ? requested
+    : (sections[0]?.slug ?? null)
 
   return (
     <>
-      {/* Each category is a collapsible section rather than a page of its own:
-          the list stays short, and only the one being worked on is open. */}
-      <div className="mx-auto max-w-3xl space-y-2.5">
-        {categories.map(({ slug, icon: Icon, title, description, content }) => (
-          <CategorySection
-            key={slug}
-            icon={Icon}
-            title={title}
-            description={description}
-            open={openSlug === slug}
-            onToggle={() => setOpen((cur) => ((cur ?? openSlug) === slug ? null : slug))}
-          >
-            {content}
-          </CategorySection>
-        ))}
+      <div className="w-full max-w-5xl gap-10 lg:grid lg:grid-cols-[200px_minmax(0,1fr)]">
+        {/* Desktop sidebar: a clean index of the groups this role can open,
+            without icons or cards. The page takes its own labels from the same
+            array, so the two can never disagree. */}
+        <nav
+          aria-label="Settings sections"
+          className="hidden lg:sticky lg:top-[4.75rem] lg:block lg:self-start"
+        >
+          <ul className="space-y-1">
+            {sections.map(({ slug, label }) => {
+              const isActive = activeSlug === slug
+              return (
+                <li key={slug}>
+                  <a
+                    href={`#${slug}`}
+                    aria-current={isActive ? 'page' : undefined}
+                    className={cx(
+                      'relative flex min-h-[40px] items-center rounded-lg px-3 text-sm transition-colors',
+                      'hover:bg-black/[0.03] dark:hover:bg-white/5',
+                      isActive ? 'font-bold' : 'muted font-semibold',
+                    )}
+                    style={isActive ? { background: 'rgb(var(--surface-2))' } : undefined}
+                  >
+                    {isActive && (
+                      <span
+                        aria-hidden="true"
+                        className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full"
+                        style={{ background: 'rgb(var(--accent))' }}
+                      />
+                    )}
+                    <span className="min-w-0">{label}</span>
+                  </a>
+                </li>
+              )
+            })}
+          </ul>
+        </nav>
 
+        {/* Content. On desktop one group is shown at a time; on a phone every
+            group collapses into a single-open accordion; in between (tablet)
+            every group is stacked flat under its small-cap label. */}
+        <div className="mx-auto w-full max-w-2xl pb-2 lg:mx-0 lg:max-w-none lg:pb-0">
+          {isDesktop ? (
+            <div className="space-y-4">
+              {sections
+                .filter((s) => s.slug === activeSlug)
+                .map((s) => (
+                  <SettingsGroup key={s.slug} label={s.label}>
+                    {s.content}
+                  </SettingsGroup>
+                ))}
+            </div>
+          ) : isMobile ? (
+            <div className="space-y-3">
+              {sections.map((s) => (
+                <SettingsAccordion
+                  key={s.slug}
+                  label={s.label}
+                  open={openAccordion === s.slug}
+                  onToggle={() =>
+                    setOpenAccordion((current) => (current === s.slug ? null : s.slug))
+                  }
+                >
+                  {s.content}
+                </SettingsAccordion>
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-7">
+              {sections.map((s) => (
+                <SettingsGroup key={s.slug} label={s.label}>
+                  {s.content}
+                </SettingsGroup>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       <ConfirmDialog
@@ -729,7 +907,65 @@ export default function SettingsPage() {
 }
 
 /**
- * One row in the About section's list of links.
+ * One headed settings group.
+ *
+ * On desktop the group is named by the sidebar link beside the cards, so a
+ * duplicate heading in the content pane would only repeat it — the pane shows
+ * the cards alone. On smaller screens there is no sidebar, so the same label
+ * is rendered as the small-caps group heading above its cards instead.
+ */
+function SettingsGroup({ label, children }) {
+  return (
+    <section className="space-y-4">
+      <p className="px-4 text-[11px] font-bold uppercase tracking-[0.16em] text-subtle lg:hidden">
+        {label}
+      </p>
+      {children}
+    </section>
+  )
+}
+
+/**
+ * One collapsible settings group, phone-only.
+ *
+ * Only one is ever open at a time — the page passes `open` and `onToggle`
+ * rather than this component keeping its own state, so `SettingsPage` is the
+ * single source of which group is expanded. The grid-rows trick animates
+ * height without measuring the content: `0fr` collapses it, `1fr` reveals it,
+ * and the transition is on the track size rather than `height`, which is what
+ * lets a variable-height card (Data management, say) animate smoothly too.
+ */
+function SettingsAccordion({ label, open, onToggle, children }) {
+  return (
+    <section className="card overflow-hidden">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="flex min-h-[52px] w-full items-center justify-between gap-3 px-4 py-3.5 text-left"
+      >
+        <span className="text-sm font-bold">{label}</span>
+        <ChevronDown
+          className={cx(
+            'h-4 w-4 shrink-0 subtle transition-transform duration-200',
+            open && 'rotate-180',
+          )}
+        />
+      </button>
+      <div
+        className="grid transition-[grid-template-rows] duration-300 ease-in-out motion-reduce:transition-none"
+        style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
+      >
+        <div className="overflow-hidden">
+          <div className="space-y-4 border-t px-4 pb-4 pt-4">{children}</div>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+/**
+ * One row in the App section's list of links.
  *
  * Built to the same measurements as the outward link on the profile page — 44px
  * minimum touch target, the same recessed icon tile, the same trailing
@@ -762,42 +998,6 @@ function AboutLink({ icon: Icon, label, hint, href }) {
       </span>
       <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-50" />
     </a>
-  )
-}
-
-function SectionIcon({ icon: Icon }) {
-  return (
-    <span
-      className="grid h-9 w-9 shrink-0 place-items-center rounded-lg"
-      style={{ background: 'rgb(var(--surface-3))' }}
-    >
-      <Icon className="h-4 w-4" style={{ color: 'rgb(var(--text-subtle))' }} />
-    </span>
-  )
-}
-
-/** One collapsible settings category. */
-function CategorySection({ icon, title, description, open, onToggle, children }) {
-  return (
-    <div className="space-y-2.5">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        className="card flex w-full items-start gap-3 px-4 py-3.5 text-left transition-colors
-                   hover:bg-black/[0.03] dark:hover:bg-white/5"
-      >
-        <SectionIcon icon={icon} />
-        <span className="min-w-0 flex-1">
-          <span className="block text-sm font-bold">{title}</span>
-          <span className="subtle block text-xs leading-snug">{description}</span>
-        </span>
-        <ChevronDown
-          className={cx('mt-1.5 h-4 w-4 shrink-0 opacity-40 transition-transform', open && 'rotate-180')}
-        />
-      </button>
-      {open && <div className="space-y-4 pb-1">{children}</div>}
-    </div>
   )
 }
 

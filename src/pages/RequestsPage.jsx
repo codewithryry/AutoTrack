@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { CalendarCheck, CheckCircle2, FileCheck2, Plus, Undo2 } from 'lucide-react'
+import { CalendarCheck, CheckCircle2, FileCheck2, Plus, QrCode, Undo2 } from 'lucide-react'
 import {
   EmptyState,
   ErrorState,
@@ -215,6 +215,12 @@ export default function RequestsPage() {
           title={`Return requests (${returnRequests.length})`}
           description="Tools handed in and waiting for you to confirm the return"
           bodyClassName="p-0"
+          action={
+            <Link to="/scan/return" className="btn btn-outline btn-sm shrink-0">
+              <QrCode className="h-3.5 w-3.5" />
+              Scan Return QR
+            </Link>
+          }
         >
           {returnRequests.length === 0 && (
             <p className="muted p-4 text-sm">

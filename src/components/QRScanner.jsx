@@ -31,8 +31,27 @@ const errorsFor = () => ({
  * html5-qrcode owns the video element, so the component keeps a single instance
  * in a ref and tears it down carefully — a scanner left running holds the camera
  * open and blocks the next page that needs it.
+ *
+ * The manual-entry box is tool-shaped by default — `parseQRPayload`, "Enter
+ * Tool ID" — because that is every existing caller (`ScanPage.jsx`). A caller
+ * scanning something else, such as the return-request scanner, overrides
+ * `parse` and the three manual-entry strings so the same camera plumbing and
+ * teardown logic serves both without a second copy of either.
  */
-export default function QRScanner({ onDetected, disabled = false }) {
+export default function QRScanner({
+  onDetected,
+  disabled = false,
+  parse = parseQRPayload,
+  manualLabel = 'Manual Tool ID entry',
+  manualToggleLabel = 'Enter Tool ID',
+  manualPlaceholder = 'TOOL-00014',
+  manualHint = (
+    <>
+      Use this when the label is damaged or the camera is unavailable. The prefix is optional —
+      typing <span className="mono">14</span> finds <span className="mono">TOOL-00014</span>.
+    </>
+  ),
+}) {
   const scannerRef = useRef(null)
   const startedRef = useRef(false)
   const detectedRef = useRef(false)
@@ -177,15 +196,17 @@ export default function QRScanner({ onDetected, disabled = false }) {
 
   const submitManual = (event) => {
     event.preventDefault()
-    const result = parseQRPayload(manualId)
+    const result = parse(manualId)
     if (!result.ok) {
       setManualError(result.error)
       return
     }
     setManualError(null)
-    // The canonical id the parser resolved, not the raw keystrokes: typing `14`
-    // should look up — and report itself as — `TOOL-00014`.
-    onDetected(result.toolId)
+    // The canonical value the parser resolved, not the raw keystrokes: typing
+    // `14` should look up — and report itself as — `TOOL-00014`. `onDetected`
+    // always receives a raw scannable string, exactly as the camera path would
+    // have produced, whichever `parse` recognised it.
+    onDetected(result.toolId ?? result.token ?? manualId)
   }
 
   return (
@@ -284,7 +305,7 @@ export default function QRScanner({ onDetected, disabled = false }) {
           className={cx('btn btn-outline', state !== 'scanning' && 'flex-1')}
         >
           <Keyboard className="h-4 w-4" />
-          {manual ? 'Hide manual entry' : 'Enter Tool ID'}
+          {manual ? 'Hide manual entry' : manualToggleLabel}
         </button>
       </div>
 
@@ -292,7 +313,7 @@ export default function QRScanner({ onDetected, disabled = false }) {
       {manual && (
         <form onSubmit={submitManual} className="card p-3.5">
           <label className="label" htmlFor="manual-tool-id">
-            Manual Tool ID entry
+            {manualLabel}
           </label>
           <div className="flex gap-2">
             <input
@@ -302,7 +323,7 @@ export default function QRScanner({ onDetected, disabled = false }) {
                 setManualId(e.target.value)
                 setManualError(null)
               }}
-              placeholder="TOOL-00014"
+              placeholder={manualPlaceholder}
               autoCapitalize="characters"
               autoComplete="off"
               spellCheck="false"
@@ -317,11 +338,7 @@ export default function QRScanner({ onDetected, disabled = false }) {
               {manualError}
             </p>
           ) : (
-            <p className="subtle mt-1.5 text-xs">
-              Use this when the label is damaged or the camera is unavailable. The prefix is
-              optional — typing <span className="mono">14</span> finds{' '}
-              <span className="mono">TOOL-00014</span>.
-            </p>
+            <p className="subtle mt-1.5 text-xs">{manualHint}</p>
           )}
         </form>
       )}

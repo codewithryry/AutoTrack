@@ -147,8 +147,8 @@ jobs:
       #
       # `package.json` is what `android/app/build.gradle` parses for
       # `versionName` and packs into `versionCode`, and `APP_VERSION` in
-      # `src/utils/constants.js` is what Settings → About and the loading screen
-      # show. Setting both here is what makes tagging 0.2.6 enough on its own:
+      # `src/utils/constants.js` is what Settings → About app shows. Setting
+      # both here is what makes tagging 0.2.6 enough on its own:
       # no Android file holds a version, and none has to be edited to ship one.
       #
       # The edit stays in the runner's workspace and is never committed. The tag

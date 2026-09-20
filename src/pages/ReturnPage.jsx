@@ -21,6 +21,7 @@ import {
   TextAreaField,
   TxnStatusBadge,
 } from '../components/ui'
+import { ReturnQRCard } from '../components/ReturnQRDisplay'
 import { AutoLocationNotice, useAutoLocation } from '../components/LocationCapture'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
@@ -437,6 +438,19 @@ export default function ReturnPage() {
               </SectionCard>
               )}
 
+              {/* The flagship of the flow: once a student's request exists, its QR
+                  is the main thing on this screen — staff scan it at the crib
+                  rather than the loan being searched for by hand. Staff never see
+                  this card; they confirm from their own single-loan selection
+                  below, or from the dedicated /scan/return page. */}
+              {alreadyAsked && selectedLoans.length === 1 && asksOnly && (
+                <ReturnQRCard
+                  transaction={selected}
+                  studentName={user?.fullName}
+                  studentId={user?.studentId}
+                />
+              )}
+
               {/* Already handed in and waiting on the counter — stated on the
                   record so neither the borrower nor staff ask twice. */}
               {alreadyAsked && selectedLoans.length === 1 && (
@@ -448,7 +462,7 @@ export default function ReturnPage() {
                       ? ` · reported ${selected.returnRequestCondition}`
                       : ''}
                     . {asksOnly
-                      ? 'Laboratory staff will confirm it when the tool is handed in.'
+                      ? 'Show the QR above to laboratory staff, or they can confirm it when the tool is handed in.'
                       : 'Confirm it below once the tool is physically back.'}
                   </p>
                 </div>

@@ -1,10 +1,12 @@
 import {
   BarChart3,
   Bell,
+  Flag,
   LayoutDashboard,
   MessageSquare,
   Package,
   QrCode,
+  ScanLine,
   Settings,
   Undo2,
   UserRound,
@@ -90,6 +92,18 @@ export const NAV_ITEMS = [
     permission: PERM.RETURN,
   },
   {
+    // The QR-first return desk: staff scan a student's return QR — generated
+    // the moment they request one from an active loan — or find a request by
+    // hand, then accept, accept with an issue, or reject it. Staff only, same
+    // permission the manual return desk's own confirmation already needs.
+    to: '/scan/return',
+    label: 'Return QR',
+    icon: ScanLine,
+    description: 'Scan a student return QR',
+    roles: STAFF,
+    permission: PERM.BORROW_FOR_OTHERS,
+  },
+  {
     // Borrowing history. Staff read the laboratory's; a student reads their
     // own — the data layer scopes the same page to each.
     to: '/transactions',
@@ -129,6 +143,17 @@ export const NAV_ITEMS = [
     label: 'Maintenance',
     icon: HardHat,
     description: 'Service records',
+    roles: STAFF,
+    permission: PERM.MAINTENANCE_VIEW,
+  },
+  {
+    // Problems reported through the user-facing "Report a problem" dialog —
+    // the same maintenance records Maintenance already lists, filtered down to
+    // the ones filed that way. Same permission, same audience.
+    to: '/problem-reports',
+    label: 'Report Problems',
+    icon: Flag,
+    description: 'Problems reported by users',
     roles: STAFF,
     permission: PERM.MAINTENANCE_VIEW,
   },
@@ -210,9 +235,11 @@ export const ADMIN_MOBILE_NAV = ['/dashboard', '/requests', '/scan', '/transacti
  */
 export const ADMIN_DRAWER_NAV = [
   '/tools',
+  '/scan/return',
   '/messages',
   '/users',
   '/maintenance',
+  '/problem-reports',
   '/reports',
 ]
 
@@ -236,7 +263,9 @@ const INSTRUCTOR_RAIL_ORDER = [
   '/tools',
   '/requests',
   '/transactions',
+  '/scan/return',
   '/maintenance',
+  '/problem-reports',
   '/users',
   '/reports',
   '/messages',

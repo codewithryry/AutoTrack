@@ -4,7 +4,6 @@ import { AlertTriangle, ShieldOff } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import AppLayout, { useStandalonePage } from './layouts/AppLayout'
 import InstallPrompt from './components/InstallPrompt'
-import AppLoader from './components/AppLoader'
 import { ErrorState } from './components/ui'
 import { useApp } from './context/AppContext'
 import { useAndroidBack } from './hooks/useAndroidBack'
@@ -32,6 +31,7 @@ const ToolsPage = lazy(() => import('./pages/ToolsPage'))
 const ToolDetailPage = lazy(() => import('./pages/ToolDetailPage'))
 const ToolHistoryPage = lazy(() => import('./pages/ToolHistoryPage'))
 const ScanPage = lazy(() => import('./pages/ScanPage'))
+const ScanReturnPage = lazy(() => import('./pages/ScanReturnPage'))
 const BorrowPage = lazy(() => import('./pages/BorrowPage'))
 const ReturnPage = lazy(() => import('./pages/ReturnPage'))
 const TransactionsPage = lazy(() => import('./pages/TransactionsPage'))
@@ -39,6 +39,7 @@ const UsersPage = lazy(() => import('./pages/UsersPage'))
 const ActivityPage = lazy(() => import('./pages/ActivityPage'))
 const NotificationsPage = lazy(() => import('./pages/NotificationsPage'))
 const MaintenancePage = lazy(() => import('./pages/MaintenancePage'))
+const ProblemReportsPage = lazy(() => import('./pages/ProblemReportsPage'))
 const ReportsPage = lazy(() => import('./pages/ReportsPage'))
 const SettingsPage = lazy(() => import('./pages/SettingsPage'))
 const ProfilePage = lazy(() => import('./pages/ProfilePage'))
@@ -151,15 +152,16 @@ export default function App() {
     )
   }
 
-  // Routing is still held until the stored session has been read — that is what
-  // stops a refresh bouncing a signed-in user to the login page.
+  // The boot state covers the moment the stored session is read. Routing is
+  // held until then so a refresh never bounces a signed-in user to /login.
   //
-  // This used to render nothing, which on a cold start left the background
-  // colour and an empty page for as long as the session took to restore. The
-  // loader fills that moment instead. In the installed PWA and the APK it
-  // follows the OS launch screen, which is painted in the same background, so
-  // the hand-over is one continuous colour.
-  if (booting) return <AppLoader />
+  // Nothing is painted here — not on a phone (the system launch screen covers
+  // this moment) and not on desktop (the browser's blank tab is one steady
+  // colour, so there is no flash to mask). The only loading state in the app is
+  // the `PageLoading` spinner inside the shell's content column, which shows
+  // while a page's chunk loads — the login page and the whole viewport never
+  // get one.
+  if (booting) return null
 
   return (
     <>
@@ -228,6 +230,18 @@ export default function App() {
           />
 
           <Route path="/scan" element={<ScanPage />} />
+          {/* The QR-first return desk: staff scan a student's return QR, or find
+              a request by hand, and decide it — accept, accept with an issue, or
+              reject. Staff only, the same permission `returnTool()` already
+              gates the manual counter on. */}
+          <Route
+            path="/scan/return"
+            element={
+              <RequirePermission permission={PERM.BORROW_FOR_OTHERS}>
+                <ScanReturnPage />
+              </RequirePermission>
+            }
+          />
           {/* The crib's counter: issuing a tool to somebody, and the approved
               requests waiting to be released. Staff only — a student's own
               borrowing runs through /requests, which is where their one ask
@@ -322,6 +336,14 @@ export default function App() {
             element={
               <RequirePermission permission={PERM.MAINTENANCE_VIEW}>
                 <MaintenancePage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="/problem-reports"
+            element={
+              <RequirePermission permission={PERM.MAINTENANCE_VIEW}>
+                <ProblemReportsPage />
               </RequirePermission>
             }
           />

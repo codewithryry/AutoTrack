@@ -1,6 +1,6 @@
 import * as db from './db'
 import { COLLECTIONS } from './db'
-import { RESERVATION_STATUS } from '../utils/constants'
+import { ACTIVE_TXN_STATUSES, RESERVATION_STATUS } from '../utils/constants'
 import { PERM, assertCan, can } from '../utils/permissions'
 import { padId, sortBy } from '../utils/helpers'
 import { nowISO, toDate } from '../utils/dates'
@@ -89,13 +89,60 @@ export const overlaps = (aFrom, aTo, bFrom, bTo) => {
  * Is this window still free on this tool?
  *
  * Only standing holds count — a cancelled, expired or already-collected one
- * says nothing about availability.
+ * says nothing about availability. A hold left `Reserved` normally means the
+ * tool has not been collected yet, but `borrow()` closes the hold as a
+ * best-effort follow-up *after* the loan is written (see `fulfil()`'s only
+ * caller) — a dropped connection or a slow write there can leave the
+ * reservation stuck at `Reserved` even though the tool was collected,
+ * returned, and is sitting free on the shelf again. Trusting that stale
+ * status alone is exactly what produced "RATCHET is already held" for a loan
+ * that had already come back: the hold outlived the loan it was created for.
+ *
+ * So a reservation is only a real conflict once its own loan, if it was ever
+ * linked to one, is checked and found still open. One still has no linked
+ * loan at all (not yet collected) and blocks as before; one whose loan has
+ * been returned, damaged, lost or otherwise closed no longer blocks, and is
+ * quietly closed here as `Fulfilled` so the same stale row is not re-checked
+ * on every future request for this tool.
  */
 export async function conflictFor(toolId, from, to, { ignoreId = null } = {}) {
   const held = (await listForTool(toolId)).filter(
     (r) => r.status === RESERVATION_STATUS.RESERVED && r.id !== ignoreId,
   )
-  return held.find((r) => overlaps(from, to, r.startsAt, r.endsAt)) ?? null
+  const overlapping = held.filter((r) => overlaps(from, to, r.startsAt, r.endsAt))
+
+  for (const reservation of overlapping) {
+    if (!(await isLoanStillOpen(reservation))) {
+      // Self-healing: the loan this hold was for has already closed, so the
+      // hold is stale rather than a live conflict. Closing it here means the
+      // next lookup for this tool does not have to re-discover the same thing.
+      await db
+        .update(COLLECTIONS.reservations, reservation.id, {
+          status: RESERVATION_STATUS.FULFILLED,
+          updatedAt: nowISO(),
+        })
+        .catch(() => {})
+      continue
+    }
+    return reservation
+  }
+  return null
+}
+
+/**
+ * Does this reservation still point at an open loan?
+ *
+ * A hold with no `transactionId` has never been collected, so it is still a
+ * live promise on the tool — `true`. One that names a transaction is only
+ * still blocking while that transaction is actually out: returned, damaged,
+ * lost or otherwise closed loans free the tool the moment they close,
+ * whatever the reservation's own (possibly stale) status still says.
+ */
+async function isLoanStillOpen(reservation) {
+  if (!reservation.transactionId) return true
+  const txn = await db.get(COLLECTIONS.transactions, reservation.transactionId).catch(() => null)
+  if (!txn) return true
+  return ACTIVE_TXN_STATUSES.includes(txn.status)
 }
 
 /* ------------------------------------------------------------------ *

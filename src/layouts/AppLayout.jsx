@@ -14,7 +14,7 @@ import {
 import { AppearanceToggleButton } from '../components/AccountSettings'
 import ErrorBoundary from '../components/ErrorBoundary'
 import Avatar from '../components/Avatar'
-import { PageSkeleton, RoleBadge } from '../components/ui'
+import { PageLoading, RoleBadge } from '../components/ui'
 import {
   ACCOUNT_NAV,
   accountNavLabel,
@@ -33,6 +33,7 @@ import {
   useInbox,
   useNotifications,
   usePresence,
+  useProblemReports,
   useRequests,
   useTransactions,
   useUsers,
@@ -97,6 +98,11 @@ export default function AppLayout() {
   // subscription — approving or rejecting an account ticks the revision counter
   // and the badge follows the page without anything extra here.
   const { users } = useUsers()
+  // Reports still awaiting attention — `Scheduled` and untouched — for the
+  // Report Problems sidebar badge. Empty for a student: `useProblemReports`
+  // reads through `useMaintenance()`, which resolves empty for any role
+  // without `MAINTENANCE_VIEW`.
+  const { openCount: reportCount } = useProblemReports()
   // Presence is announced for as long as the app is open, not only while the
   // inbox is on screen — otherwise a signed-in account reads as offline to
   // everyone until it happens to be looking at its own messages. The channel is
@@ -371,6 +377,7 @@ export default function AppLayout() {
             messageUnread={unreadMessages}
             requestCount={requestCount}
             userCount={userCount}
+            reportCount={reportCount}
             spacious={isStudent}
           />
         </nav>
@@ -775,7 +782,7 @@ export default function AppLayout() {
               page area may briefly have nothing to render while its chunk
               arrives. The shell around it is already painted. */}
           <ErrorBoundary key={location.pathname}>
-            <Suspense fallback={<PageSkeleton />}>
+            <Suspense fallback={<PageLoading />}>
               <Outlet />
             </Suspense>
           </ErrorBoundary>
@@ -1019,13 +1026,15 @@ function SidebarLinks({
   messageUnread = 0,
   requestCount = 0,
   userCount = 0,
+  reportCount = 0,
   showDescriptions = false,
   spacious = false,
 }) {
-  // Four rails carry a count: alerts, unread messages, open requests and
-  // accounts waiting to be approved. Same badge, same rules — each reads its own
-  // number, so none of them affects another. A zero renders nothing, which is
-  // what hides the badge on every rail that has no work waiting.
+  // Five rails carry a count: alerts, unread messages, open requests, accounts
+  // waiting to be approved, and reports still needing attention. Same badge,
+  // same rules — each reads its own number, so none of them affects another. A
+  // zero renders nothing, which is what hides the badge on every rail that has
+  // no work waiting.
   const badgeFor = (to) =>
     to === '/notifications'
       ? unread
@@ -1035,7 +1044,9 @@ function SidebarLinks({
           ? requestCount
           : to === '/users'
             ? userCount
-            : 0
+            : to === '/problem-reports'
+              ? reportCount
+              : 0
 
   return (
     <ul className={spacious ? 'space-y-1.5' : 'space-y-1'}>

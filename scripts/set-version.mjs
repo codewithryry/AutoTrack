@@ -9,8 +9,7 @@
  *
  *   • `package.json`            — which `android/app/build.gradle` reads for
  *                                 `versionName` and packs into `versionCode`
- *   • `src/utils/constants.js`  — `APP_VERSION`, shown on the loading screen and
- *                                 in Settings → About
+ *   • `src/utils/constants.js`  — `APP_VERSION`, shown in Settings → About app
  *
  * Nothing else needs touching: the Android version is derived from the first of
  * those, so there is no Android file to edit when cutting a release.

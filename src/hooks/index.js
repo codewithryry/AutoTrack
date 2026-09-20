@@ -14,6 +14,7 @@ import * as presenceService from '../services/presence'
 import * as db from '../services/db'
 import { useApp } from '../context/AppContext'
 import { PERM, can, isStaff, visibleTransactions } from '../utils/permissions'
+import { MAINTENANCE_STATUS } from '../utils/constants'
 
 export { useAsyncData }
 
@@ -165,6 +166,23 @@ export function useMaintenance() {
   )
   useLiveCollection(allowed ? db.COLLECTIONS.maintenance : null)
   return { records: data ?? [], loading, error, reload, allowed }
+}
+
+/**
+ * Reported problems — the subset of maintenance records filed through the
+ * "Report problem" dialog rather than scheduled by staff. Shares the same
+ * cache entry and live subscription as `useMaintenance()`, so a report and its
+ * ordinary maintenance siblings never fall out of sync.
+ */
+export function useProblemReports() {
+  const { records, loading, error, reload, allowed } = useMaintenance()
+  const reports = useMemo(() => records.filter(maintenanceService.isReport), [records])
+  // A report waiting on staff — still `Scheduled`, nobody has acted on it yet
+  // — is what the sidebar badge and the dashboard notice count as needing
+  // attention. Once it moves to In Progress, Completed or Cancelled it has
+  // been picked up, however that happened.
+  const openCount = reports.filter((r) => r.status === MAINTENANCE_STATUS.SCHEDULED).length
+  return { reports, openCount, loading, error, reload, allowed }
 }
 
 export function useToolMaintenance(toolId) {

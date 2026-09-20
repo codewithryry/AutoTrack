@@ -18,7 +18,6 @@ import {
   ShieldAlert,
   RotateCcw,
   PackageSearch,
-  Repeat,
 } from 'lucide-react'
 import Walkthrough, { usePageTour } from '../components/Walkthrough'
 import {
@@ -971,7 +970,6 @@ function ToolCard({ tool, ...actions }) {
             is created. A student's list is available tools only. */}
         {isStudent(actions.user) && tool.status === TOOL_STATUS.AVAILABLE && (
           <Link to={`/requests/new?tool=${tool.id}`} className="btn btn-primary btn-sm flex-1">
-            <Repeat className="h-3.5 w-3.5" />
             Request
           </Link>
         )}
@@ -1035,7 +1033,6 @@ function ToolList({ tools, ...actions }) {
             </Link>
             {isStudent(actions.user) && tool.status === TOOL_STATUS.AVAILABLE && (
               <Link to={`/requests/new?tool=${tool.id}`} className="btn btn-primary btn-sm">
-                <Repeat className="h-3.5 w-3.5" />
                 Request
               </Link>
             )}

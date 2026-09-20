@@ -65,11 +65,13 @@ check('admin sidebar has every destination', () => {
     'Dashboard',
     'Inventory',
     'Scan',
+    'Return QR',
     'Transactions',
     'Requests',
     'Messages',
     'Users',
     'Maintenance',
+    'Report Problems',
     'Notifications',
     'Reports',
     'Settings',
@@ -83,11 +85,13 @@ check('instructor sidebar reaches every staff destination', () => {
     'Dashboard',
     'Inventory',
     'Scan',
+    'Return QR',
     'Transactions',
     'Requests',
     'Messages',
     'Users',
     'Maintenance',
+    'Report Problems',
     'Notifications',
     'Reports',
     'Settings',
@@ -157,7 +161,7 @@ check('staff share the destinations; the student list is their own', () => {
   // A student's navigation is genuinely their own, and carries none of the
   // laboratory-management destinations.
   assert.notDeepEqual(student, admin, 'a student must not get the staff navigation')
-  for (const label of ['Users', 'Maintenance', 'Reports', 'Settings']) {
+  for (const label of ['Users', 'Maintenance', 'Report Problems', 'Return QR', 'Reports', 'Settings']) {
     assert.ok(!student.includes(label), `a student must not see ${label}`)
   }
 
@@ -464,7 +468,7 @@ check('the displayed app version matches package.json', () => {
   const pkg = JSON.parse(read('package.json'))
   const constants = read(join('src', 'utils', 'constants.js'))
   const shown = constants.match(/APP_VERSION = '([^']+)'/)?.[1]
-  assert.equal(shown, pkg.version, 'the loading screen shows a different version')
+  assert.equal(shown, pkg.version, 'the app shows a different version')
 })
 
 check('Supabase is the only backend SDK in the bundle', () => {

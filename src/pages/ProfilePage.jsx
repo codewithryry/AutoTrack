@@ -10,7 +10,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import { SectionCard, SelectField, Spinner, TextField } from '../components/ui'
-import { DeleteAccountControl } from '../components/AccountSettings'
+import { ChangePasswordControl, DeleteAccountControl } from '../components/AccountSettings'
 import Walkthrough, { usePageTour } from '../components/Walkthrough'
 import Avatar from '../components/Avatar'
 import { useApp } from '../context/AppContext'
@@ -440,6 +440,13 @@ export default function ProfilePage() {
                 />
               </div>
             </div>
+          </SectionCard>
+
+          {/* Sign-in security. One card for every role — a student changes
+              their own password the same way an administrator does, and the
+              reset-by-email route on the login screen is unchanged. */}
+          <SectionCard title="Sign-in" description="The password you use to sign in">
+            <ChangePasswordControl />
           </SectionCard>
 
           {/* An instructor is not enrolled: they keep the department they teach in

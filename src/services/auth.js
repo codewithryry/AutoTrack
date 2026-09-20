@@ -21,6 +21,11 @@ import { nowISO } from '../utils/dates'
 export { AuthError }
 
 export const onAuthChange = localAuth.onAuthChange
+// Changing your own password is a credential operation, so it lives in the
+// auth layer with the rest of them and is only re-exported here — the UI talks
+// to one service, as it already did for sign-in and the reset email.
+export const changePassword = localAuth.changePassword
+export const MIN_PASSWORD_LENGTH = localAuth.MIN_PASSWORD_LENGTH
 export const sendPasswordReset = localAuth.sendPasswordReset
 
 /** Merge the session identity into the stored profile the UI renders. */

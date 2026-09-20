@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AlertTriangle, Moon, Sun, Trash2 } from 'lucide-react'
-import { Modal, Spinner } from './ui'
+import { AlertTriangle, KeyRound, Moon, Sun, Trash2 } from 'lucide-react'
+import { Modal, Spinner, TextField } from './ui'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
+import * as authService from '../services/auth'
 import * as settingsService from '../services/settings'
 import { cx } from '../utils/helpers'
 
@@ -129,6 +130,144 @@ export function AppearanceToggleButton({ className }) {
  * no undo, so the confirmation demands the account's email typed out first, and
  * the action stays visually separate from every ordinary setting.
  */
+/**
+ * Change your own password, without leaving the app.
+ *
+ * Until now the only route was the reset email, which meant signing out and
+ * waiting for a message to arrive — a long way round for somebody who simply
+ * wants a new password. That flow is untouched and still the way in when the
+ * current password has been forgotten; this is for when it has not.
+ *
+ * The current password is required and verified (see
+ * `services/localAuth.changePassword`), so an unattended unlocked phone is not
+ * enough to take an account over. Nothing here keeps a password after submit:
+ * the fields are cleared on close and on success.
+ */
+export function ChangePasswordControl({ className }) {
+  const toast = useToast()
+
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [form, setForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' })
+  const [errors, setErrors] = useState({})
+
+  const set = (field) => (event) => {
+    const { value } = event.target
+    setForm((f) => ({ ...f, [field]: value }))
+    // Clearing as they type, so an error never outlives the thing it described.
+    setErrors((e) => ({ ...e, [field]: undefined }))
+  }
+
+  const close = () => {
+    setOpen(false)
+    setBusy(false)
+    setForm({ currentPassword: '', newPassword: '', confirmPassword: '' })
+    setErrors({})
+  }
+
+  const submit = async (event) => {
+    event.preventDefault()
+    if (busy) return
+
+    // The one rule the service cannot check for us: it never sees the
+    // confirmation field.
+    if (form.newPassword !== form.confirmPassword) {
+      setErrors({ confirmPassword: 'The two passwords do not match.' })
+      return
+    }
+
+    setBusy(true)
+    try {
+      await authService.changePassword({
+        currentPassword: form.currentPassword,
+        newPassword: form.newPassword,
+      })
+      toast.success('Your password has been changed.', { title: 'Password updated' })
+      close()
+    } catch (err) {
+      // `AuthError` carries the field it belongs to, so the message lands under
+      // the input that caused it rather than in a toast away from the form.
+      if (err?.field) setErrors({ [err.field]: err.message })
+      else toast.error(err?.message ?? 'Your password could not be changed.')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className={className}>
+      <div className="flex items-start gap-3 rounded-lg border p-3.5">
+        <span
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-lg"
+          style={{ background: 'rgb(var(--surface-3))' }}
+        >
+          <KeyRound className="h-4 w-4" style={{ color: 'rgb(var(--text-subtle))' }} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-bold">Password</p>
+          <p className="subtle mt-0.5 text-xs leading-snug">
+            Change the password you sign in with. You will need your current one.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="btn btn-outline btn-sm shrink-0"
+        >
+          Change
+        </button>
+      </div>
+
+      <Modal
+        open={open}
+        onClose={close}
+        title="Change password"
+        description="Enter your current password, then the new one twice."
+      >
+        <form onSubmit={submit} className="space-y-3">
+          <TextField
+            label="Current password"
+            type="password"
+            autoComplete="current-password"
+            value={form.currentPassword}
+            onChange={set('currentPassword')}
+            error={errors.currentPassword}
+            required
+          />
+          <TextField
+            label="New password"
+            type="password"
+            autoComplete="new-password"
+            value={form.newPassword}
+            onChange={set('newPassword')}
+            error={errors.newPassword}
+            hint={`At least ${authService.MIN_PASSWORD_LENGTH} characters.`}
+            required
+          />
+          <TextField
+            label="Confirm new password"
+            type="password"
+            autoComplete="new-password"
+            value={form.confirmPassword}
+            onChange={set('confirmPassword')}
+            error={errors.confirmPassword}
+            required
+          />
+
+          <div className="flex justify-end gap-2 pt-1">
+            <button type="button" onClick={close} className="btn btn-ghost" disabled={busy}>
+              Cancel
+            </button>
+            <button type="submit" className="btn btn-primary" disabled={busy}>
+              {busy && <Spinner />}
+              Change password
+            </button>
+          </div>
+        </form>
+      </Modal>
+    </div>
+  )
+}
+
 export function DeleteAccountControl({ className }) {
   const { user, deleteOwnAccount } = useApp()
   const toast = useToast()

@@ -458,7 +458,18 @@ export async function borrow(input, actor, { maxDays = 30 } = {}) {
     ? toStoredLocation(input.borrowLocation, actor)
     : null
 
-  const { record, tool } = await db.runAtomic(async (atomic) => {
+  // The database has the last word on whether this tool is free.
+  //
+  // Everything above is a client-side check, and a client-side check cannot be
+  // atomic: `runAtomic` records steps and undoes them on failure, it does not
+  // hold a row lock. Two staff confirming the same tool in the same instant can
+  // both read `Available` and both reach this point. The partial unique index
+  // added by migration `0032` makes Postgres refuse the second insert, and the
+  // `catch` below turns that refusal into a sentence the person can act on
+  // rather than "That record already exists."
+  let atomicResult
+  try {
+    atomicResult = await db.runAtomic(async (atomic) => {
     const tool = await atomic.get(COLLECTIONS.tools, input.toolId)
     if (!tool) throw new Error('Tool not found. Please check the QR code.')
 
@@ -511,9 +522,24 @@ export async function borrow(input, actor, { maxDays = 30 } = {}) {
       updatedAt: timestamp,
     })
 
-    // The tool is carried out for the notification copy below.
-    return { record, tool }
-  })
+      // The tool is carried out for the notification copy below.
+      return { record, tool }
+    })
+  } catch (err) {
+    // 23505 is Postgres' unique-violation. On this table the only unique
+    // constraint a borrow can hit is the one active loan per tool, so the
+    // meaning is unambiguous: somebody else got there first.
+    if (err?.code === '23505' || /one_active_per_tool/i.test(err?.cause?.message ?? '')) {
+      const holder = await findActiveForTool(input.toolId, actor).catch(() => null)
+      throw new Error(
+        holder?.userName
+          ? `${holder.toolName} was just issued to ${holder.userName}. Refresh and try another tool.`
+          : 'That tool was just issued to somebody else. Refresh and try again.',
+      )
+    }
+    throw err
+  }
+  const { record, tool } = atomicResult
 
   await afterWrite('borrow follow-up', async () => {
     // The approval has been collected: the hold becomes the loan, and the

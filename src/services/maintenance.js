@@ -231,6 +231,44 @@ export async function upcoming(withinDays = 30) {
     .sort((a, b) => a.daysUntil - b.daysUntil)
 }
 
+/**
+ * Report a problem with a tool.
+ *
+ * A report is a corrective maintenance record in `Scheduled` — the same shape
+ * `schedule()` writes and the same row the service log already lists, so a
+ * reported fault and a planned service are worked from one queue. Nothing new
+ * was added to the data model for this.
+ *
+ * It goes through the `report_tool_problem` database function rather than a
+ * direct insert, because `maintenance_insert` is staff-only and must stay that
+ * way: the function is the narrow exception that lets a student file one, and it
+ * fixes every field except the tool, the type and the description. See migration
+ * `0034` for what it will and will not write.
+ *
+ * Staff are not routed around it — one path means one set of rules, and the
+ * notification and audit rows are written the same way whoever reports.
+ *
+ * @returns {Promise<string>} the id of the maintenance record
+ */
+export async function reportProblem({ toolId, type, description }) {
+  if (!toolId) throw new ValidationError({ toolId: 'No tool was identified.' })
+  if (!type) throw new ValidationError({ type: 'Choose what kind of problem this is.' })
+  if (!MAINTENANCE_TYPES.includes(type)) {
+    throw new ValidationError({ type: 'Unknown maintenance type.' })
+  }
+  const details = String(description ?? '').trim()
+  if (!details) throw new ValidationError({ description: 'Describe the problem.' })
+  if (details.length > 500) {
+    throw new ValidationError({ description: 'Keep the description under 500 characters.' })
+  }
+
+  return db.rpc('report_tool_problem', {
+    p_tool_id: toolId,
+    p_type: type,
+    p_description: details,
+  })
+}
+
 /** Raise a notification for anything already past its service date. */
 export async function notifyDue() {
   const due = (await upcoming(0)).filter((row) => row.daysUntil <= 0)

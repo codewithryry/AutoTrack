@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
+  BookmarkPlus,
   Grid3x3,
   List,
   MapPin,
@@ -12,6 +13,7 @@ import {
   Trash2,
   Pencil,
   Wrench,
+  X,
   HardHat,
   ShieldAlert,
   RotateCcw,
@@ -40,6 +42,8 @@ import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import { useDebounced, useLocalStorage, useMediaQuery, useTools } from '../hooks'
 import { useVisibleRows } from '../hooks/useVisibleRows'
+import { useRowSelection, useIndeterminate } from '../hooks/useRowSelection'
+import { useSavedViews, VIEW_FIELDS } from '../hooks/useSavedViews'
 import InventoryActions from '../components/InventoryActions'
 import * as toolService from '../services/tools'
 import { isStaff, isStudent, PERM } from '../utils/permissions'
@@ -56,6 +60,9 @@ const SORT_OPTIONS = [
   { value: 'newest', label: 'Newest first' },
   { value: 'oldest', label: 'Oldest first' },
 ]
+
+/** One frozen array, so the selection hook is not handed a new [] each render. */
+const EMPTY_ROWS = Object.freeze([])
 
 export const TOOLS_CSV_COLUMNS = [
   { key: 'id', label: 'Tool ID' },
@@ -205,6 +212,33 @@ export default function ToolsPage() {
   // number of cards mounted at once is capped, which is what costs a modest
   // phone its scrolling.
   const { visible: visibleTools, hasMore, remaining, showMore } = useVisibleRows(filtered)
+
+  /* --------------------------- row selection ---------------------------
+     Keyed to `filtered`, not to `tools`: a selection may only ever contain
+     rows the current filter is showing, so narrowing a search cannot leave a
+     hidden tool ticked and then act on it. Staff only — a student's inventory
+     has nothing to select it for. */
+  const selectable = can(PERM.TOOL_STATUS)
+  const selection = useRowSelection(selectable ? filtered : EMPTY_ROWS)
+
+  /* ---------------------------- saved views ----------------------------
+     The filters currently applied, in the shape a view stores. Read from the
+     same state the page already filters by — there is no second copy. */
+  const { views, save: saveView, remove: removeView } = useSavedViews(user?.id)
+  const currentFilters = { search, status, category, condition, location, sort }
+
+  /** Apply a stored view: set every filter it names, reset the rest. */
+  const applyView = useCallback((view) => {
+    const state = view?.state ?? {}
+    const setters = { search: setSearch, status: setStatus, category: setCategory,
+      condition: setCondition, location: setLocation, sort: setSort }
+    for (const field of VIEW_FIELDS) {
+      const fallback = field === 'sort' ? 'name-asc' : field === 'search' ? '' : 'all'
+      setters[field]?.(state[field] ?? fallback)
+    }
+    // The status/category effect already mirrors those two into the URL, so
+    // opening a view leaves a link that reproduces it.
+  }, [])
   const hasFilters =
     !!debouncedSearch ||
     status !== 'all' ||
@@ -299,6 +333,61 @@ export default function ToolsPage() {
     }
   }
 
+  /**
+   * Change the status of every selected tool.
+   *
+   * One `setStatus` call per tool, through the same service a single change
+   * goes through — so every tool is authorised individually, and the guard that
+   * refuses a tool on active loan applies to each one. That guard is why
+   * partial failure is the normal case rather than an edge case: selecting
+   * twelve tools where three are out on loan should change nine and say so,
+   * not fail as a batch or silently skip them.
+   */
+  const runBulkStatus = (status) => {
+    const chosen = selection.selected
+    if (!chosen.length) return
+
+    setConfirm({
+      kind: 'bulk-status',
+      title: `Mark ${chosen.length} tool${chosen.length === 1 ? '' : 's'} as ${status}?`,
+      message:
+        `The status of ${chosen.length} selected tool${chosen.length === 1 ? '' : 's'} will change to ` +
+        `${status}. A tool that is currently out on loan cannot be changed and will be reported.`,
+      confirmLabel: `Mark as ${status}`,
+      onConfirm: async () => {
+        setBusy(true)
+        const failures = []
+        let changed = 0
+        for (const tool of chosen) {
+          try {
+            await toolService.setStatus(tool.id, status, user)
+            changed += 1
+          } catch (err) {
+            // Kept per tool, so the message can name what did not work rather
+            // than reporting a count nobody can act on.
+            failures.push(`${tool.id}: ${err?.message ?? 'could not be changed'}`)
+          }
+        }
+        setBusy(false)
+        setConfirm(null)
+        selection.clear()
+
+        if (changed) {
+          toast.success(
+            `${changed} tool${changed === 1 ? '' : 's'} marked as ${status}.`,
+            { anchor: '[data-tour="tools-add"]' },
+          )
+        }
+        if (failures.length) {
+          toast.error(
+            `${failures.length} could not be changed. ${failures.slice(0, 3).join(' · ')}` +
+              (failures.length > 3 ? ' …' : ''),
+          )
+        }
+      },
+    })
+  }
+
   const requestDelete = (tool) => {
     setConfirm({
       kind: 'delete',
@@ -358,7 +447,11 @@ export default function ToolsPage() {
                 quieter: the same permission gates all four, and the
                 component renders nothing without it. `filtered` is passed
                 so Export and Print follow what the page is showing. */}
-            <InventoryActions tools={tools} filtered={filtered} />
+            <InventoryActions
+              tools={tools}
+              filtered={filtered}
+              selected={selectable ? selection.selected : EMPTY_ROWS}
+            />
           </PageHeader>
         </div>
       )}
@@ -454,8 +547,32 @@ export default function ToolsPage() {
             />
             <ViewSwitch view={view} onChange={setView} options={VIEW_OPTIONS} />
           </div>
+
+          {/* Saved views: the filters above, under a name. Stored per account
+              on this device — a shortcut, not laboratory configuration. */}
+          {!studentViewer && (
+            <SavedViewsBar
+              views={views}
+              onOpen={applyView}
+              onSave={(name) => saveView(name, currentFilters)}
+              onDelete={removeView}
+              hasFilters={hasFilters}
+            />
+          )}
         </div>
       </div>
+
+      {/* What is selected, and the two things that can be done with it. Only
+          rendered while something is selected, so the page is unchanged
+          until somebody ticks a box. */}
+      {selectable && selection.count > 0 && (
+        <BulkBar
+          count={selection.count}
+          busy={busy}
+          onClear={selection.clear}
+          onStatus={runBulkStatus}
+        />
+      )}
 
       {/* ------------------------------ results ------------------------------
           `data-tour` is on the wrapper rather than on the grid or the table, so
@@ -510,6 +627,7 @@ export default function ToolsPage() {
         ) : view === 'table' ? (
           <ToolTable
             tools={filtered}
+            selection={selectable ? selection : undefined}
             can={can}
             onEdit={openEdit}
             onQR={setQrTool}
@@ -929,13 +1047,176 @@ function ToolList({ tools, ...actions }) {
   )
 }
 
-function ToolTable({ tools, ...actions }) {
+/**
+ * What is selected, and what can be done with it.
+ *
+ * Appears only while something is ticked, so the page is exactly as it was
+ * until somebody selects a row. Printing is not here: it goes through the
+ * existing Print dialog in the header, which now offers "Selected tools" as a
+ * scope — one print implementation, not two.
+ */
+function BulkBar({ count, busy, onClear, onStatus }) {
+  return (
+    <div
+      className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2.5"
+      style={{ background: 'rgb(var(--surface-2))' }}
+      role="status"
+      aria-live="polite"
+    >
+      <span className="text-sm font-bold">
+        {count} selected
+      </span>
+      <span className="subtle hidden text-xs sm:inline">Change the status of all of them:</span>
+
+      <div className="ml-auto flex flex-wrap items-center gap-2">
+        {/* The three a bulk change is actually for. Borrowed and Overdue are
+            not offered: those follow a loan, and setting them by hand here
+            would put the tool and its transaction out of step. */}
+        {[TOOL_STATUS.AVAILABLE, TOOL_STATUS.MAINTENANCE, TOOL_STATUS.DAMAGED].map((status) => (
+          <button
+            key={status}
+            type="button"
+            onClick={() => onStatus(status)}
+            disabled={busy}
+            className="btn btn-outline btn-sm"
+          >
+            {status}
+          </button>
+        ))}
+        <button type="button" onClick={onClear} className="btn btn-ghost btn-sm" disabled={busy}>
+          Clear
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Saved filter combinations, as a row of chips.
+ *
+ * A view holds the filter state and nothing else, so opening one sets the
+ * filters the page already has — there is no second filtering engine, and the
+ * status and category still reach the URL through the effect that was already
+ * there.
+ */
+function SavedViewsBar({ views, onOpen, onSave, onDelete, hasFilters }) {
+  const [naming, setNaming] = useState(false)
+  const [name, setName] = useState('')
+  const [error, setError] = useState('')
+
+  const commit = (event) => {
+    event.preventDefault()
+    const result = onSave(name)
+    if (result?.ok === false) {
+      setError(result.error)
+      return
+    }
+    setNaming(false)
+    setName('')
+    setError('')
+  }
+
+  if (!views.length && !hasFilters) return null
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {views.map((view) => (
+        <span
+          key={view.id}
+          className="inline-flex items-center overflow-hidden rounded-lg border text-xs"
+        >
+          <button
+            type="button"
+            onClick={() => onOpen(view)}
+            className="px-2.5 py-1 font-semibold transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+          >
+            {view.name}
+          </button>
+          <button
+            type="button"
+            onClick={() => onDelete(view.id)}
+            className="border-l px-1.5 py-1 opacity-50 transition-opacity hover:opacity-100"
+            aria-label={`Delete the ${view.name} view`}
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </span>
+      ))}
+
+      {naming ? (
+        <form onSubmit={commit} className="flex items-center gap-1.5">
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value)
+              setError('')
+            }}
+            placeholder="Name this view"
+            maxLength={40}
+            aria-label="Name for the saved view"
+            aria-invalid={error ? true : undefined}
+            className="input h-7 w-40 text-xs"
+          />
+          <button type="submit" className="btn btn-primary btn-sm">
+            Save
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setNaming(false)
+              setError('')
+            }}
+            className="btn btn-ghost btn-sm"
+          >
+            Cancel
+          </button>
+          {error && <span className="text-xs font-medium text-red-600">{error}</span>}
+        </form>
+      ) : (
+        hasFilters && (
+          <button
+            type="button"
+            onClick={() => setNaming(true)}
+            className="btn btn-ghost btn-sm text-xs"
+          >
+            <BookmarkPlus className="h-3.5 w-3.5" />
+            Save this view
+          </button>
+        )
+      )}
+    </div>
+  )
+}
+
+function ToolTable({ tools, selection, ...actions }) {
+  // Only rendered when the page passes a selection — a student's inventory
+  // has nothing to select rows for, so their table is exactly as it was.
+  const selectable = !!selection
+  const allRef = useIndeterminate(selection?.someVisibleSelected)
+
   return (
     <SectionCard bodyClassName="p-0">
       <TableWrap>
         <table className="tbl">
           <thead>
             <tr>
+              {selectable && (
+                <th className="w-10">
+                  <input
+                    ref={allRef}
+                    type="checkbox"
+                    className="h-4 w-4 cursor-pointer"
+                    checked={selection.allVisibleSelected}
+                    onChange={selection.toggleAll}
+                    aria-label={
+                      selection.allVisibleSelected
+                        ? 'Clear the selection'
+                        : `Select all ${tools.length} tools shown`
+                    }
+                  />
+                </th>
+              )}
               <th>Tool</th>
               <th>Category</th>
               <th>Location</th>
@@ -946,7 +1227,23 @@ function ToolTable({ tools, ...actions }) {
           </thead>
           <tbody>
             {tools.map((tool) => (
-              <tr key={tool.id}>
+              <tr
+                key={tool.id}
+                // A selected row is tinted rather than outlined: the table
+                // already carries borders, and a second one would fight them.
+                className={cx(selectable && selection.isSelected(tool.id) && 'bg-amberline-400/10')}
+              >
+                {selectable && (
+                  <td>
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 cursor-pointer"
+                      checked={selection.isSelected(tool.id)}
+                      onChange={() => selection.toggle(tool.id)}
+                      aria-label={`Select ${tool.name}`}
+                    />
+                  </td>
+                )}
                 <td>
                   <Link to={`/tools/${tool.id}`} className="flex min-w-0 items-center gap-2.5 hover:underline">
                     <ToolImage tool={tool} className="h-9 w-9" rounded="rounded-md" />

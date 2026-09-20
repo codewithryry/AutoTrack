@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Download, FileDown, Printer, Upload } from 'lucide-react'
 import { Modal } from './ui'
 import { useApp } from '../context/AppContext'
@@ -21,7 +21,7 @@ import { PERM } from '../utils/permissions'
  * prints an A4 sheet from the scanner's own payload, and `services/tools.js`
  * already knows what a valid tool is; this screen is the doorway to both.
  */
-export default function InventoryActions({ tools = [], filtered = [], className }) {
+export default function InventoryActions({ tools = [], filtered = [], selected = [], className }) {
   const { user, can } = useApp()
   const toast = useToast()
 
@@ -69,6 +69,7 @@ export default function InventoryActions({ tools = [], filtered = [], className 
         onClose={() => setPrintOpen(false)}
         tools={tools}
         filtered={filtered}
+        selected={selected}
         toast={toast}
       />
     </>
@@ -256,14 +257,29 @@ function ImportDialog({ open, onClose, actor, toast }) {
             )}
 
             {analysis.ok > 0 && (
+              // Not `.tbl`: that class's `min-width: 640px` is right for a page
+              // table with room to breathe, but would force this compact preview
+              // to scroll sideways inside a 320px dialog for no reason. The
+              // header treatment below is `.tbl thead th`'s own, though — the
+              // same small-caps label style every other table in the app uses —
+              // so this still reads as the same kind of table, just sized for
+              // where it lives.
               <div className="max-h-48 overflow-auto rounded-xl border">
                 <table className="w-full text-xs">
                   <thead className="sticky top-0" style={{ background: 'rgb(var(--surface-2))' }}>
                     <tr>
-                      <th className="p-2 text-left font-bold">Tool ID</th>
-                      <th className="p-2 text-left font-bold">Name</th>
-                      <th className="p-2 text-left font-bold">Category</th>
-                      <th className="p-2 text-left font-bold">Location</th>
+                      <th className="p-2 text-left text-[11px] font-bold uppercase tracking-wider">
+                        Tool ID
+                      </th>
+                      <th className="p-2 text-left text-[11px] font-bold uppercase tracking-wider">
+                        Name
+                      </th>
+                      <th className="p-2 text-left text-[11px] font-bold uppercase tracking-wider">
+                        Category
+                      </th>
+                      <th className="p-2 text-left text-[11px] font-bold uppercase tracking-wider">
+                        Location
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y">
@@ -297,11 +313,16 @@ function ImportDialog({ open, onClose, actor, toast }) {
  * Print
  * ------------------------------------------------------------------ */
 
-function PrintDialog({ open, onClose, tools, filtered, toast }) {
-  const [scope, setScope] = useState('filtered')
+function PrintDialog({ open, onClose, tools, filtered, selected = [], toast }) {
+  // A selection is a more specific intent than "what is on screen", so it wins
+  // when there is one. Falls back to the filtered list the moment it is cleared.
+  const [scope, setScope] = useState(selected.length ? 'selected' : 'filtered')
+  useEffect(() => {
+    if (open) setScope(selected.length ? 'selected' : 'filtered')
+  }, [open, selected.length])
   const [busy, setBusy] = useState(false)
 
-  const forScope = { all: tools, filtered }[scope] ?? []
+  const forScope = { all: tools, filtered, selected }[scope] ?? []
   const count = forScope.length
 
   const run = async () => {
@@ -354,6 +375,11 @@ function PrintDialog({ open, onClose, tools, filtered, toast }) {
       }
     >
       <div className="space-y-2.5">
+        {/* Offered only when something is selected: an empty scope would be a
+            radio button that prints nothing. */}
+        {selected.length > 0 && (
+          <Option value="selected" label="Selected tools" n={selected.length} />
+        )}
         <Option value="filtered" label="Tools shown on this page" n={filtered.length} />
         <Option value="all" label="All tools in the inventory" n={tools.length} />
 

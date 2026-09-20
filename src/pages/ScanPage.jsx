@@ -1,40 +1,28 @@
 import { useCallback, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
-  AlertTriangle,
   ArrowRight,
-  CheckCircle2,
-  ClipboardList,
-  HardHat,
-  History,
-  MapPin,
   QrCode,
-  RotateCcw,
   ScanLine,
-  Undo2,
-  UserCheck,
   Wrench,
   XCircle,
 } from 'lucide-react'
 import QRScanner from '../components/QRScanner'
+import ToolScanResult from '../components/ToolScanResult'
+import ToolFound from '../components/ToolFound'
 import Walkthrough, { usePageTour } from '../components/Walkthrough'
 import {
-  ConditionBadge,
-  DetailItem,
   PageHeader,
   SectionCard,
   Spinner,
-  StatusBadge,
 } from '../components/ui'
+import { useScanResult } from '../hooks/useScanResult'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import * as toolService from '../services/tools'
 import * as txnService from '../services/transactions'
-import { isInstructor, isStudent, PERM } from '../utils/permissions'
-import { NON_BORROWABLE_REASON, TOOL_STATUS } from '../utils/constants'
+import { isStudent, PERM } from '../utils/permissions'
 import { parseQRPayload } from '../utils/qrPayload'
-import { cx } from '../utils/helpers'
-import { dueLabel, formatDate } from '../utils/dates'
 
 /**
  * Scanner workflow.
@@ -102,7 +90,9 @@ export default function ScanPage() {
   const toast = useToast()
   const navigate = useNavigate()
 
-  const [result, setResult] = useState(null) // { tool, loan } | { error }
+  // Survives the unmount that opening the tool's page causes, so pressing
+  // back returns to the tool that was scanned rather than an empty scanner.
+  const { result, setResult, clearResult } = useScanResult()
   const [looking, setLooking] = useState(false)
 
   // Once per account on this device, remembered separately from every other page.
@@ -150,7 +140,11 @@ export default function ScanPage() {
     [toast, user],
   )
 
-  const reset = () => setResult(null)
+  const reset = () => clearResult()
+
+  // The phone's state switch: a resolved tool replaces the camera rather than
+  // sharing the screen with it.
+  const found = !looking && !!result?.tool
 
   return (
     <>
@@ -162,70 +156,69 @@ export default function ScanPage() {
           its subtitle are the desktop's alone. */}
       <PageHeader title="Scan a tool" icon={QrCode} hideTitleMobile hideTitle={isStudent(user)} />
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        {/* The two ways in, in one panel: point the camera at the label, or type
-            the Tool ID printed on it. Both resolve the same tool record and
-            land on the same result beside them. */}
-        {/* No heading: the viewfinder and the Tool ID field say what they are,
-            and "How it works" beside them says the rest. */}
+      {/* Two states, not one layout with something pinned over it.
+          ------------------------------------------------------------------
+          The previous version kept the camera at full size and floated the
+          result above it, so the scanner and the result competed for the same
+          screen and the result got whatever was left. On a phone they are now
+          different states: while nothing is scanned the camera is the whole
+          page, and the moment a tool resolves the camera is *unmounted* and the
+          result takes the space it had.
+
+          Unmounting rather than hiding matters twice over: `QRScanner`'s
+          cleanup calls `stop(true)`, so the camera stream is released instead
+          of running behind a result nobody is looking at — which on a 2 GB
+          phone is the most expensive thing on the screen.
+
+          From `lg` neither state applies: a desktop has room for both at once,
+          so the scanner stays on the left and the result fills the right. */}
+
+      {/* ---------------------------- the phone ---------------------------- */}
+      <div className="lg:hidden">
+        {found ? (
+          <ToolFound
+            tool={result.tool}
+            loan={result.loan}
+            can={can}
+            onNavigate={navigate}
+            onReset={reset}
+          />
+        ) : (
+          <div className="space-y-4">
+            <SectionCard>
+              <QRScanner onDetected={handleDetected} disabled={looking} />
+            </SectionCard>
+            {looking && <LookingUp />}
+            {!looking && result?.error && (
+              <NotFound result={result} onReset={reset} can={can} />
+            )}
+            {!looking && !result && (
+              <div data-tour="scan-guide">
+                <ScanHint student={isStudent(user)} />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* --------------------------- the desktop --------------------------- */}
+      <div className="hidden gap-4 lg:grid lg:grid-cols-2">
         <SectionCard>
           <QRScanner onDetected={handleDetected} disabled={looking} />
         </SectionCard>
 
         <div className="space-y-4">
-          {looking && (
-            <div className="card flex items-center gap-3 p-5">
-              <Spinner className="h-5 w-5" />
-              <p className="text-sm font-semibold">Looking up the tool record…</p>
-            </div>
-          )}
-
+          {looking && <LookingUp />}
           {!looking && !result && (
             <div data-tour="scan-guide">
               <ScanHint student={isStudent(user)} />
             </div>
           )}
-
           {!looking && result?.error && (
-            <SectionCard title="Scan result">
-              <div className="flex flex-col items-center py-4 text-center">
-                <span className="mb-3 grid h-12 w-12 place-items-center rounded-xl bg-red-500/10">
-                  <XCircle className="h-6 w-6 text-red-500" />
-                </span>
-                <p className="text-sm font-bold">Tool not found</p>
-                <p className="muted mt-1.5 max-w-xs text-sm">{result.error}</p>
-                {result.raw && (
-                  <p className="subtle mono mt-2 break-all text-xs">Scanned: {result.raw}</p>
-                )}
-                <div className="mt-4 flex gap-2">
-                  <button type="button" onClick={reset} className="btn btn-outline">
-                    Try again
-                  </button>
-                  {can(PERM.TOOL_VIEW) && (
-                    <Link to="/tools" className="btn btn-primary">
-                      Browse inventory
-                    </Link>
-                  )}
-                </div>
-              </div>
-            </SectionCard>
+            <NotFound result={result} onReset={reset} can={can} />
           )}
-
-          {/* An instructor scans on someone else's behalf, so their result panel
-              leads with the tool's status and the loan record rather than with a
-              self-borrow button. Same scanner, same lookups, same permissions. */}
-          {!looking && result?.tool && isInstructor(user) && (
-            <StaffScanResult
-              tool={result.tool}
-              loan={result.loan}
-              can={can}
-              onNavigate={navigate}
-              onReset={reset}
-            />
-          )}
-
-          {!looking && result?.tool && !isInstructor(user) && (
-            <ScanResult
+          {!looking && result?.tool && (
+            <ToolScanResult
               tool={result.tool}
               loan={result.loan}
               can={can}
@@ -238,6 +231,49 @@ export default function ScanPage() {
 
       <Walkthrough steps={tourSteps} open={tour.open} onClose={tour.close} compact={isStudent(user)} />
     </>
+  )
+}
+
+/** The moment between a code being read and its record arriving. */
+function LookingUp() {
+  return (
+    <div className="card flex items-center gap-3 p-5">
+      <Spinner className="h-5 w-5" />
+      <p className="text-sm font-semibold">Looking up the tool record…</p>
+    </div>
+  )
+}
+
+/**
+ * A code that read cleanly but matches no tool.
+ *
+ * Both ways out are offered rather than leaving the person on a dead end: scan
+ * again, or go and look the tool up by hand.
+ */
+function NotFound({ result, onReset, can }) {
+  return (
+    <SectionCard title="Scan result">
+      <div className="flex flex-col items-center py-4 text-center">
+        <span className="mb-3 grid h-12 w-12 place-items-center rounded-xl bg-red-500/10">
+          <XCircle className="h-6 w-6 text-red-500" />
+        </span>
+        <p className="text-sm font-bold">Tool not found</p>
+        <p className="muted mt-1.5 max-w-xs text-sm">{result.error}</p>
+        {result.raw && (
+          <p className="subtle mono mt-2 break-all text-xs">Scanned: {result.raw}</p>
+        )}
+        <div className="mt-4 flex gap-2">
+          <button type="button" onClick={onReset} className="btn btn-outline">
+            Scan again
+          </button>
+          {can(PERM.TOOL_VIEW) && (
+            <Link to="/tools" className="btn btn-primary">
+              Browse inventory
+            </Link>
+          )}
+        </div>
+      </div>
+    </SectionCard>
   )
 }
 
@@ -314,400 +350,3 @@ function ScanHint({ student }) {
  * buttons rendered are the ones this instructor's permissions already allow.
  * The lookup, the routes and the guards are the same ones used everywhere else.
  */
-function StaffScanResult({ tool, loan, can, onNavigate, onReset }) {
-  const activeLoan = loan?.transaction
-  const borrower = loan?.borrower
-  const overdue = tool.status === TOOL_STATUS.OVERDUE || activeLoan?.status === 'Overdue'
-  const outOfService = [
-    TOOL_STATUS.MAINTENANCE,
-    TOOL_STATUS.DAMAGED,
-    TOOL_STATUS.LOST,
-    TOOL_STATUS.RETIRED,
-  ].includes(tool.status)
-
-  const eligibility = toolService.borrowEligibility(tool)
-  const canIssue = eligibility.ok && can(PERM.BORROW_FOR_OTHERS)
-  const canReceive = !!activeLoan && can(PERM.RETURN_ANY)
-
-  const tone = overdue ? 'danger' : activeLoan ? 'info' : outOfService ? 'warning' : 'success'
-  const TONE_BAR = {
-    success: 'bg-emerald-500',
-    info: 'bg-blue-500',
-    warning: 'bg-orange-500',
-    danger: 'bg-red-500',
-  }
-  const TONE_WELL = {
-    success: 'bg-emerald-500/12',
-    info: 'bg-blue-500/12',
-    warning: 'bg-orange-500/12',
-    danger: 'bg-red-500/12',
-  }
-
-  // One line under the tool name that says what the counter is looking at.
-  const headline = overdue
-    ? 'Overdue — recover this tool'
-    : activeLoan
-      ? 'On loan — ready to receive'
-      : outOfService
-        ? `Out of service · ${tool.status}`
-        : 'Available to issue'
-
-  return (
-    <section className="card relative overflow-hidden">
-      <span className={cx('absolute inset-x-0 top-0 h-1', TONE_BAR[tone])} />
-
-      <div className="p-4 pt-5 sm:p-5 sm:pt-6">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <Link
-              to={`/tools/${tool.id}`}
-              className="block truncate text-lg font-extrabold leading-tight hover:underline"
-            >
-              {tool.name}
-            </Link>
-            <p className="subtle mono mt-0.5 text-sm">{tool.id}</p>
-            <p
-              className={cx(
-                'mt-1.5 text-xs font-bold',
-                tone === 'danger'
-                  ? 'text-red-600 dark:text-red-400'
-                  : tone === 'info'
-                    ? 'text-blue-600 dark:text-blue-400'
-                    : tone === 'warning'
-                      ? 'text-orange-600 dark:text-orange-400'
-                      : 'text-emerald-600 dark:text-emerald-400',
-              )}
-            >
-              {headline}
-            </p>
-          </div>
-          <span
-            className={cx('grid h-11 w-11 shrink-0 place-items-center rounded-xl', TONE_WELL[tone])}
-          >
-            {tone === 'success' ? (
-              <CheckCircle2 className="h-6 w-6 text-emerald-500" />
-            ) : tone === 'danger' ? (
-              <AlertTriangle className="h-6 w-6 text-red-500" />
-            ) : tone === 'warning' ? (
-              <HardHat className="h-6 w-6 text-orange-500" />
-            ) : (
-              <Undo2 className="h-6 w-6 text-blue-500" />
-            )}
-          </span>
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          <StatusBadge status={tool.status} />
-          <ConditionBadge condition={tool.condition} />
-          <span
-            className="badge border-transparent"
-            style={{ background: 'rgb(var(--surface-3))', color: 'rgb(var(--text-muted))' }}
-          >
-            {tool.category}
-          </span>
-        </div>
-
-        <dl className="mt-4 grid grid-cols-2 gap-4">
-          <DetailItem label="Location">
-            <span className="flex items-center gap-1.5">
-              <MapPin className="h-3.5 w-3.5 shrink-0 opacity-60" />
-              <span className="truncate">{tool.location}</span>
-            </span>
-          </DetailItem>
-          <DetailItem label="Brand / model">
-            {[tool.brand, tool.model].filter(Boolean).join(' · ') || '—'}
-          </DetailItem>
-        </dl>
-
-        {/* ---------------------- borrower and transaction ----------------------
-            The part a student's panel does not need: who is holding the tool and
-            the record that will be closed when it comes back. */}
-        {activeLoan && (
-          <div
-            className="mt-4 rounded-lg border p-3.5"
-            style={{ background: 'rgb(var(--surface-2))' }}
-          >
-            <p className="subtle text-[11px] font-bold uppercase tracking-wider">Borrower</p>
-            <p className="mt-1 text-sm font-bold">{activeLoan.userName}</p>
-            <p className="muted mt-0.5 text-xs">
-              {[borrower?.role ?? activeLoan.userRole, borrower?.email].filter(Boolean).join(' · ') ||
-                '—'}
-            </p>
-
-            <dl className="mt-3 grid grid-cols-2 gap-3 border-t pt-3">
-              <DetailItem label="Transaction">
-                <span className="mono truncate">{activeLoan.id}</span>
-              </DetailItem>
-              <DetailItem label="Status">{activeLoan.status}</DetailItem>
-              <DetailItem label="Borrowed">{formatDate(activeLoan.borrowDate)}</DetailItem>
-              <DetailItem label="Due">{formatDate(activeLoan.dueDate)}</DetailItem>
-            </dl>
-
-            <p
-              className={cx(
-                'mt-2.5 text-xs font-bold',
-                overdue ? 'text-red-600 dark:text-red-400' : 'text-blue-600 dark:text-blue-400',
-              )}
-            >
-              {dueLabel(activeLoan.dueDate)}
-            </p>
-            {activeLoan.purpose && (
-              <p className="muted mt-1 text-xs leading-relaxed">Purpose: {activeLoan.purpose}</p>
-            )}
-          </div>
-        )}
-
-        {/* Out of service, with no loan to close: state the reason plainly and
-            offer only the service log, which is the one thing an instructor can
-            act on here. */}
-        {!activeLoan && outOfService && (
-          <div className="mt-4 flex items-start gap-2.5 rounded-lg border border-orange-200 bg-orange-50 px-3.5 py-3 dark:border-orange-500/30 dark:bg-orange-500/10">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-orange-600 dark:text-orange-400" />
-            <p className="text-sm font-medium leading-snug text-orange-800 dark:text-orange-200">
-              {NON_BORROWABLE_REASON[tool.status] ?? eligibility.reason}
-            </p>
-          </div>
-        )}
-
-        {/* ------------------------------ staff actions ------------------------------ */}
-        <div className="mt-5 space-y-2">
-          {canReceive && (
-            <button
-              type="button"
-              onClick={() => onNavigate(`/return?tool=${tool.id}`)}
-              className="btn btn-success btn-lg w-full"
-            >
-              <Undo2 className="h-4 w-4" />
-              Receive return
-            </button>
-          )}
-          {canIssue && (
-            <button
-              type="button"
-              onClick={() => onNavigate(`/borrow?tool=${tool.id}`)}
-              className="btn btn-primary btn-lg w-full"
-            >
-              <UserCheck className="h-4 w-4" />
-              Borrow for a student
-            </button>
-          )}
-          {activeLoan && can(PERM.TXN_VIEW_ALL) && (
-            <Link to={`/transactions?tool=${tool.id}`} className="btn btn-outline w-full">
-              <ClipboardList className="h-4 w-4" />
-              Open transaction record
-            </Link>
-          )}
-          {outOfService && can(PERM.MAINTENANCE_VIEW) && (
-            <Link to="/maintenance" className="btn btn-outline w-full">
-              <HardHat className="h-4 w-4" />
-              Open service log
-            </Link>
-          )}
-          {activeLoan && !canReceive && (
-            <p className="subtle text-center text-xs">
-              Only {activeLoan.userName} can hand this tool back.
-            </p>
-          )}
-
-          <div className="flex gap-2">
-            <Link to={`/tools/${tool.id}`} className="btn btn-outline flex-1">
-              <Wrench className="h-4 w-4" />
-              Tool details
-            </Link>
-            <Link to={`/tools/${tool.id}/history`} className="btn btn-outline flex-1">
-              <History className="h-4 w-4" />
-              History
-            </Link>
-          </div>
-
-          <button type="button" onClick={onReset} className="btn btn-ghost w-full">
-            <RotateCcw className="h-4 w-4" />
-            Scan another tool
-          </button>
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function ScanResult({ tool, loan, can, onNavigate, onReset }) {
-  const eligibility = toolService.borrowEligibility(tool)
-  const activeLoan = loan?.transaction
-  const canReturn = !!activeLoan && can(PERM.RETURN)
-  const canBorrow = eligibility.ok && can(PERM.BORROW)
-
-  const tone = activeLoan
-    ? activeLoan.status === 'Overdue'
-      ? 'danger'
-      : 'info'
-    : eligibility.ok
-      ? 'success'
-      : 'warning'
-
-  const TONE_BAR = {
-    success: 'bg-emerald-500',
-    info: 'bg-blue-500',
-    warning: 'bg-orange-500',
-    danger: 'bg-red-500',
-  }
-
-  return (
-    <section className="card relative overflow-hidden">
-      <span className={cx('absolute inset-x-0 top-0 h-1', TONE_BAR[tone])} />
-
-      <div className="p-4 pt-5 sm:p-5 sm:pt-6">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            {/* `from=scan` is what keeps the tool page's back control pointing
-                at the scanner rather than at the inventory — the scan is where
-                this person came from, so it is where "back" means. */}
-            <Link
-              to={`/tools/${tool.id}?from=scan`}
-              className="block truncate text-lg font-extrabold leading-tight hover:underline"
-            >
-              {tool.name}
-            </Link>
-            <p className="subtle mono mt-0.5 text-sm">{tool.id}</p>
-          </div>
-          <span
-            className={cx(
-              'grid h-11 w-11 shrink-0 place-items-center rounded-xl',
-              tone === 'success'
-                ? 'bg-emerald-500/12'
-                : tone === 'danger'
-                  ? 'bg-red-500/12'
-                  : tone === 'warning'
-                    ? 'bg-orange-500/12'
-                    : 'bg-blue-500/12',
-            )}
-          >
-            {tone === 'success' ? (
-              <CheckCircle2 className="h-6 w-6 text-emerald-500" />
-            ) : tone === 'danger' ? (
-              <AlertTriangle className="h-6 w-6 text-red-500" />
-            ) : tone === 'warning' ? (
-              <HardHat className="h-6 w-6 text-orange-500" />
-            ) : (
-              <Undo2 className="h-6 w-6 text-blue-500" />
-            )}
-          </span>
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          <StatusBadge status={tool.status} />
-          <ConditionBadge condition={tool.condition} />
-          <span
-            className="badge border-transparent"
-            style={{ background: 'rgb(var(--surface-3))', color: 'rgb(var(--text-muted))' }}
-          >
-            {tool.category}
-          </span>
-        </div>
-
-        <dl className="mt-4 grid grid-cols-2 gap-4">
-          <DetailItem label="Location">
-            <span className="flex items-center gap-1.5">
-              <MapPin className="h-3.5 w-3.5 shrink-0 opacity-60" />
-              <span className="truncate">{tool.location}</span>
-            </span>
-          </DetailItem>
-          <DetailItem label="Brand / model">
-            {[tool.brand, tool.model].filter(Boolean).join(' · ') || '—'}
-          </DetailItem>
-        </dl>
-
-        {/* current holder */}
-        {activeLoan && (
-          <div
-            className="mt-4 rounded-lg border p-3.5"
-            style={{ background: 'rgb(var(--surface-2))' }}
-          >
-            <p className="subtle text-[11px] font-bold uppercase tracking-wider">
-              Currently borrowed by
-            </p>
-            <p className="mt-1 text-sm font-bold">{activeLoan.userName}</p>
-            <p className="muted mt-0.5 text-xs">
-              Since {formatDate(activeLoan.borrowDate)} · due {formatDate(activeLoan.dueDate)}
-            </p>
-            <p
-              className={cx(
-                'mt-1 text-xs font-bold',
-                activeLoan.status === 'Overdue'
-                  ? 'text-red-600 dark:text-red-400'
-                  : 'text-blue-600 dark:text-blue-400',
-              )}
-            >
-              {dueLabel(activeLoan.dueDate)}
-            </p>
-          </div>
-        )}
-
-        {/* blocked reason */}
-        {!activeLoan && !eligibility.ok && (
-          <div className="mt-4 flex items-start gap-2.5 rounded-lg border border-orange-200 bg-orange-50 px-3.5 py-3 dark:border-orange-500/30 dark:bg-orange-500/10">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-orange-600 dark:text-orange-400" />
-            <p className="text-sm font-medium leading-snug text-orange-800 dark:text-orange-200">
-              {NON_BORROWABLE_REASON[tool.status] ?? eligibility.reason}
-            </p>
-          </div>
-        )}
-
-        {/* actions */}
-        <div className="mt-5 space-y-2">
-          {canReturn && (
-            <button
-              type="button"
-              onClick={() => onNavigate(`/return?tool=${tool.id}`)}
-              className={cx(
-                'btn btn-lg w-full',
-                txnService.returnRequested(activeLoan) ? 'btn-outline' : 'btn-success',
-              )}
-            >
-              <Undo2 className="h-4 w-4" />
-              {txnService.returnRequested(activeLoan) ? 'Return requested' : 'Return tool'}
-            </button>
-          )}
-          {/* Scanning identifies the tool; the borrowing itself starts as one
-              request, on the one page that creates them. An approved request
-              is collected from Requests, not from here. */}
-          {canBorrow && (
-            <button
-              type="button"
-              onClick={() => onNavigate(`/requests/new?tool=${tool.id}`)}
-              className="btn btn-primary btn-lg w-full"
-            >
-              <ArrowRight className="h-4 w-4" />
-              Request to borrow
-            </button>
-          )}
-          {activeLoan && !canReturn && (
-            <p className="subtle text-center text-xs">
-              Only {activeLoan.userName} or a laboratory instructor can return this tool.
-            </p>
-          )}
-
-          {/* The tool's timeline is laboratory record-keeping, so it is offered
-              only to whoever may read everyone's transactions. A student gets
-              the record itself and the action, and nothing between them. */}
-          <div className="flex gap-2">
-            <Link to={`/tools/${tool.id}?from=scan`} className="btn btn-outline flex-1">
-              <Wrench className="h-4 w-4" />
-              Tool details
-            </Link>
-            {can(PERM.TXN_VIEW_ALL) && (
-              <Link to={`/tools/${tool.id}/history`} className="btn btn-outline flex-1">
-                <History className="h-4 w-4" />
-                History
-              </Link>
-            )}
-          </div>
-
-          <button type="button" onClick={onReset} className="btn btn-ghost w-full">
-            <RotateCcw className="h-4 w-4" />
-            Scan another tool
-          </button>
-        </div>
-      </div>
-    </section>
-  )
-}

@@ -439,6 +439,31 @@
   }
 
   /* ------------------------------------------------------------------ *
+   * Scan → tool found
+   *
+   * The camera is unmounted and this takes its place, so the transition is the
+   * new state arriving rather than a panel sliding over the old one. One
+   * transform and one opacity, both compositor-only: no layout, no repaint, and
+   * short enough that it never delays the thing somebody is waiting to read.
+   * ------------------------------------------------------------------ */
+  .scan-found {
+    animation: scan-found-in 140ms ease-out;
+  }
+
+  @keyframes scan-found-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .scan-found {
+      animation: none;
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
    * The start-up screen
    *
    * Shown while the stored session is read, which used to be a blank page.

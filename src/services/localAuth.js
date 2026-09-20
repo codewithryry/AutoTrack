@@ -280,6 +280,84 @@ export async function completeAuthFromUrl(url) {
   return false
 }
 
+/**
+ * The shortest password a new one may be.
+ *
+ * Supabase refuses anything under six with `weak_password`, and that message is
+ * already mapped in `CODE_MESSAGES` above. Checking it here too means the person
+ * is told before a round trip rather than after one — the two agree deliberately.
+ */
+export const MIN_PASSWORD_LENGTH = 6
+
+/**
+ * Change the signed-in account's own password.
+ *
+ * Supabase's `updateUser({ password })` does not ask for the current one: a
+ * valid session is enough. That is too weak for a shared workshop phone left
+ * unlocked for a minute, so the current password is verified first — and
+ * verified on a *throwaway* client, with its own storage key and no
+ * persistence, exactly as `createAuthAccount` does.
+ *
+ * The reason is the same in both places: `signInWithPassword` on the shared
+ * client would replace the live session as a side effect of checking a
+ * password, and a wrong password or a dropped connection at that moment would
+ * leave the person logged out of a screen they were only visiting. The
+ * throwaway client cannot touch their session, so a failed check costs nothing.
+ *
+ * No password is stored, logged, or kept in memory after this returns.
+ *
+ * @throws {AuthError} with a `field` of 'currentPassword' | 'password'
+ */
+export async function changePassword({ currentPassword, newPassword }) {
+  const current = String(currentPassword ?? '')
+  const next = String(newPassword ?? '')
+
+  if (!current) throw new AuthError('Enter your current password.', 'currentPassword')
+  if (!next) throw new AuthError('Enter a new password.', 'password')
+  if (next.length < MIN_PASSWORD_LENGTH) {
+    throw new AuthError(`Use at least ${MIN_PASSWORD_LENGTH} characters.`, 'password')
+  }
+  if (next === current) {
+    throw new AuthError('The new password is the same as the current one.', 'password')
+  }
+
+  const { data } = await supabase.auth.getSession()
+  const email = data?.session?.user?.email
+  if (!email) throw new AuthError('Your session has expired. Sign in again to continue.')
+
+  // Verify the current password without disturbing the live session.
+  const check = createClient(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      storageKey: `stms.reauth.${Date.now()}`,
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  })
+  try {
+    const { error } = await check.auth.signInWithPassword({ email, password: current })
+    if (error) {
+      // One wording for a wrong password, whichever way it was reported. A
+      // network failure is not a wrong password and must not read as one.
+      if (/failed to fetch|network/i.test(error.message ?? '')) {
+        throw new AuthError(
+          'Cannot reach the laboratory server. Check the connection and try again.',
+        )
+      }
+      throw new AuthError('That is not your current password.', 'currentPassword')
+    }
+  } finally {
+    await check.auth.signOut().catch(() => {})
+  }
+
+  // The session that is being changed is the caller's own, so this runs on the
+  // shared client. Supabase keeps the session valid afterwards.
+  const { error } = await supabase.auth.updateUser({ password: next })
+  if (error) throw toAuthError(error)
+
+  return true
+}
+
 export async function sendPasswordReset(email) {
   const address = String(email ?? '').trim()
   // In the APK `window.location.origin` is the WebView's own `https://localhost`,

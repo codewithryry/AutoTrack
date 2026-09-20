@@ -4,19 +4,26 @@ import { Camera, CameraOff, Keyboard, RefreshCw, ScanLine, SwitchCamera } from '
 import { Spinner } from './ui'
 import { cx } from '../utils/helpers'
 import { parseQRPayload } from '../utils/qrPayload'
+import { isNative } from '../utils/native'
 
 const REGION_ID = 'stms-qr-region'
 
-const ERRORS = {
-  NotAllowedError:
-    'Camera access was denied. Allow camera permission in your browser settings, or enter the Tool ID by hand.',
+// `NotAllowedError`'s wording branches by platform: there is no "browser
+// settings" inside the Android app for somebody to find, and pointing at the
+// wrong recovery path is worse than a generic message. `DeviceAccess.jsx`
+// already has this exact split for the same permission, on the Settings page.
+const errorsFor = () => ({
+  NotAllowedError: isNative()
+    ? 'Camera access is blocked. Turn it on in Android Settings › Apps › ToolTrack › ' +
+      'Permissions, then come back — or enter the Tool ID by hand below.'
+    : 'Camera access was denied. Allow camera permission in your browser settings, or enter the Tool ID by hand.',
   NotFoundError: 'No camera was found on this device. Enter the Tool ID by hand instead.',
   NotReadableError:
     'The camera is already in use by another application. Close it and try again.',
   OverconstrainedError: 'No camera matched the requested settings. Try switching cameras.',
   SecurityError:
     'Camera access requires a secure connection (HTTPS). Enter the Tool ID by hand instead.',
-}
+})
 
 /**
  * Live camera QR scanner with a manual fallback.
@@ -150,7 +157,7 @@ export default function QRScanner({ onDetected, disabled = false }) {
         if (goneRef.current) return
         const name = err?.name ?? ''
         setError(
-          ERRORS[name] ??
+          errorsFor()[name] ??
             err?.message ??
             'The camera could not be started. Enter the Tool ID by hand instead.',
         )

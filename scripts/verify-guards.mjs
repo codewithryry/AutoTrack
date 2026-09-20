@@ -521,3 +521,387 @@ check('only the data layer talks to Supabase', () => {
     'reach the database through services/db.js instead',
   )
 })
+
+/* ------------------------------------------------------------------ *
+ * Concurrency and scheduling
+ *
+ * Two properties the application cannot enforce from the client, so both are
+ * checked here against the migrations that do enforce them.
+ * ------------------------------------------------------------------ */
+
+const migrations = readdirSync(join(root, 'supabase', 'migrations'))
+  .filter((f) => f.endsWith('.sql'))
+  .map((f) => read(join('supabase', 'migrations', f)))
+  .join('\n')
+
+check('a tool can only have one open loan, enforced by the database', () => {
+  // The check-then-insert in services/transactions.js cannot be atomic from a
+  // browser: runAtomic records compensating steps, it does not hold a lock. Two
+  // staff confirming the same tool at once would both pass. Only a database
+  // constraint can refuse the second write.
+  assert.match(
+    migrations,
+    /create unique index[\s\S]{0,120}transactions_one_active_per_tool/,
+    'the partial unique index on active loans is missing',
+  )
+  // It must cover exactly the statuses that mean the tool is out. Including
+  // Returned would make a tool unborrowable for ever after its first loan.
+  const index = migrations.match(
+    /transactions_one_active_per_tool[\s\S]{0,200}?where status in \(([^)]+)\)/,
+  )
+  assert.ok(index, 'the index must be scoped with a WHERE clause')
+  const statuses = index[1].split(',').map((s) => s.trim().replace(/'/g, ''))
+  assert.deepEqual(
+    statuses.sort(),
+    ['Borrowed', 'Overdue'],
+    'the index must cover exactly the active statuses (ACTIVE_TXN_STATUSES)',
+  )
+})
+
+check('the borrow path reports a conflict rather than a raw database error', () => {
+  const borrow = read(join('src', 'services', 'transactions.js'))
+  assert.match(
+    borrow,
+    /23505|one_active_per_tool/,
+    'borrow() must catch the unique violation the index raises',
+  )
+  assert.match(
+    borrow,
+    /was just issued to|just issued to somebody else/,
+    'the conflict needs a sentence the person can act on',
+  )
+})
+
+check('the overdue sweep can run without a browser', () => {
+  assert.match(
+    migrations,
+    /create or replace function public\.run_scheduled_sweep/,
+    'the scheduled sweep function is missing',
+  )
+  // It writes to transactions, tools, notifications and activity_logs, none of
+  // which a cron caller holds a session for.
+  assert.match(migrations, /run_scheduled_sweep[\s\S]{0,400}security definer/)
+  // And it must not be reachable from a signed-in browser: the client keeps its
+  // own RLS-governed runOverdueCheck() for immediate freshness.
+  assert.match(
+    migrations,
+    /revoke all on function public\.run_scheduled_sweep[^;]*from authenticated/,
+    'the sweep function must not be callable by authenticated sessions',
+  )
+})
+
+check('running the sweep twice cannot duplicate alerts or state', () => {
+  // Idempotency is the whole point of a scheduled job that may overlap with the
+  // client-side sweep. Three mechanisms, all required.
+  //
+  // The unique index is `notifications_dedupe_key`, from 0001_schema.sql — the
+  // table's very first migration, standing since before the sweep existed. An
+  // earlier draft of 0033 assumed it was missing, re-created it under a second
+  // name, and deleted rows to make room for a constraint that was never absent.
+  // Caught in review before it reached production; see 0033's own comment.
+  // What actually has to hold is that a live partial unique index on
+  // `dedupe_key` exists at all — under whichever name — for the `on conflict`
+  // clauses below to mean anything.
+  assert.match(
+    migrations,
+    /create unique index[\s\S]{0,120}on public\.notifications \(dedupe_key\)/,
+    'dedupe_key must be unique for ON CONFLICT to suppress a repeat',
+  )
+  const sweep = migrations.slice(migrations.indexOf('run_scheduled_sweep'))
+  assert.ok(
+    (sweep.match(/on conflict \(dedupe_key\)/g) ?? []).length >= 4,
+    'every notification insert in the sweep must be ON CONFLICT DO NOTHING',
+  )
+  assert.match(
+    sweep,
+    /if loan\.status <> 'Overdue' then/,
+    'a loan already marked Overdue must not be written again',
+  )
+})
+
+check('the client-side sweep is still in place for immediate freshness', () => {
+  // The server job keeps the records correct; this keeps a staff member's own
+  // screen correct the moment they open the app. Removing it was never the aim.
+  const context = read(join('src', 'context', 'AppContext.jsx'))
+  assert.match(context, /runOverdueCheck\(/)
+  assert.match(context, /maintenanceService\.notifyDue\(\)/)
+})
+
+check('the sweep endpoint keeps its secret server-side', () => {
+  const endpoint = read(join('api', 'sweep.js'))
+  assert.match(endpoint, /CRON_SECRET/, 'the endpoint must authenticate its caller')
+  // A VITE_ fallback is fine for a *public* value — `api/push.js` reads
+  // VITE_SUPABASE_URL the same way, and the URL ships in the bundle anyway.
+  // What must never happen is a secret being given that prefix, because the
+  // prefix is what puts a value into every browser and into the APK.
+  assert.doesNotMatch(
+    endpoint,
+    /VITE_[A-Z_]*(SECRET|SERVICE_ROLE|PRIVATE)/,
+    'a secret must never be read from a bundled VITE_ variable',
+  )
+  assert.doesNotMatch(
+    endpoint,
+    /VITE_CRON_SECRET/,
+    'the cron secret must stay server-side',
+  )
+  // The service-role key belongs here and nowhere in src/. The existing
+  // service-role guard above already proves the second half.
+  assert.match(endpoint, /SUPABASE_SERVICE_ROLE_KEY/)
+})
+
+/* ------------------------------------------------------------------ *
+ * Batch 2 — password change, problem reports, form accessibility
+ * ------------------------------------------------------------------ */
+
+check('changing a password verifies the current one', () => {
+  const auth = read(join('src', 'services', 'localAuth.js'))
+  // Supabase's updateUser() accepts a valid session alone, which is too weak
+  // for a shared phone left unlocked. The current password is checked first.
+  assert.match(auth, /export async function changePassword/)
+  assert.match(
+    auth,
+    /signInWithPassword\(\{ email, password: current \}\)/,
+    'the current password must actually be verified',
+  )
+  // And verified on a throwaway client, so a wrong password cannot end the
+  // session of somebody who was only visiting the screen.
+  assert.match(auth, /storageKey: `stms\.reauth/, 'verification must not run on the shared client')
+  assert.match(auth, /persistSession: false/)
+})
+
+check('no password is logged or kept', () => {
+  const auth = read(join('src', 'services', 'localAuth.js'))
+  const fn = auth.slice(auth.indexOf('export async function changePassword'))
+  const body = fn.slice(0, fn.indexOf('\nexport '))
+  assert.doesNotMatch(
+    body,
+    /console\.(log|warn|error|info)\([^)]*(password|current|next)/i,
+    'a password must never reach the console',
+  )
+  assert.doesNotMatch(body, /localStorage|sessionStorage/, 'a password must never be stored')
+})
+
+check('the reset-by-email route is untouched', () => {
+  const auth = read(join('src', 'services', 'localAuth.js'))
+  assert.match(auth, /resetPasswordForEmail/, 'the existing recovery flow must remain')
+})
+
+check('a problem report reuses the maintenance record', () => {
+  const svc = read(join('src', 'services', 'maintenance.js'))
+  assert.match(svc, /export async function reportProblem/)
+  // Through the database function, never a direct insert: maintenance_insert
+  // is staff-only and stays that way.
+  assert.match(
+    svc,
+    /db\.rpc\('report_tool_problem'/,
+    'reports must go through the function, not a direct insert',
+  )
+  assert.doesNotMatch(
+    svc.slice(svc.indexOf('reportProblem')),
+    /COLLECTIONS\.maintenance\)/,
+    'reportProblem must not insert into maintenance directly',
+  )
+})
+
+check('the report function fixes what a caller may not choose', () => {
+  assert.match(migrations, /create or replace function public\.report_tool_problem/)
+  assert.match(migrations, /security definer/)
+  // The reporter is taken from the session, never from the arguments.
+  assert.match(
+    migrations,
+    /v_reporter_id text := auth\.uid\(\)::text/,
+    'the reporter must come from the session',
+  )
+  // Only three inputs; everything else is decided by the function.
+  assert.match(
+    migrations,
+    /report_tool_problem\(\s*p_tool_id\s+text,\s*p_type\s+text,\s*p_description text\s*\)/,
+    'the function must accept only tool, type and description',
+  )
+  assert.match(migrations, /public\.is_active\(\)/, 'a pending account must be refused')
+  // And a double tap must not file two reports.
+  assert.match(migrations, /interval '5 minutes'/, 'a repeat submit must be collapsed')
+})
+
+check('reporting does not widen the maintenance policy', () => {
+  // The exception is the function, not the table. If this ever fails, a
+  // migration has loosened the insert policy and students can write any row.
+  assert.match(
+    migrations,
+    /create policy maintenance_insert[\s\S]{0,120}is_staff\(\)/,
+    'maintenance_insert must stay staff-only',
+  )
+})
+
+check('the tool is attached to a report without being typed', () => {
+  const dialog = read(join('src', 'components', 'ReportProblemDialog.jsx'))
+  assert.match(dialog, /toolId: tool\.id/, 'the tool must come from what is on screen')
+  assert.doesNotMatch(
+    dialog,
+    /label="Tool ID"|placeholder="TOOL-/,
+    'nobody should be asked to type a Tool ID',
+  )
+  // Reachable from both places in the specified flow.
+  assert.match(read(join('src', 'components', 'ToolScanResult.jsx')), /ReportProblemDialog/)
+  assert.match(read(join('src', 'pages', 'ToolDetailPage.jsx')), /ReportProblemDialog/)
+})
+
+check('form errors are announced, not merely coloured', () => {
+  const ui = read(join('src', 'components', 'ui.jsx'))
+  // The message carries an id and each control points at it. Without this a
+  // screen reader announces the field but never why it was rejected.
+  assert.match(ui, /const describedBy = \(id, error, hint\)/)
+  assert.equal(
+    (ui.match(/aria-describedby=\{describedBy\(id, error, hint\)\}/g) ?? []).length,
+    3,
+    'TextField, SelectField and TextAreaField must all be wired',
+  )
+  assert.equal(
+    (ui.match(/aria-invalid=\{error \? true : undefined\}/g) ?? []).length,
+    3,
+    'aria-invalid must be present only when there is an error',
+  )
+  // No dangling reference when there is nothing to describe.
+  assert.match(
+    ui,
+    /error \|\| hint \? `\$\{id\}-message` : undefined/,
+    'aria-describedby must be omitted when there is no message',
+  )
+})
+
+/* ------------------------------------------------------------------ *
+ * Batch 3 — row selection, saved views, tool photos
+ * ------------------------------------------------------------------ */
+
+check('a selection can never contain a row the filter has hidden', () => {
+  const hook = read(join('src', 'hooks', 'useRowSelection.js'))
+  // The rule that stops a bulk action touching tools that scrolled out of
+  // sight. Without the prune, narrowing a search leaves hidden ids selected.
+  assert.match(hook, /visibleIds\.has\(id\)/, 'the selection must be pruned to visible rows')
+  assert.match(hook, /rows \?\? \[\]\)\.filter\(\(r\) => ids\.has\(r\.id\)\)/,
+    'selected records must be read back from the visible list')
+  // Ids, not records: a selection must not be a second copy of the inventory.
+  assert.match(hook, /useState\(\(\) => new Set\(\)\)/)
+  assert.doesNotMatch(hook, /useState\(\[\]\)/, 'the selection must hold ids, not rows')
+})
+
+check('selection state changes do not churn on an unchanged filter', () => {
+  const hook = read(join('src', 'hooks', 'useRowSelection.js'))
+  // A guarded write: pruning when nothing was hidden must return the same Set,
+  // or every filter keystroke re-renders the whole table on a 2 GB phone.
+  assert.match(hook, /return changed \? next : current/,
+    'the prune must not allocate when nothing changed')
+  assert.match(hook, /current\.size \? new Set\(\) : current/,
+    'clearing an empty selection must be a no-op')
+})
+
+check('the select-all box can show the third state', () => {
+  const hook = read(join('src', 'hooks', 'useRowSelection.js'))
+  // `indeterminate` is a DOM property, not an attribute — React cannot set it
+  // from JSX, so it has to be written to the node.
+  assert.match(hook, /ref\.current\.indeterminate = !!indeterminate/)
+  const page = read(join('src', 'pages', 'ToolsPage.jsx'))
+  assert.match(page, /useIndeterminate\(selection\?\.someVisibleSelected\)/)
+})
+
+check('row selection is staff-only and does not touch a student view', () => {
+  const page = read(join('src', 'pages', 'ToolsPage.jsx'))
+  assert.match(page, /const selectable = can\(PERM\.TOOL_STATUS\)/,
+    'selection must be gated on the permission its bulk action needs')
+  // A student's hook is handed one frozen array, so it never re-runs on a new [].
+  assert.match(page, /useRowSelection\(selectable \? filtered : EMPTY_ROWS\)/)
+  assert.match(page, /const EMPTY_ROWS = Object\.freeze\(\[\]\)/)
+})
+
+check('a bulk status change authorises every tool individually', () => {
+  const page = read(join('src', 'pages', 'ToolsPage.jsx'))
+  // One service call per tool, through the same path a single change takes —
+  // so assertCan and the active-loan guard apply to each one.
+  assert.match(page, /toolService\.setStatus\(tool\.id, status, user\)/)
+  // Partial failure is the normal case, so it must be reported per tool.
+  assert.match(page, /failures\.push\(/, 'a failed tool must be recorded')
+  assert.match(page, /\$\{failures\.length\} could not be changed/,
+    'partial failures must be reported')
+  // And it must be confirmed before anything is written.
+  assert.match(page, /kind: 'bulk-status'[\s\S]{0,400}confirmLabel/,
+    'a bulk change must be confirmed')
+})
+
+check('bulk status offers only the statuses that are safe to set by hand', () => {
+  const page = read(join('src', 'pages', 'ToolsPage.jsx'))
+  const bar = page.slice(page.indexOf('function BulkBar'))
+  const block = bar.slice(0, bar.indexOf('\nfunction '))
+  // Borrowed and Overdue follow a loan; setting either here would put the tool
+  // and its transaction out of step.
+  assert.doesNotMatch(block, /TOOL_STATUS\.BORROWED|TOOL_STATUS\.OVERDUE/,
+    'loan-driven statuses must not be settable in bulk')
+  assert.match(block, /TOOL_STATUS\.AVAILABLE/)
+  assert.match(block, /TOOL_STATUS\.MAINTENANCE/)
+})
+
+check('print gained a selected scope rather than a second implementation', () => {
+  const actions = read(join('src', 'components', 'InventoryActions.jsx'))
+  assert.match(actions, /\{ all: tools, filtered, selected \}\[scope\]/,
+    'the existing scope map must be extended')
+  assert.match(actions, /printQRLabels\(forScope\)/, 'one print path only')
+  // The option is hidden when nothing is selected — a radio that prints nothing
+  // is not a choice.
+  assert.match(actions, /selected\.length > 0 && \(/)
+  // And there is still exactly one place that prints.
+  assert.equal((actions.match(/printQRLabels\(/g) ?? []).length, 1)
+})
+
+check('a saved view stores filters, not inventory', () => {
+  const hook = read(join('src', 'hooks', 'useSavedViews.js'))
+  assert.match(hook, /export const VIEW_FIELDS/)
+  // Only the known filter fields are persisted, so nothing unexpected can be
+  // written to storage or read back out of it.
+  assert.match(hook, /for \(const field of VIEW_FIELDS\)/)
+  // Code, not prose: the comments explain *why* a view holds no records, so
+  // they mention the inventory. What must not appear is a record being stored.
+  const code = hook
+    .split('\n')
+    .filter((l) => !/^\s*(\*|\/\*|\/\/)/.test(l))
+    .join('\n')
+  assert.doesNotMatch(code, /tools:|records:|items:/, 'a view must not copy records')
+  assert.match(code, /const state = \{\}/, 'a view stores a plain filter state')
+  // The existing preference mechanism, not a new table and not a second engine.
+  assert.match(hook, /useLocalStorage\(`stms\.toolViews\./)
+  // Scoped per account, so a shared tablet does not leak views between people.
+  assert.match(hook, /\$\{userId \?\? 'anon'\}/)
+})
+
+check('opening a view drives the existing filters and URL', () => {
+  const page = read(join('src', 'pages', 'ToolsPage.jsx'))
+  // It sets the same state the page already filters by — there is no second
+  // filtering engine, and the status/category URL effect still runs.
+  assert.match(page, /const applyView = useCallback\(/)
+  assert.match(page, /setters\[field\]\?\.\(state\[field\] \?\? fallback\)/,
+    'every view field must be applied, and the rest reset')
+  assert.match(page, /toolService\.filterTools\(tools, \{/,
+    'the one filtering engine must still be the service')
+})
+
+check('the scan result shows the tool photo', () => {
+  const scan = read(join('src', 'components', 'ToolScanResult.jsx'))
+  // The one place a picture was genuinely missing: confirming the thing in
+  // your hand is the thing on the screen.
+  assert.match(scan, /<ToolImage tool=\{tool\}/)
+  // And it reuses the existing component rather than a second <img>.
+  assert.doesNotMatch(scan, /<img /, 'the shared ToolImage must be used')
+})
+
+check('tool photos stay cheap on a long list', () => {
+  const image = read(join('src', 'components', 'ToolImage.jsx'))
+  // Already true before this batch, asserted so it stays true.
+  assert.match(image, /loading="lazy"/, 'images must not all load at once')
+  assert.match(image, /decoding="async"/)
+  assert.match(image, /onError=\{\(\) => setFailed\(true\)\}/,
+    'a broken URL must fall back, not show a broken image')
+  // No image library was added for this.
+  const pkg = JSON.parse(read('package.json'))
+  assert.ok(
+    !Object.keys(pkg.dependencies).some((d) => /sharp|jimp|image|canvas/i.test(d)),
+    'no image-processing dependency may be added',
+  )
+})

@@ -368,17 +368,27 @@ function PushNotificationRow() {
     }
 
     let alive = true
-    // Asynchronous because the Android permission is: the WebView cannot answer
-    // for the OS, so it has to be asked. On the web this resolves immediately
-    // with `Notification.permission`, exactly as before.
+
+    // Exactly what the Camera and Location rows do, and for the same reason.
+    //
+    // This used to read `pushService.syncPermissionState()`, which answers from
+    // a module-level mirror that it refreshes as a side effect. A mirror is a
+    // second copy of something Android already knows, and the copy could be
+    // stale: the row could report "not set" moments after the person had
+    // granted the permission, because nothing had refreshed the mirror in
+    // between. `nativePermissions.notificationState()` asks the OS every time,
+    // which is the rule the other two rows already follow.
     //
     // This reads the OS *permission*, not whether a Web Push subscription
     // exists. The two are separate: on the web a permission can be granted with
     // no subscription stored, and in the APK there is no subscription at all
     // because the alerts are posted locally. This row reports the permission.
     const sync = () => {
-      pushService
-        .syncPermissionState()
+      const read = isNative()
+        ? nativePermissions.notificationState()
+        : Promise.resolve(pushService.permissionState())
+
+      read
         .then((permission) => {
           if (!alive) return
           setState(
@@ -391,7 +401,7 @@ function PushNotificationRow() {
     sync()
     // Re-read when the app comes back, so turning notifications on or off in
     // Android Settings is reflected on return rather than showing whatever was
-    // true when this row first rendered.
+    // true when this row first rendered. Same listener the other two rows use.
     const stop = nativePermissions.onResume(sync)
 
     return () => {
@@ -402,6 +412,36 @@ function PushNotificationRow() {
 
   const enable = async () => {
     setBusy(true)
+
+    // Android's own dialog, through the plugin — the same shape as the Location
+    // and Camera handlers above. The state is taken from what the OS answered
+    // rather than assumed from the call having returned, so tapping "Don't
+    // allow" shows Blocked instead of silently reading as granted.
+    if (isNative()) {
+      try {
+        const result = await nativePermissions.requestNotifications()
+        setState(result === 'granted' ? 'granted' : result === 'denied' ? 'denied' : 'prompt')
+        if (result === 'granted') {
+          toast.success('Notifications are on for this device.')
+        } else if (result === 'denied') {
+          toast.info(
+            'Notifications are blocked for this app. Turn them on in Android Settings › Apps › ' +
+              'ToolTrack › Notifications, then come back.',
+          )
+        } else {
+          toast.info('Notifications were not allowed.')
+        }
+      } catch (err) {
+        // A failure to ask is not an answer about the permission, so the row is
+        // re-read rather than guessed at.
+        setState(await nativePermissions.notificationState().catch(() => 'prompt'))
+        toast.info(err?.message ?? 'Notifications could not be turned on.')
+      } finally {
+        setBusy(false)
+      }
+      return
+    }
+
     try {
       await pushService.subscribe(user)
       setState('granted')

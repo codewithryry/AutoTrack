@@ -7,13 +7,10 @@ import {
   CalendarClock,
   ClipboardList,
   HardHat,
-  History,
   MapPin,
-  Pencil,
   RotateCcw,
   ShieldAlert,
   Trash2,
-  Undo2,
   PackageSearch,
 } from 'lucide-react'
 import {
@@ -31,10 +28,11 @@ import { QRCodePanel } from '../components/QRCodeDisplay'
 import TransactionTable from '../components/TransactionTable'
 import TransactionDetail from '../components/TransactionDetail'
 import ToolForm from '../components/ToolForm'
+import ReportProblemDialog from '../components/ReportProblemDialog'
 import ToolImage from '../components/ToolImage'
 import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
-import { useTool, useToolMaintenance, useToolTransactions } from '../hooks'
+import { useMediaQuery, useTool, useToolMaintenance, useToolTransactions } from '../hooks'
 import * as toolService from '../services/tools'
 import * as txnService from '../services/transactions'
 import { AutoLocationNotice, LocationTrail, useAutoLocation } from '../components/LocationCapture'
@@ -95,14 +93,49 @@ export default function ToolDetailPage() {
   const [searchParams] = useSearchParams()
 
   // Where this page was opened from decides where "back" goes. A tool reached
-  // by scanning its label belongs to the scan — sending that person to the
-  // inventory instead would drop them somewhere they have never been. Every
-  // other entry point keeps the inventory, exactly as before.
-  const fromScan = searchParams.get('from') === 'scan'
+  // by scanning its label belongs to the scan; a tool reached from the
+  // inventory belongs there. Neither is the universal parent of this page —
+  // the actual source is, and it travels with the URL as `?from=`.
+  //
+  // `source` rather than a single `fromScan` boolean: the same question — "how
+  // did we get here?" — has to be answered again by History one page deeper,
+  // and a boolean only ever answers it for scan. Keeping the source as a value
+  // is what lets History forward it instead of each page inventing its own
+  // yes/no flag for the one case it happens to care about.
+  const source = searchParams.get('from') === 'scan' ? 'scan' : null
+  const fromScan = source === 'scan'
   const backTo = fromScan ? '/scan' : '/tools'
   const backLabel = fromScan ? 'Back to Scan' : 'Back to Inventory'
 
-  const { tool, loading } = useTool(id)
+  // Real back for either known source, never a hardcoded destination: routing
+  // to `/scan` or `/tools` by URL would build that page from nothing, losing
+  // whatever was on screen there (the scan result, an inventory filter or
+  // scroll position). Going back one history entry returns to the page that is
+  // already there, exactly as it was left — which for scan is what restores
+  // the tool that was found instead of an empty camera.
+  //
+  // Only when this page was actually pushed onto the stack, though. Opened
+  // cold — a shared link, a notification, a restored tab — there is nothing to
+  // go back to, so the link falls through to its own `backTo` href: `/scan`
+  // still rebuilds the last scan from storage, and `/tools` is always a valid
+  // page to land on.
+  const goBack = (event) => {
+    if (!source) return
+    if (window.history.state?.idx > 0) {
+      event.preventDefault()
+      navigate(-1)
+    }
+  }
+
+  // What Borrow history is opened with, so the same source survives one more
+  // page. Without this, History never knows a scan led here and always offers
+  // "Back to inventory" — which is the leak this fixes: the tool details page
+  // it eventually returns to loses `?from=scan` and falls back to Inventory.
+  const historyHref = `/tools/${id}/history${source ? `?from=${source}` : ''}`
+
+  // `reload` refreshes the record after a problem is reported, so the service
+  // information on this page reflects it without a manual refresh.
+  const { tool, loading, reload } = useTool(id)
   const { transactions } = useToolTransactions(id)
   const { records: maintenanceRecords } = useToolMaintenance(id)
 
@@ -110,7 +143,30 @@ export default function ToolDetailPage() {
   const tour = usePageTour('tool-detail', user?.id)
   const tourSteps = useMemo(() => toolDetailTour(isStudent(user)), [user])
 
+  // The actions render twice below — once beside the header for `lg:` and up,
+  // once after the tool summary for anything narrower — so exactly one of the
+  // two copies of `data-tour="detail-action"` (and "detail-edit") must exist
+  // at a time. `Walkthrough` resolves a target with a plain
+  // `document.querySelector`, which always returns the first match in the
+  // document regardless of which one is actually visible; with two elements
+  // sharing that name, the walkthrough could silently spotlight — or, worse,
+  // silently drop — a step depending on which copy happened to come first in
+  // the markup. Matching Tailwind's own `lg:` breakpoint here is what lets
+  // exactly one instance claim the attribute, restoring the one-target-one-
+  // element assumption the rest of `Walkthrough` is built on.
+  //
+  // `lg:`, not `sm:`: this is the breakpoint the rest of the page's layout
+  // already switches on (the `lg:grid-cols-3` body below, and Scan Result's
+  // own `lg:hidden` phone/desktop split). Using `sm:` here left a window
+  // between 640px and 1024px where this page had already switched to its
+  // desktop, centred-button actions while Scan Result — and everything below
+  // this row on this very page — was still showing its phone layout. Same
+  // browser width, two different action styles was the actual bug; this line
+  // is the fix for it, not the row placement above it.
+  const isDesktopWidth = useMediaQuery('(min-width: 1024px)')
+
   const [editing, setEditing] = useState(false)
+  const [reporting, setReporting] = useState(false)
   const [selectedTxn, setSelectedTxn] = useState(null)
   const [confirm, setConfirm] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -121,7 +177,7 @@ export default function ToolDetailPage() {
     return (
       <div className="animate-fade-in">
         <Skeleton className="mb-3 h-4 w-32 rounded" />
-        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="card min-w-0 flex-1 overflow-hidden">
             <div className="border-b px-4 py-3">
               <div className="min-w-0 space-y-2">
@@ -130,7 +186,7 @@ export default function ToolDetailPage() {
               </div>
             </div>
           </div>
-          <Skeleton className="h-9 w-full shrink-0 rounded-lg sm:w-40" />
+          <Skeleton className="h-9 w-full shrink-0 rounded-lg lg:w-40" />
         </div>
         <Skeleton className="mb-4 h-12 rounded-lg" />
         <div className="grid gap-4 lg:grid-cols-3">
@@ -222,6 +278,7 @@ export default function ToolDetailPage() {
     <>
       <Link
         to={backTo}
+        onClick={goBack}
         className="muted mb-3 inline-flex w-fit items-center gap-1.5 rounded-full border px-3 py-1.5 text-[13px] font-semibold transition-colors hover:bg-black/[0.03] dark:hover:bg-white/5"
       >
         <ArrowLeft className="h-3.5 w-3.5" />
@@ -232,8 +289,14 @@ export default function ToolDetailPage() {
           surface, same header strip, same border and radius — so the page reads
           as one record: the tool named on its card, then the record itself. The
           name keeps the page-title size rather than the card's small section
-          title, and the action buttons stay outside the card on their own row. */}
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          title.
+
+          The actions beside it here are the desktop shape only. On a phone —
+          and on a tablet up to `lg:`, matching Scan Result's own breakpoint —
+          they render in a completely different place: after a compact
+          identity summary, before the Tool Record, not just a narrower
+          version of this same row; see the block below. */}
+      <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <section className="card min-w-0 flex-1 overflow-hidden">
           <header className="border-b px-4 py-3" style={{ background: 'rgb(var(--surface-2))' }}>
             <h1 className="truncate text-xl font-extrabold tracking-tight sm:text-2xl">
@@ -244,57 +307,60 @@ export default function ToolDetailPage() {
             </p>
           </header>
         </section>
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Staff issue from the counter; a student asks for the tool, which
-              is one request raised on the one page that creates them. */}
-          {eligibility.ok && can(PERM.BORROW_FOR_OTHERS) && (
-            <Link to={`/borrow?tool=${tool.id}`} className="btn btn-primary" data-tour="detail-action">
-              <ArrowRight className="h-4 w-4" />
-              Borrow tool
-            </Link>
-          )}
-          {eligibility.ok && !can(PERM.BORROW_FOR_OTHERS) && can(PERM.REQUEST_CREATE) && (
-            <Link
-              to={`/requests/new?tool=${tool.id}`}
-              className="btn btn-primary"
-              data-tour="detail-action"
-            >
-              <ArrowRight className="h-4 w-4" />
-              Request to borrow
-            </Link>
-          )}
-          {/* Once the hand-back has been asked for, the same link stays — it is
-              how the record is opened — but it says what has already happened
-              rather than inviting the ask a second time. */}
-          {activeLoan && can(PERM.RETURN) && (
-            <Link
-              to={`/return?tool=${tool.id}`}
-              className={cx('btn', txnService.returnRequested(activeLoan) ? 'btn-outline' : 'btn-success')}
-              data-tour="detail-action"
-            >
-              <Undo2 className="h-4 w-4" />
-              {txnService.returnRequested(activeLoan) ? 'Return requested' : 'Return tool'}
-            </Link>
-          )}
-          {can(PERM.TOOL_EDIT) && (
-            <button
-              type="button"
-              onClick={() => setEditing(true)}
-              className="btn btn-outline"
-              data-tour="detail-edit"
-            >
-              <Pencil className="h-4 w-4" />
-              Edit tool
-            </button>
-          )}
-          {/* One page per audience, on the same route: staff open the tool's
-              full laboratory timeline, a student their own borrowings of this
-              tool. It is the only place either list is shown, so nothing is
-              repeated on the record below. */}
-          <Link to={`/tools/${tool.id}/history`} className="btn btn-outline">
-            <History className="h-4 w-4" />
-            {isStaff(user) ? 'View history' : 'Borrow history'}
-          </Link>
+        {/* Desktop only — `lg:` and up, the same width this page's own body
+            grid and Scan Result's phone/desktop split both switch at. On
+            anything narrower the actions render in a different place entirely
+            (see below): a compact identity summary first, then the actions
+            right after it, matching Scan Result's own flow, before the fuller
+            Tool Record. */}
+        <div className="hidden lg:block">
+          <ToolActions
+            layout="desktop"
+            isStaffUser={isStaff(user)}
+            tool={tool}
+            activeLoan={activeLoan}
+            eligibility={eligibility}
+            can={can}
+            historyHref={historyHref}
+            onReport={() => setReporting(true)}
+            onEdit={() => setEditing(true)}
+            tourEnabled={isDesktopWidth}
+          />
+        </div>
+      </div>
+
+      {/* ---------------------------------------------------------------------
+          Below `lg:` — phone and tablet alike, matching the width Scan
+          Result's own `lg:hidden` switches its layout at. A scanned tool and
+          an inventory-opened tool are the same record, so they read the same
+          way at the same widths: a compact identity — image, status,
+          condition, the few fields that say what this is — immediately
+          followed by the action, before anything longer. The full Tool
+          Record with dates, description and notes still exists below; this
+          is not a shorter version of it, it is the part of it that a
+          decision actually needs, promoted above the part that does not.
+
+          `ToolSummary` duplicates a few fields the Tool Record card also
+          shows (image, ID, brand, model, location) rather than the Tool
+          Record hiding them below `lg:`: the record is one coherent block
+          whichever width it renders at, and what changes between Scan Result
+          and this page is only where the actions sit relative to it, not
+          which card owns which field. --------------------------------------- */}
+      <div className="mb-4 lg:hidden">
+        <ToolSummary tool={tool} />
+        <div className="mt-4">
+          <ToolActions
+            layout="mobile"
+            isStaffUser={isStaff(user)}
+            tool={tool}
+            activeLoan={activeLoan}
+            eligibility={eligibility}
+            can={can}
+            historyHref={historyHref}
+            onReport={() => setReporting(true)}
+            onEdit={() => setEditing(true)}
+            tourEnabled={!isDesktopWidth}
+          />
         </div>
       </div>
 
@@ -451,7 +517,7 @@ export default function ToolDetailPage() {
             bodyClassName="p-0"
             action={
               can(PERM.TXN_VIEW_ALL) ? (
-                <Link to={`/tools/${tool.id}/history`} className="btn btn-ghost btn-sm">
+                <Link to={historyHref} className="btn btn-ghost btn-sm">
                   Full timeline
                 </Link>
               ) : null
@@ -624,6 +690,12 @@ export default function ToolDetailPage() {
       </div>
 
       <ToolForm open={editing} tool={tool} onClose={() => setEditing(false)} />
+      <ReportProblemDialog
+        tool={tool}
+        open={reporting}
+        onClose={() => setReporting(false)}
+        onReported={reload}
+      />
       <TransactionDetail
         transaction={selectedTxn}
         open={!!selectedTxn}
@@ -642,6 +714,462 @@ export default function ToolDetailPage() {
         loading={busy}
       />
     </>
+  )
+}
+
+/**
+ * The compact identity a phone sees before the action — image, status,
+ * condition and category, the tool's own three identifying fields, and where
+ * it lives. Everything a "can I take this?" decision actually needs, and
+ * nothing that decision does not: dates, notes and the description are still
+ * only in the Tool Record below, which this is not a smaller copy of.
+ *
+ * This is what makes the flow match Scan Result's own: identity, then the
+ * action, then more detail for whoever wants it. A tool opened from the
+ * inventory is the same record as one just scanned, so the same shape of
+ * information should come before the same shape of action, whichever door it
+ * was opened through.
+ */
+function ToolSummary({ tool }) {
+  return (
+    <section className="card overflow-hidden">
+      <div className="p-4">
+        <div className="flex items-start gap-3">
+          <ToolImage
+            tool={tool}
+            rounded="rounded-xl"
+            className="h-20 w-20 border"
+            alt={`Picture of ${tool.name}`}
+          />
+          <div className="min-w-0 flex-1 space-y-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusBadge status={tool.status} />
+              <ConditionBadge condition={tool.condition} />
+              <span
+                className="badge border-transparent"
+                style={{ background: 'rgb(var(--surface-3))', color: 'rgb(var(--text-muted))' }}
+              >
+                {tool.category}
+              </span>
+            </div>
+            <p className="subtle mono truncate text-xs">{tool.id}</p>
+          </div>
+        </div>
+
+        <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 border-t pt-3">
+          <DetailItem label="Location" className="min-w-0">
+            <span className="flex items-center gap-1.5">
+              <MapPin className="h-3.5 w-3.5 shrink-0 opacity-60" />
+              <span className="truncate">{tool.location}</span>
+            </span>
+          </DetailItem>
+          <DetailItem label="Brand / model" className="min-w-0">
+            <span className="block truncate">
+              {[tool.brand, tool.model].filter(Boolean).join(' · ') || '—'}
+            </span>
+          </DetailItem>
+        </dl>
+      </div>
+    </section>
+  )
+}
+
+/**
+ * Picks the one action set this person gets — staff's or a student's — and
+ * the one shape it renders in — desktop's compact buttons, or a phone's
+ * list rows — so neither of the two places that render actions (the desktop
+ * header row and the phone's post-summary row) has to repeat either decision.
+ * All four combinations stay in one place this way: change who gets what, or
+ * how a layout presents it, and every call site follows.
+ *
+ * The desktop shape is unchanged from before this pass — outlined buttons for
+ * Report/Edit, a subtle text row for History — because a row of compact
+ * buttons is a good use of the horizontal space desktop has and the app's own
+ * mobile action pattern is deliberately for mobile, not a universal rule. The
+ * phone shape is what changed: Report, Edit and History are now the same kind
+ * of row AutoTrack's Scan Result already uses for its own secondary actions
+ * (text and a chevron, dividers between them, no button borders, no leading
+ * icons) — one action language across the app's two entry points to the same
+ * information, rather than two different-looking versions of "what else can I
+ * do with this tool".
+ */
+function ToolActions({
+  layout,
+  isStaffUser,
+  tool,
+  activeLoan,
+  eligibility,
+  can,
+  historyHref,
+  onReport,
+  onEdit,
+  // Whether THIS copy is the one allowed to carry `data-tour`. Exactly one of
+  // the two responsive instances should ever be `true` at a time — see the
+  // note beside `isDesktopWidth` above.
+  tourEnabled,
+}) {
+  if (layout === 'mobile') {
+    return isStaffUser ? (
+      <MobileStaffActions
+        tool={tool}
+        activeLoan={activeLoan}
+        eligibility={eligibility}
+        can={can}
+        historyHref={historyHref}
+        onReport={onReport}
+        onEdit={onEdit}
+        tourEnabled={tourEnabled}
+      />
+    ) : (
+      <MobileStudentActions
+        tool={tool}
+        activeLoan={activeLoan}
+        eligibility={eligibility}
+        can={can}
+        onReport={onReport}
+        tourEnabled={tourEnabled}
+      />
+    )
+  }
+
+  return isStaffUser ? (
+    <StaffActions
+      tool={tool}
+      activeLoan={activeLoan}
+      eligibility={eligibility}
+      can={can}
+      historyHref={historyHref}
+      onReport={onReport}
+      onEdit={onEdit}
+      tourEnabled={tourEnabled}
+    />
+  ) : (
+    <StudentActions
+      tool={tool}
+      activeLoan={activeLoan}
+      eligibility={eligibility}
+      can={can}
+      onReport={onReport}
+      tourEnabled={tourEnabled}
+    />
+  )
+}
+
+/**
+ * A student's own account is the only history this page could show them —
+ * their borrowings of this tool are what "Borrow history" used to link to —
+ * and that record already exists in full on their own Requests/Transactions
+ * pages. Repeating it here as a link would be a second way to reach
+ * information they did not ask this page for, so a student's actions end
+ * with the two things this page is actually for: take the tool, or say
+ * something is wrong with it.
+ *
+ * Two tiers, not three: a primary action (Request/Return, whichever the
+ * tool's state calls for — never both) and one subordinate action beside it.
+ * Two outlined buttons of equal weight would read as two competing choices,
+ * so Report is deliberately smaller and plainer than the primary next to it.
+ */
+function StudentActions({ tool, activeLoan, eligibility, can, onReport, tourEnabled }) {
+  // Spread rather than a literal `data-tour="detail-action"`: with this
+  // component rendered twice on the page (once per breakpoint), only the
+  // instance the current viewport actually shows may carry the attribute, or
+  // `Walkthrough`'s `querySelector` could resolve to the other, hidden copy.
+  const tourTarget = tourEnabled ? { 'data-tour': 'detail-action' } : {}
+
+  return (
+    <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[220px]">
+      {eligibility.ok && can(PERM.REQUEST_CREATE) && !activeLoan && (
+        <Link
+          to={`/requests/new?tool=${tool.id}`}
+          className="btn btn-primary w-full"
+          {...tourTarget}
+        >
+          Request to borrow
+        </Link>
+      )}
+      {/* Once the hand-back has been asked for, the same link stays — it is
+          how the record is opened — but it says what has already happened
+          rather than inviting the ask a second time. */}
+      {/* The other slot this row can hold — same size and alignment as
+          Request to borrow above, since only one of the two ever renders and
+          whichever one does is this screen's primary action. */}
+      {activeLoan && can(PERM.RETURN) && (
+        <Link
+          to={`/return?tool=${tool.id}`}
+          className={cx(
+            'btn w-full justify-between text-[17px]',
+            txnService.returnRequested(activeLoan) ? 'btn-outline' : 'btn-success',
+          )}
+          style={{ minHeight: '50px' }}
+          {...tourTarget}
+        >
+          {txnService.returnRequested(activeLoan) ? 'Return requested' : 'Return tool'}
+          <ArrowRight className="h-[18px] w-[18px] opacity-70" />
+        </Link>
+      )}
+
+      {/* Full width, matching the primary above it: the two still read as
+          primary/secondary from the fill (solid vs. outlined) and the smaller
+          `btn-sm` height, and matching widths is what keeps the pair aligned
+          and consistent rather than looking arbitrarily different sizes. */}
+      <button
+        type="button"
+        onClick={onReport}
+        className="btn btn-outline btn-sm w-full"
+      >
+        Report a problem
+      </button>
+    </div>
+  )
+}
+
+/**
+ * Staff keep the same primary/secondary shape a student gets, plus one more
+ * thing a student never sees at all: a way into the tool's full transaction
+ * timeline. That is not a third button — a row of three same-sized controls
+ * is the exact "everything looks equally important" problem this replaces —
+ * it is a quieter line underneath, closer in weight to a caption than to a
+ * button, because reading the history is not the point of visiting this page,
+ * only something this page can lead to.
+ */
+function StaffActions({ tool, activeLoan, eligibility, can, historyHref, onReport, onEdit, tourEnabled }) {
+  // Spread rather than a literal attribute, for the same reason as
+  // `StudentActions`: this component is rendered twice on the page, once per
+  // breakpoint, and only the copy the current viewport actually shows may
+  // claim the tour target.
+  const actionTarget = tourEnabled ? { 'data-tour': 'detail-action' } : {}
+  const editTarget = tourEnabled ? { 'data-tour': 'detail-edit' } : {}
+
+  return (
+    <div className="flex w-full flex-col gap-2.5 sm:w-auto sm:min-w-[240px]">
+      <div className="flex flex-col gap-2">
+        {eligibility.ok && can(PERM.BORROW_FOR_OTHERS) && (
+          <Link
+            to={`/borrow?tool=${tool.id}`}
+            className="btn btn-primary w-full"
+            {...actionTarget}
+          >
+            Borrow tool
+          </Link>
+        )}
+        {activeLoan && can(PERM.RETURN) && (
+          <Link
+            to={`/return?tool=${tool.id}`}
+            className={cx(
+              'btn w-full',
+              txnService.returnRequested(activeLoan) ? 'btn-outline' : 'btn-success',
+            )}
+            {...actionTarget}
+          >
+            {txnService.returnRequested(activeLoan) ? 'Return requested' : 'Return tool'}
+          </Link>
+        )}
+
+        {/* Report and Edit share one line at equal, smaller weight — two
+            things staff might also do, neither of them the reason they opened
+            this tool. `flex` rather than a fixed two-column grid: a role
+            without Edit still gets a well-proportioned single button rather
+            than a half-width one beside an empty gap. */}
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={onReport}
+            className="btn btn-outline btn-sm min-w-0 flex-1"
+          >
+            <span className="truncate">Report a problem</span>
+          </button>
+          {can(PERM.TOOL_EDIT) && (
+            <button
+              type="button"
+              onClick={onEdit}
+              className="btn btn-outline btn-sm min-w-0 flex-1"
+              {...editTarget}
+            >
+              <span className="truncate">Edit tool</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* A separate row below the action group, not appended to it: a top
+          border and a gap of its own is what keeps this from reading as a
+          fourth action in the same stack. Quiet text and a bare chevron are
+          the whole of its emphasis — no icon on the left, nothing filled,
+          nothing outlined — because a link to more information should look
+          exactly that subordinate next to the buttons that change something. */}
+      {can(PERM.TXN_VIEW_ALL) && (
+        <Link
+          to={historyHref}
+          className="flex min-h-[40px] items-center justify-between gap-3 border-t px-0.5 pt-2.5
+                     text-[13px] font-semibold text-current/80 transition-colors hover:text-current"
+          style={{ color: 'rgb(var(--text-muted))' }}
+        >
+          <span className="truncate">View history</span>
+          <ArrowRight className="h-3.5 w-3.5 shrink-0 opacity-50" />
+        </Link>
+      )}
+    </div>
+  )
+}
+
+/**
+ * One secondary row for the mobile action list: a label and a chevron,
+ * nothing else. The shared shape behind every "and also…" action on a phone —
+ * Report a problem, Edit tool, Borrow history all render through this — so
+ * the list looks like one thing with several rows rather than several things
+ * that happen to be stacked. `as` renders it as whichever element the action
+ * actually is: a `Link` when it goes somewhere, a `button` when it opens a
+ * dialog in place, matching what the row does rather than what is convenient.
+ */
+function ActionRow({ as: Tag = 'button', divided = true, children, ...props }) {
+  return (
+    <Tag
+      type={Tag === 'button' ? 'button' : undefined}
+      className={cx(
+        'flex min-h-[46px] w-full items-center justify-between gap-3 px-3 text-left text-[14px]',
+        'font-semibold transition-colors hover:bg-black/5 dark:hover:bg-white/5',
+        divided && 'border-t',
+      )}
+      style={{ borderColor: 'rgb(var(--border))' }}
+      {...props}
+    >
+      {children}
+      <ArrowRight className="h-4 w-4 shrink-0 opacity-40" />
+    </Tag>
+  )
+}
+
+/**
+ * The student's phone layout: the same primary action as desktop, then Report
+ * a problem as a single row in a bordered list — the one-row case of the
+ * pattern below, kept in its own bordered box so it still reads as a distinct
+ * group rather than a stray line of text under the button.
+ */
+function MobileStudentActions({ tool, activeLoan, eligibility, can, onReport, tourEnabled }) {
+  const tourTarget = tourEnabled ? { 'data-tour': 'detail-action' } : {}
+
+  return (
+    <div className="flex w-full flex-col gap-2">
+      {/* `justify-between`: `.btn` centres its contents by default, which is
+          right for a button with one word but reads as the label being
+          centred rather than aligned once an arrow sits after it — Scan
+          Result's own primary overrides the same default the same way. */}
+      {eligibility.ok && can(PERM.REQUEST_CREATE) && !activeLoan && (
+        <Link
+          to={`/requests/new?tool=${tool.id}`}
+          className="btn btn-primary w-full justify-between text-[17px]"
+          style={{ minHeight: '50px' }}
+          {...tourTarget}
+        >
+          Request to borrow
+          <ArrowRight className="h-[18px] w-[18px] opacity-70" />
+        </Link>
+      )}
+      {/* The other slot this row can hold — same size and alignment as
+          Request to borrow above, since only one of the two ever renders and
+          whichever one does is this screen's primary action. */}
+      {activeLoan && can(PERM.RETURN) && (
+        <Link
+          to={`/return?tool=${tool.id}`}
+          className={cx(
+            'btn w-full justify-between text-[17px]',
+            txnService.returnRequested(activeLoan) ? 'btn-outline' : 'btn-success',
+          )}
+          style={{ minHeight: '50px' }}
+          {...tourTarget}
+        >
+          {txnService.returnRequested(activeLoan) ? 'Return requested' : 'Return tool'}
+          <ArrowRight className="h-[18px] w-[18px] opacity-70" />
+        </Link>
+      )}
+
+      {/* A surface behind the border, matching `.card`: `--border` alone is
+          only a few points of luminance from the page background, so without
+          a fill this read as text floating under the button rather than a
+          second, distinct control. */}
+      <div
+        className="overflow-hidden rounded-xl shadow-card"
+        style={{ background: 'rgb(var(--surface))', border: '1px solid rgb(var(--border))' }}
+      >
+        <ActionRow onClick={onReport} divided={false}>
+          Report a problem
+        </ActionRow>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The staff phone layout: the primary action, then Report, Edit and History
+ * as one divided list of rows — where desktop spends horizontal space on two
+ * compact buttons plus a separate subtle line, a phone spends vertical space
+ * on rows instead, which is the same trade Scan Result already makes for
+ * "View tool details" and "Report a problem". History sits in the same list
+ * rather than set apart: on a phone there is no spare width to make it look
+ * different by being smaller, so it stays a peer row in the same box and
+ * lets its position — last — say that it is the one that leads elsewhere
+ * rather than changing something.
+ */
+function MobileStaffActions({ tool, activeLoan, eligibility, can, historyHref, onReport, onEdit, tourEnabled }) {
+  const actionTarget = tourEnabled ? { 'data-tour': 'detail-action' } : {}
+  const editTarget = tourEnabled ? { 'data-tour': 'detail-edit' } : {}
+  const canEdit = can(PERM.TOOL_EDIT)
+  const canViewHistory = can(PERM.TXN_VIEW_ALL)
+
+  return (
+    <div className="flex w-full flex-col gap-2">
+      {/* `justify-between`, matching Scan Result's own primary and the
+          student layout above. */}
+      {eligibility.ok && can(PERM.BORROW_FOR_OTHERS) && (
+        <Link
+          to={`/borrow?tool=${tool.id}`}
+          className="btn btn-primary w-full justify-between text-[17px]"
+          style={{ minHeight: '50px' }}
+          {...actionTarget}
+        >
+          Borrow tool
+          <ArrowRight className="h-[18px] w-[18px] opacity-70" />
+        </Link>
+      )}
+      {/* The other slot this row can hold — same size and alignment as
+          Borrow tool above, since only one of the two ever renders and
+          whichever one does is this screen's primary action. */}
+      {activeLoan && can(PERM.RETURN) && (
+        <Link
+          to={`/return?tool=${tool.id}`}
+          className={cx(
+            'btn w-full justify-between text-[17px]',
+            txnService.returnRequested(activeLoan) ? 'btn-outline' : 'btn-success',
+          )}
+          style={{ minHeight: '50px' }}
+          {...actionTarget}
+        >
+          {txnService.returnRequested(activeLoan) ? 'Return requested' : 'Return tool'}
+          <ArrowRight className="h-[18px] w-[18px] opacity-70" />
+        </Link>
+      )}
+
+      {/* A surface behind the border, matching `.card` — see the same note on
+          the student layout above. */}
+      <div
+        className="overflow-hidden rounded-xl shadow-card"
+        style={{ background: 'rgb(var(--surface))', border: '1px solid rgb(var(--border))' }}
+      >
+        <ActionRow onClick={onReport} divided={false}>
+          Report a problem
+        </ActionRow>
+        {canEdit && (
+          <ActionRow onClick={onEdit} {...editTarget}>
+            Edit tool
+          </ActionRow>
+        )}
+        {canViewHistory && (
+          <ActionRow as={Link} to={historyHref}>
+            Borrow history
+          </ActionRow>
+        )}
+      </div>
+    </div>
   )
 }
 

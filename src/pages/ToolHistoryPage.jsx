@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   ArrowLeft,
   ArrowLeftRight,
@@ -54,9 +54,31 @@ const DEFAULT_STYLE = { icon: ClipboardList, dot: 'bg-slate-400', label: 'Activi
 
 export default function ToolHistoryPage() {
   const { id } = useParams()
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { user } = useApp()
   const { tool, loading } = useTool(id)
   const { entries: logEntries, loading: loadingLog, allowed } = useToolActivity(id)
+
+  // The same source Tool Details was opened with, carried one page deeper.
+  // Without forwarding it back to the Details link below, this page would be
+  // the point where a scan's context quietly turns into "came from nowhere" —
+  // Details would then have no `from` to read and would fall back to
+  // Inventory, which is the exact leak this fixes.
+  const source = searchParams.get('from') === 'scan' ? 'scan' : null
+  const detailHref = `/tools/${id}${source ? `?from=${source}` : ''}`
+
+  // Real back, not a fresh navigation to `detailHref`: Tool Details is already
+  // one entry behind this page (History is only ever reached from there, or
+  // from the desktop scan panel, both of which push it), so going back
+  // restores that page exactly as it was rather than rebuilding it from the
+  // URL. Falls through to the href when opened cold, same as Tool Details does.
+  const goBack = (event) => {
+    if (window.history.state?.idx > 0) {
+      event.preventDefault()
+      navigate(-1)
+    }
+  }
 
   // The loans themselves, for both audiences and for two different reasons.
   //
@@ -151,7 +173,8 @@ export default function ToolHistoryPage() {
   return (
     <>
       <Link
-        to={`/tools/${tool.id}`}
+        to={detailHref}
+        onClick={goBack}
         className="muted mb-3 inline-flex items-center gap-1.5 text-xs font-semibold hover:underline"
       >
         <ArrowLeft className="h-3.5 w-3.5" />

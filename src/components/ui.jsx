@@ -376,7 +376,22 @@ export function SearchInput({ value, onChange, placeholder = 'Search…', classN
   )
 }
 
+/**
+ * A labelled control with its error or hint underneath.
+ *
+ * The message carries an `id` so the input can point at it with
+ * `aria-describedby`. Without that link a screen reader announces the label and
+ * the field but never the reason it was rejected — the red text is visible only
+ * to somebody who can see it. `describedBy` below hands the right id back to
+ * the field wrappers, which is why they pass `htmlFor`: one id per control,
+ * derived from it, so nothing has to be threaded through by hand.
+ *
+ * Only one of the two is ever rendered, so only one id is ever live. When there
+ * is no error and no hint, no `aria-describedby` is emitted at all — an ARIA
+ * attribute pointing at nothing is worse than none.
+ */
 export function Field({ label, error, hint, required, children, className, htmlFor }) {
+  const messageId = htmlFor ? `${htmlFor}-message` : undefined
   return (
     <div className={className}>
       {label && (
@@ -387,13 +402,27 @@ export function Field({ label, error, hint, required, children, className, htmlF
       )}
       {children}
       {error ? (
-        <p className="mt-1 text-xs font-medium text-red-600 dark:text-red-400">{error}</p>
+        <p
+          id={messageId}
+          className="mt-1 text-xs font-medium text-red-600 dark:text-red-400"
+        >
+          {error}
+        </p>
       ) : hint ? (
-        <p className="subtle mt-1 text-xs">{hint}</p>
+        <p id={messageId} className="subtle mt-1 text-xs">
+          {hint}
+        </p>
       ) : null}
     </div>
   )
 }
+
+/**
+ * The id of the message a control should point at, or `undefined` when there is
+ * nothing to point at. Kept beside `Field` so the two spellings of the id can
+ * never drift apart.
+ */
+const describedBy = (id, error, hint) => (error || hint ? `${id}-message` : undefined)
 
 export function TextField({ label, error, hint, required, className, ...props }) {
   const id = useId()
@@ -402,7 +431,8 @@ export function TextField({ label, error, hint, required, className, ...props })
       <input
         id={id}
         className={cx('input', error && 'input-error')}
-        aria-invalid={!!error}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy(id, error, hint)}
         {...props}
       />
     </Field>
@@ -416,7 +446,8 @@ export function SelectField({ label, error, hint, required, options, className, 
       <select
         id={id}
         className={cx('input', error && 'input-error')}
-        aria-invalid={!!error}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy(id, error, hint)}
         {...props}
       >
         {placeholder && <option value="">{placeholder}</option>}
@@ -442,7 +473,8 @@ export function TextAreaField({ label, error, hint, required, className, rows = 
         id={id}
         rows={rows}
         className={cx('input resize-y', error && 'input-error')}
-        aria-invalid={!!error}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy(id, error, hint)}
         {...props}
       />
     </Field>

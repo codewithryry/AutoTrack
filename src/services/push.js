@@ -51,27 +51,30 @@ export const isAvailable = () => (isNative() ? native.isSupported() : isSupporte
 /**
  * `granted` | `denied` | `default` | `unsupported`
  *
- * Synchronous, because the settings row reads it during render. The native
- * permission is genuinely asynchronous, so it is mirrored here from the last
- * read — `syncPermissionState()` refreshes it, and `subscribe()` updates it as a
- * side effect of asking.
+ * Synchronous, and therefore the WEB answer only: `Notification.permission` is
+ * already a value rather than a promise.
+ *
+ * There is deliberately no native branch and no cached mirror here any more.
+ * A mirror is a second copy of something Android already knows, and the copy
+ * went stale — the settings row could report "not set" moments after the
+ * permission had been granted, because nothing had refreshed it in between.
+ * Native callers ask `services/nativePermissions.notificationState()`, which
+ * reads the OS every time, exactly as the Camera and Location rows do.
  */
-let nativePermission = 'prompt'
-
 export function permissionState() {
-  if (isNative()) return nativePermission === 'prompt' ? 'default' : nativePermission
+  if (isNative()) return 'unsupported'
   if (!isSupported()) return 'unsupported'
   return Notification.permission
 }
 
 /**
- * Read the real OS permission and update the mirror above.
+ * The real permission, from whichever platform owns it.
  *
- * A no-op on the web, where `Notification.permission` is already synchronous.
+ * Asynchronous because the Android answer is. Kept so existing callers have one
+ * function to ask, rather than each deciding which platform they are on.
  */
 export async function syncPermissionState() {
-  if (!isNative()) return permissionState()
-  nativePermission = await native.permissionState()
+  if (isNative()) return native.permissionState()
   return permissionState()
 }
 
@@ -119,7 +122,6 @@ export async function subscribe(user) {
   // so the permission *is* the subscription.
   if (isNative()) {
     const state = await native.requestPermission()
-    nativePermission = state
     if (state !== 'granted') {
       throw new Error(
         state === 'denied'

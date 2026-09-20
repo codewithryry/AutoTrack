@@ -216,9 +216,12 @@ export default function RequestsPage() {
           description="Tools handed in and waiting for you to confirm the return"
           bodyClassName="p-0"
           action={
-            <Link to="/scan/return" className="btn btn-outline btn-sm shrink-0">
+            // The universal scanner: scan the tool's own QR and, if this is
+            // the loan with the open request, Accept / Accept with Issue /
+            // Reject appear right there. No second, return-specific scanner.
+            <Link to="/scan" className="btn btn-outline btn-sm shrink-0">
               <QrCode className="h-3.5 w-3.5" />
-              Scan Return QR
+              Scan tool QR
             </Link>
           }
         >

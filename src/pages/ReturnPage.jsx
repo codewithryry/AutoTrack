@@ -438,11 +438,14 @@ export default function ReturnPage() {
               </SectionCard>
               )}
 
-              {/* The flagship of the flow: once a student's request exists, its QR
-                  is the main thing on this screen — staff scan it at the crib
-                  rather than the loan being searched for by hand. Staff never see
-                  this card; they confirm from their own single-loan selection
-                  below, or from the dedicated /scan/return page. */}
+              {/* Once a student's request exists, the tool's own QR is shown
+                  here as a reference — the same code printed on the label and
+                  shown on the tool's own page, not a separate one for this
+                  request. Staff scan it from the universal `/scan` page,
+                  where a tool with an open return request offers Accept /
+                  Accept with Issue / Reject directly. Staff never see this
+                  card; they confirm from their own single-loan selection
+                  below, or from `/scan`. */}
               {alreadyAsked && selectedLoans.length === 1 && asksOnly && (
                 <ReturnQRCard
                   transaction={selected}

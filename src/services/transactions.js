@@ -18,7 +18,7 @@ import {
   TXN_STATUS,
 } from '../utils/constants'
 import { PERM, assertCan, can, canBorrowFor, canReturnTransaction } from '../utils/permissions'
-import { generateTxnId, matchesQuery, randomToken, sortBy } from '../utils/helpers'
+import { generateTxnId, matchesQuery, sortBy } from '../utils/helpers'
 import {
   daysBetween,
   isOverdue,
@@ -641,7 +641,14 @@ const RETURN_QR_COLUMN = 'returnQrToken'
 export const returnRequestsAvailable = () =>
   db.supportsColumn(COLLECTIONS.transactions, RETURN_REQUEST_COLUMN)
 
-/** Whether this database has the return-QR columns `0036` adds. */
+/**
+ * Whether this database has the return-decision columns `0036` adds
+ * (`returnDecision`, `returnProcessedAt`/`By`, and the now-unused
+ * `returnQrToken` — kept as a column so an already-migrated database needs no
+ * further change, though nothing writes to it any more: there is one Tool QR,
+ * not a second return-specific one, so acceptance/rejection is recorded
+ * without minting a token for it).
+ */
 export const returnQrAvailable = () =>
   db.supportsColumn(COLLECTIONS.transactions, RETURN_QR_COLUMN)
 
@@ -652,36 +659,18 @@ export const returnRequested = (txn) => !!txn?.returnRequestedAt
 export const returnDecided = (txn) => !!txn?.returnDecision
 
 /**
- * The return request a QR code, or the manual-search fallback, resolves to.
- *
- * Looked up by the opaque token alone — never by the transaction id — so a
- * code that merely displays cannot be turned into a database key by whoever
- * sees it. Any signed-in staff account may call this: the token is the
- * credential, and finding a request is not the same as deciding it, which
- * `acceptReturn()` / `acceptReturnWithIssue()` / `rejectReturn()` still gate
- * on `PERM.BORROW_FOR_OTHERS` before writing anything.
- */
-export async function getByReturnQrToken(token) {
-  const clean = String(token ?? '').trim()
-  if (!clean) return null
-  const rows = await db.findWhere(COLLECTIONS.transactions, [['returnQrToken', '==', clean]])
-  return rows[0] ?? null
-}
-
-/**
  * Ask to hand a tool back.
  *
  * What a student does instead of closing the loan themselves: the tool is still
  * out and the record still says `Borrowed` — only now the counter knows it is
  * coming back, in what condition the borrower says it is, and when they asked.
- * A QR code is minted in the same write, so the request the counter sees and
- * the code the borrower shows are the same row from the moment either exists.
  * Staff decide the actual return with `acceptReturn()` / `acceptReturnWithIssue()`
- * / `rejectReturn()`, which are the only places a transaction is closed.
+ * / `rejectReturn()`, which are the only places a transaction is closed — all
+ * three reached by scanning the tool's own QR at `/scan`, the one QR that
+ * already exists for it.
  *
  * One request per loan: asking again while one is open returns the existing
- * request — QR and all — rather than raising an error or minting a second
- * code for the same loan.
+ * request rather than raising an error or writing a second one.
  */
 export async function requestReturn({ transactionId, condition, notes }, actor) {
   assertCan(actor, PERM.RETURN, 'Your role is not allowed to return tools.')
@@ -694,8 +683,8 @@ export async function requestReturn({ transactionId, condition, notes }, actor) 
   if (!canReturnTransaction(actor, txn)) {
     throw new Error('You can only hand back tools that you borrowed yourself.')
   }
-  // Already open: the existing request (and its QR) is what the borrower
-  // should see, not a second one layered on top of it.
+  // Already open: the existing request is what the borrower should see, not
+  // a second one layered on top of it.
   if (returnRequested(txn)) return txn
   if (!RETURN_CONDITIONS.includes(condition)) {
     throw new ValidationError({ condition: 'Select the condition of the tool you are handing back.' })
@@ -707,15 +696,11 @@ export async function requestReturn({ transactionId, condition, notes }, actor) 
   }
 
   const timestamp = nowISO()
-  const qrAvailable = await returnQrAvailable()
   const patch = {
     returnRequestedAt: timestamp,
     returnRequestCondition: condition,
     returnRequestNotes: notes?.trim() ?? '',
     updatedAt: timestamp,
-    // Omitted entirely on a database that has not had `0036` applied yet, so
-    // the request still works exactly as it did before the QR existed.
-    ...(qrAvailable ? { returnQrToken: `RQR${randomToken(24)}` } : {}),
   }
   const updated = await db.update(COLLECTIONS.transactions, txn.id, patch)
 
@@ -919,12 +904,14 @@ async function loadOpenReturnRequest(transactionId, actor) {
 }
 
 /**
- * Record that a return request's QR was scanned, independent of what staff
- * then decide to do with it. Best-effort and never a reason the scan itself
- * fails — a missed log line is not worth blocking the counter over.
+ * Record that staff scanned a tool while it had an open return request
+ * waiting on them — the moment the universal scanner at `/scan` surfaces the
+ * Accept / Accept with Issue / Reject panel, before any of those three are
+ * pressed. Best-effort and never a reason the scan itself fails — a missed
+ * log line is not worth blocking the counter over.
  */
 export async function logReturnQrScan(txn, actor) {
-  await afterWrite('return QR scan log', () =>
+  await afterWrite('return scan log', () =>
     activity.log({
       action: ACTIVITY.RETURN_QR_SCANNED,
       toolId: txn.toolId,
@@ -932,7 +919,7 @@ export async function logReturnQrScan(txn, actor) {
       userId: actor?.id,
       userName: actor?.fullName,
       transactionId: txn.id,
-      message: `${actor?.fullName ?? 'Staff'} scanned the return QR for ${txn.toolName}.`,
+      message: `${actor?.fullName ?? 'Staff'} scanned ${txn.toolName}, which has an open return request.`,
       meta: { role: actor?.role ?? null },
     }),
   )
@@ -1144,11 +1131,11 @@ export async function acceptReturnWithIssue(
 }
 
 /**
- * Reject a return request: the physical tool does not match what was scanned
- * or opened, or the request should not be honoured at all. The loan stays
- * exactly as it was — still open, still the borrower's — and the request
- * columns are cleared rather than closed, so the borrower can ask again once
- * whatever went wrong is sorted out.
+ * Reject a return request: the physical tool does not match what was scanned,
+ * or the request should not be honoured at all. The loan stays exactly as it
+ * was — still open, still the borrower's — and the request columns are
+ * cleared rather than closed, so the borrower can ask again once whatever
+ * went wrong is sorted out.
  */
 export async function rejectReturn({ transactionId, reason }, actor) {
   const txn = await loadOpenReturnRequest(transactionId, actor)

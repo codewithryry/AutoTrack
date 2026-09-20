@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   AlertTriangle,
@@ -13,11 +13,12 @@ import {
 } from 'lucide-react'
 import { ConditionBadge, DetailItem, StatusBadge } from './ui'
 import ReportProblemDialog from './ReportProblemDialog'
+import ReturnDecisionPanel, { ReturnDecidedNotice } from './ReturnDecisionPanel'
 import ToolImage from './ToolImage'
 import * as toolService from '../services/tools'
 import * as txnService from '../services/transactions'
 import { PERM } from '../utils/permissions'
-import { NON_BORROWABLE_REASON, TOOL_STATUS } from '../utils/constants'
+import { ACTIVE_TXN_STATUSES, NON_BORROWABLE_REASON, TOOL_STATUS } from '../utils/constants'
 import { cx } from '../utils/helpers'
 import { dueLabel, formatDate } from '../utils/dates'
 
@@ -47,9 +48,20 @@ import { dueLabel, formatDate } from '../utils/dates'
  * types a URL or replays a request is refused by the service whatever this
  * component chose to render.
  */
-export default function ToolScanResult({ tool, loan, can, onNavigate, onReset }) {
+export default function ToolScanResult({ tool, loan, can, user, onNavigate, onReset }) {
   const [reporting, setReporting] = useState(false)
-  const activeLoan = loan?.transaction
+  // A local copy, so accepting/rejecting a return updates this panel in place
+  // rather than needing a re-scan — same reason `ToolFound` keeps one too.
+  // Accepting closes the loan (`status` becomes `Returned`/`Damaged`), so it
+  // stops counting as *active* the moment that happens — the same filter a
+  // fresh scan already applies via `findActiveForTool` — rather than this
+  // panel going on offering "Return tool" against a loan that just closed.
+  const [loanState, setLoanState] = useState(loan?.transaction ?? null)
+  useEffect(() => {
+    setLoanState(loan?.transaction ?? null)
+  }, [loan?.transaction])
+  const justClosed = loanState && !ACTIVE_TXN_STATUSES.includes(loanState.status)
+  const activeLoan = justClosed ? null : loanState
   const borrower = loan?.borrower
 
   // The same helpers the borrow and return pages use, so the panel can never
@@ -74,6 +86,20 @@ export default function ToolScanResult({ tool, loan, can, onNavigate, onReset })
   const mayReadAllTxns = can(PERM.TXN_VIEW_ALL)
   const mayEdit = can(PERM.TOOL_EDIT)
   const mayService = can(PERM.MAINTENANCE_VIEW)
+
+  // The one branch the mobile panel also has: staff who may receive this
+  // tool, scanning it while a return request on it is still open and
+  // undecided. Inspection happens right here — `ReturnDecisionPanel` is the
+  // same Accept / Accept with Issue / Reject flow shared with `ToolFound`,
+  // reached by the same Tool QR rather than a second, return-specific one.
+  const awaitingDecision =
+    mayReceive && txnService.returnRequested(activeLoan) && !txnService.returnDecided(activeLoan)
+  // Read off `loanState`, not `activeLoan`: accepting (or accepting with an
+  // issue) closes the loan, which is exactly what makes `activeLoan` become
+  // `null` above — but the confirmation should still say what was just
+  // decided. A rejection leaves the loan open, so `activeLoan` still holds it
+  // and both reads agree.
+  const justDecided = can(PERM.RETURN_ANY) && txnService.returnDecided(loanState)
 
   // Staff see who is holding the tool and the record behind it. A student's own
   // loan still shows — `activeLoanContext` only ever returns their own — but
@@ -246,13 +272,27 @@ export default function ToolScanResult({ tool, loan, can, onNavigate, onReset })
           </div>
         )}
 
+        {/* Physical inspection, for staff scanning a tool with an open return
+            request waiting on them. Takes the place of the "Return tool"
+            button below entirely — deciding the return is the action. */}
+        {awaitingDecision && (
+          <div className="mt-4">
+            <ReturnDecisionPanel activeLoan={activeLoan} actor={user} onDecided={setLoanState} />
+          </div>
+        )}
+        {justDecided && (
+          <div className="mt-4">
+            <ReturnDecidedNotice activeLoan={loanState} />
+          </div>
+        )}
+
         {/* ----------------------------- actions -----------------------------
             The same action language as the tool's own page: one filled primary
             for the state's dominant action, Report and Edit as a smaller
             outlined pair beneath it, then the record and navigation links.
             Each is gated on the permission the workflow behind it enforces. */}
         <div className="mt-5 space-y-2">
-          {mayReceive && (
+          {mayReceive && !awaitingDecision && (
             <button
               type="button"
               onClick={() => onNavigate(`/return?tool=${tool.id}`)}

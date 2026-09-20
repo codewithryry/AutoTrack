@@ -31,7 +31,6 @@ const ToolsPage = lazy(() => import('./pages/ToolsPage'))
 const ToolDetailPage = lazy(() => import('./pages/ToolDetailPage'))
 const ToolHistoryPage = lazy(() => import('./pages/ToolHistoryPage'))
 const ScanPage = lazy(() => import('./pages/ScanPage'))
-const ScanReturnPage = lazy(() => import('./pages/ScanReturnPage'))
 const BorrowPage = lazy(() => import('./pages/BorrowPage'))
 const ReturnPage = lazy(() => import('./pages/ReturnPage'))
 const TransactionsPage = lazy(() => import('./pages/TransactionsPage'))
@@ -229,19 +228,13 @@ export default function App() {
             }
           />
 
+          {/* One universal QR entry point. A tool's QR is all `/scan` ever
+              reads: it resolves the tool and the signed-in role's active loan,
+              and `ToolFound`/`ToolScanResult` decide what to show from there —
+              request, borrow, return, or (for staff, when the tool's loan has
+              an open return request waiting) accept/issue/reject it right on
+              this screen. There is no second, return-specific scanner. */}
           <Route path="/scan" element={<ScanPage />} />
-          {/* The QR-first return desk: staff scan a student's return QR, or find
-              a request by hand, and decide it — accept, accept with an issue, or
-              reject. Staff only, the same permission `returnTool()` already
-              gates the manual counter on. */}
-          <Route
-            path="/scan/return"
-            element={
-              <RequirePermission permission={PERM.BORROW_FOR_OTHERS}>
-                <ScanReturnPage />
-              </RequirePermission>
-            }
-          />
           {/* The crib's counter: issuing a tool to somebody, and the approved
               requests waiting to be released. Staff only — a student's own
               borrowing runs through /requests, which is where their one ask

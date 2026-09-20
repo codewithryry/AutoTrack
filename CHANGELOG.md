@@ -12,6 +12,34 @@ About screen, `android/app/build.gradle` derives the Android `versionName` and `
 it, and `npm run verify` fails if the two drift apart. `scripts/set-version.mjs` writes all of
 them together.
 
+## 0.2.7.1
+
+### Added
+
+- Role-based QR actions on `/scan`: what a scan offers is now decided from the signed-in role, the
+  tool's live status, and its active loan or return request, rather than by which QR was scanned.
+- Support for starting a student's tool-return workflow directly from `/scan` — scanning a tool
+  currently on loan to you now offers the same "Request return"/"Return requested" action the
+  return desk already used.
+
+### Improved
+
+- Made `/scan` the single, universal QR entry point. The separate return-QR scan page has been
+  removed; a tool's QR is now the only QR the application reads, wherever it is shown.
+- Unified Tool QR handling across the inventory, tool details, requests and return requests — the
+  same QR resolves the same way everywhere, instead of a second code carrying a return request's
+  own identity.
+- Admin and Instructor now go through the exact same QR, request and return workflow — no role-
+  specific branching between the two staff roles.
+- Return requests keep showing their QR as a reference on the return page; it is the same Tool QR
+  used everywhere else rather than a request-specific code.
+
+### Fixed
+
+- Removed the duplicated return-specific scanning logic that used to live on its own page, so
+  scanning a tool with an existing loan, request, or return request is handled in one place instead
+  of two.
+
 ## 0.2.7
 
 ### Returns

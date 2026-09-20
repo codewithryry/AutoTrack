@@ -1,7 +1,7 @@
 import QRCode from 'qrcode'
 import { APP_NAME } from './constants'
 import { isNative } from './native'
-import { buildQRPayload, buildReturnQRPayload } from './qrPayload'
+import { buildQRPayload } from './qrPayload'
 
 /**
  * The payload helpers live in `utils/qrPayload.js` and are re-exported here.
@@ -20,17 +20,7 @@ import { buildQRPayload, buildReturnQRPayload } from './qrPayload'
  * the name usable here; the re-export is what keeps `utils/qr` a valid source of
  * it for everything else.
  */
-export {
-  QR_VERSION,
-  TOOL_ID_PATTERN,
-  RETURN_QR_PREFIX,
-  buildQRPayload,
-  parseQRPayload,
-  normalizeToolId,
-  buildReturnQRPayload,
-  isReturnQRPayload,
-  parseReturnQRPayload,
-} from './qrPayload'
+export { QR_VERSION, TOOL_ID_PATTERN, buildQRPayload, parseQRPayload, normalizeToolId } from './qrPayload'
 
 /* --------------------------- rendering --------------------------- */
 
@@ -45,24 +35,15 @@ export async function toDataURL(toolId, { size = 320 } = {}) {
   return QRCode.toDataURL(buildQRPayload(toolId), { ...BASE_OPTIONS, width: size, scale: 8 })
 }
 
-/** Draw directly into a canvas element (used by the tool detail panel). */
+/** Draw directly into a canvas element — used by every screen that shows a
+ *  tool's QR: the inventory, the tool's own page, and a return request's
+ *  detail, which all draw the same code for the same `toolId`. */
 export async function drawToCanvas(canvas, toolId, { size = 320 } = {}) {
   if (!canvas) return
   await QRCode.toCanvas(canvas, buildQRPayload(toolId), {
     ...BASE_OPTIONS,
     width: size,
   })
-}
-
-/** PNG data URL for a return request's QR — same rendering, a different payload. */
-export async function returnQRDataURL(token, { size = 320 } = {}) {
-  return QRCode.toDataURL(buildReturnQRPayload(token), { ...BASE_OPTIONS, width: size, scale: 8 })
-}
-
-/** Draw a return request's QR straight into a canvas element. */
-export async function drawReturnQRToCanvas(canvas, token, { size = 320 } = {}) {
-  if (!canvas) return
-  await QRCode.toCanvas(canvas, buildReturnQRPayload(token), { ...BASE_OPTIONS, width: size })
 }
 
 export async function downloadQR(tool) {

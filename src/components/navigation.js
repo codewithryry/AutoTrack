@@ -6,7 +6,6 @@ import {
   MessageSquare,
   Package,
   QrCode,
-  ScanLine,
   Settings,
   Undo2,
   UserRound,
@@ -90,18 +89,6 @@ export const NAV_ITEMS = [
     description: 'Hand a borrowed tool back',
     roles: [ROLE.STUDENT],
     permission: PERM.RETURN,
-  },
-  {
-    // The QR-first return desk: staff scan a student's return QR — generated
-    // the moment they request one from an active loan — or find a request by
-    // hand, then accept, accept with an issue, or reject it. Staff only, same
-    // permission the manual return desk's own confirmation already needs.
-    to: '/scan/return',
-    label: 'Return QR',
-    icon: ScanLine,
-    description: 'Scan a student return QR',
-    roles: STAFF,
-    permission: PERM.BORROW_FOR_OTHERS,
   },
   {
     // Borrowing history. Staff read the laboratory's; a student reads their
@@ -235,7 +222,6 @@ export const ADMIN_MOBILE_NAV = ['/dashboard', '/requests', '/scan', '/transacti
  */
 export const ADMIN_DRAWER_NAV = [
   '/tools',
-  '/scan/return',
   '/messages',
   '/users',
   '/maintenance',
@@ -263,7 +249,6 @@ const INSTRUCTOR_RAIL_ORDER = [
   '/tools',
   '/requests',
   '/transactions',
-  '/scan/return',
   '/maintenance',
   '/problem-reports',
   '/users',

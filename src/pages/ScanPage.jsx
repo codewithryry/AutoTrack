@@ -130,6 +130,20 @@ export default function ScanPage() {
         }
         setResult({ tool, loan })
         toast.success(`${tool.name} identified.`, { title: tool.id })
+
+        // Best-effort audit line: staff scanned a tool that has an open,
+        // undecided return request waiting on them — the same moment the
+        // decision panel appears below. Never awaited into the render path
+        // and never a reason a scan fails.
+        const activeLoan = loan?.transaction
+        if (
+          activeLoan &&
+          can(PERM.BORROW_FOR_OTHERS) &&
+          txnService.returnRequested(activeLoan) &&
+          !txnService.returnDecided(activeLoan)
+        ) {
+          txnService.logReturnQrScan(activeLoan, user).catch(() => {})
+        }
       } catch (err) {
         setResult({ error: err.message ?? 'Unable to read that code.' })
         toast.error(err.message ?? 'Unable to read that code.')
@@ -137,7 +151,7 @@ export default function ScanPage() {
         setLooking(false)
       }
     },
-    [toast, user],
+    [toast, user, can],
   )
 
   const reset = () => clearResult()
@@ -180,6 +194,7 @@ export default function ScanPage() {
             tool={result.tool}
             loan={result.loan}
             can={can}
+            user={user}
             onNavigate={navigate}
             onReset={reset}
           />
@@ -222,6 +237,7 @@ export default function ScanPage() {
               tool={result.tool}
               loan={result.loan}
               can={can}
+              user={user}
               onNavigate={navigate}
               onReset={reset}
             />

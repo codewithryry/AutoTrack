@@ -2,13 +2,14 @@ import { AlertTriangle, ArrowLeft, ArrowRight, Check, ChevronDown } from 'lucide
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import ToolImage from './ToolImage'
+import ReturnDecisionPanel, { ReturnDecidedNotice } from './ReturnDecisionPanel'
 import { SelectField, Spinner, TextAreaField } from './ui'
 import { useToast } from '../context/ToastContext'
 import * as maintenanceService from '../services/maintenance'
 import * as toolService from '../services/tools'
 import * as txnService from '../services/transactions'
 import { PERM } from '../utils/permissions'
-import { MAINTENANCE_TYPES, NON_BORROWABLE_REASON, TOOL_STATUS } from '../utils/constants'
+import { ACTIVE_TXN_STATUSES, MAINTENANCE_TYPES, NON_BORROWABLE_REASON, TOOL_STATUS } from '../utils/constants'
 import { cx } from '../utils/helpers'
 import { dueLabel, formatDate } from '../utils/dates'
 
@@ -413,15 +414,34 @@ function ReportProblemInline({ tool, open, onReported, onCancel }) {
  * can afford the fuller panel. Both read the same permissions from the same
  * helpers, so neither can offer an action the other would refuse — the rules
  * live in `services/`, not in either component.
+ *
+ * One QR, one entry point: scanning a tool that a student has already asked
+ * to hand back surfaces `ReturnDecisionPanel` right here for staff who may
+ * receive it — Accept, Accept with Issue, Reject — instead of sending them to
+ * a second, return-specific scanner. There is only ever one Tool QR; what it
+ * unlocks depends on who scanned it and what the loan behind it says.
  */
-export default function ToolFound({ tool, loan, can, onNavigate, onReset }) {
+export default function ToolFound({ tool, loan, can, user, onNavigate, onReset }) {
   const [reporting, setReporting] = useState(false)
   // Only one of the two expandable rows is ever open at a time — opening one
   // closes the other, the same single-open rule the Settings accordion uses,
   // so the screen never has two forms/summaries stacked open on a phone.
   const [viewingDetails, setViewingDetails] = useState(false)
+  // A local copy of the active loan, so accepting/rejecting a return updates
+  // this screen in place rather than needing a re-scan to see the result —
+  // the same reason `AppLayout`'s scan result keeps its own `result` state
+  // rather than re-reading the scan every render. Accepting closes the loan
+  // (`status` becomes `Returned`/`Damaged`), so it stops being read as an
+  // *active* loan the moment that happens — the same filter
+  // `findActiveForTool` already applies to a fresh scan — rather than this
+  // screen going on offering "Return tool" against a loan that just closed.
+  const [loanState, setLoanState] = useState(loan?.transaction ?? null)
+  useEffect(() => {
+    setLoanState(loan?.transaction ?? null)
+  }, [loan?.transaction])
+  const justClosed = loanState && !ACTIVE_TXN_STATUSES.includes(loanState.status)
+  const activeLoan = justClosed ? null : loanState
 
-  const activeLoan = loan?.transaction
   const eligibility = toolService.borrowEligibility(tool)
   const overdue = tool.status === TOOL_STATUS.OVERDUE || activeLoan?.status === 'Overdue'
   const outOfService = [
@@ -438,24 +458,44 @@ export default function ToolFound({ tool, loan, can, onNavigate, onReset }) {
   const mayBorrow = eligibility.ok && can(PERM.BORROW) && !can(PERM.BORROW_FOR_OTHERS)
   const mayReturnOwn = !!activeLoan && can(PERM.RETURN) && !mayReceive
 
+  // The one branch that did not exist before the universal scanner learned
+  // about return requests: staff who can receive this tool, scanning it while
+  // it has an open, undecided return request. Inspection happens right here
+  // instead of a link to the manual return desk — `ReturnDecisionPanel` below
+  // is the same Accept / Accept with Issue / Reject flow that used to live
+  // only on the dedicated Return QR page, now reached by the one QR that
+  // already identifies this tool.
+  const awaitingDecision =
+    mayReceive && txnService.returnRequested(activeLoan) && !txnService.returnDecided(activeLoan)
+  // Read off `loanState` rather than `activeLoan`: accepting (or accepting
+  // with an issue) closes the loan, which is exactly what makes `activeLoan`
+  // become `null` above — but the confirmation should still say what was just
+  // decided rather than silently vanish. A rejection leaves the loan open, so
+  // `activeLoan` still holds it there, and both reads agree.
+  const justDecided = can(PERM.RETURN_ANY) && txnService.returnDecided(loanState)
+
   /*
    * One dominant action, chosen by the tool's state rather than stacked.
    *
    * Everything else on this screen is a row, so there is never a set of
-   * controls that all look equally like the thing to press.
+   * controls that all look equally like the thing to press. `awaitingDecision`
+   * takes the primary slot's place entirely — the decision panel further down
+   * is the action, so there is nothing left for a button here to do.
    */
-  const primary = mayReceive
-    ? { label: 'Return tool', to: `/return?tool=${tool.id}` }
-    : mayReturnOwn
-      ? {
-          label: txnService.returnRequested(activeLoan) ? 'Return requested' : 'Return tool',
-          to: `/return?tool=${tool.id}`,
-        }
-      : mayIssue
-        ? { label: 'Borrow tool', to: `/borrow?tool=${tool.id}` }
-        : mayBorrow
-          ? { label: 'Request to borrow', to: `/requests/new?tool=${tool.id}` }
-          : null
+  const primary = awaitingDecision
+    ? null
+    : mayReceive
+      ? { label: 'Return tool', to: `/return?tool=${tool.id}` }
+      : mayReturnOwn
+        ? {
+            label: txnService.returnRequested(activeLoan) ? 'Return requested' : 'Return tool',
+            to: `/return?tool=${tool.id}`,
+          }
+        : mayIssue
+          ? { label: 'Borrow tool', to: `/borrow?tool=${tool.id}` }
+          : mayBorrow
+            ? { label: 'Request to borrow', to: `/requests/new?tool=${tool.id}` }
+            : null
 
   const statusTone = overdue
     ? 'text-red-600 dark:text-red-400'
@@ -508,6 +548,14 @@ export default function ToolFound({ tool, loan, can, onNavigate, onReset }) {
             </p>
           </div>
         )}
+
+        {/* The physical-inspection step, for staff scanning a tool that has an
+            open return request waiting on them. Replaces the primary action
+            entirely while it is showing — deciding the return *is* the action. */}
+        {awaitingDecision && (
+          <ReturnDecisionPanel activeLoan={activeLoan} actor={user} onDecided={setLoanState} />
+        )}
+        {justDecided && <ReturnDecidedNotice activeLoan={loanState} />}
 
         <ToolMetadata facts={facts} />
       </div>

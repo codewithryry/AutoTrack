@@ -16,7 +16,7 @@ device in the laboratory.
 [![Latest release](https://img.shields.io/github/v/release/codewithryry/AutoTrack?label=latest%20version&color=0B1220&style=for-the-badge)](https://github.com/codewithryry/AutoTrack/releases/latest)
 
 <!-- latest-version:start -->
-**Latest version: 0.2.7.1**
+**Latest version: 0.2.7-beta.1**
 <!-- latest-version:end -->
 
 Open the link, then download the `.apk` file listed under **Assets**. Android will ask you to

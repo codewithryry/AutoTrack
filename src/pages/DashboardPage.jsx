@@ -3,8 +3,10 @@ import { Link } from 'react-router-dom'
 import {
   AlertTriangle,
   ArrowRight,
+  ArrowUpRight,
   Bell,
   Boxes,
+  CalendarDays,
   CheckCircle2,
   ClipboardList,
   HardHat,
@@ -12,6 +14,7 @@ import {
   PackageX,
   QrCode,
   Repeat,
+  Search,
   ShieldAlert,
   TrendingUp,
   UserCheck,
@@ -87,10 +90,20 @@ const HERO_ACTION = {
  * beside it — a student's returns, staff's queue — on the routes they already
  * have.
  */
-function HeroScanAction({ secondary }) {
+function HeroScanAction({ secondary, onAccent = false }) {
   return (
     <>
-      <Link to="/scan" className={HERO_ACTION.primary} style={HERO_ACTION_STYLE}>
+      {/* On the accent band the accent button would vanish, so it is the dark
+          one there instead. */}
+      <Link
+        to="/scan"
+        className={HERO_ACTION.primary}
+        style={
+          onAccent
+            ? { background: 'rgb(var(--hero-cta-bg))', color: 'rgb(var(--hero-cta-fg))' }
+            : HERO_ACTION_STYLE
+        }
+      >
         <QrCode className="h-4 w-4 shrink-0" />
         Scan to request
       </Link>
@@ -159,6 +172,9 @@ function DashboardHero({
   actions,
   role,
   compact = false,
+  // Laid straight onto the phone's accent band rather than on a card of its
+  // own: no surface, no hairline, and the band's text colour.
+  blend = false,
   ...rest // `data-tour`, so the greeting can be a walkthrough target
 }) {
   return (
@@ -180,18 +196,30 @@ function DashboardHero({
         // Back on a surface of its own — the same `tile` as the statistics row
         // below, with a deeper radius and its own padding, so the greeting reads
         // as the page's first card while the figure keeps the size it has.
-        'tile relative flex items-start justify-between gap-3 rounded-3xl sm:gap-8 lg:gap-12',
+        blend ? 'relative' : 'tile relative',
+        'flex items-start justify-between gap-3 rounded-3xl sm:gap-8 lg:gap-12',
         'px-4 py-4 sm:px-6 sm:py-5 lg:px-8 lg:py-6',
         // Only as tall as the figure standing in it needs.
-        'min-[360px]:min-h-[236px] sm:min-h-[248px] lg:min-h-[260px]',
+        // On the phone's band it is only as tall as the assistant standing in
+        // it, now that Scan is the one button under the greeting.
+        blend ? 'min-h-[196px]' : 'min-[360px]:min-h-[236px]',
+        'sm:min-h-[248px] lg:min-h-[260px]',
         compact ? 'mb-4 sm:mb-5 lg:mb-6' : 'mb-6 sm:mb-8',
       )}
+      style={blend ? { color: 'rgb(var(--hero-fg))' } : undefined}
       {...rest}
     >
       {/* The text and the buttons keep the left of the card to themselves: the
           reserved gutter on the right is the mascot's, so neither ever runs
           under the other at any width. */}
-      <div className="flex min-w-0 flex-1 flex-col self-stretch pr-[104px] min-[360px]:pr-[116px] sm:pr-[164px] lg:max-w-[65ch] lg:pr-[196px]">
+      <div
+        className={cx(
+          'flex min-w-0 flex-1 flex-col self-stretch sm:pr-[164px] lg:max-w-[65ch] lg:pr-[196px]',
+          // On the phone's band the figure stands full size, so the greeting
+          // keeps clear of all of it and wraps rather than running under it.
+          blend ? 'pr-[148px]' : 'pr-[104px] min-[360px]:pr-[116px]',
+        )}
+      >
         {/* The greeting opens on the name itself — the laboratory line above it
             said the same thing on every dashboard and is gone. */}
         <h1
@@ -206,7 +234,13 @@ function DashboardHero({
           {title}
         </h1>
         {subtitle && (
-          <p className="muted mt-1 line-clamp-2 text-[13.5px] leading-[1.45] sm:mt-2 sm:text-[15px] lg:text-base">
+          <p
+            className={cx(
+              'mt-1 line-clamp-2 text-[13.5px] leading-[1.45] sm:mt-2 sm:text-[15px] lg:text-base',
+              // A sentence is quietened on the band; chips carry their own tones.
+              blend ? (typeof subtitle === 'string' ? 'font-medium opacity-75' : 'mt-2') : 'muted',
+            )}
+          >
             {subtitle}
           </p>
         )}
@@ -257,6 +291,166 @@ function DashboardHero({
         className="absolute bottom-1 right-4 z-20 hidden min-[360px]:flex sm:bottom-1.5 sm:right-7 lg:right-10"
       />
     </section>
+  )
+}
+
+/* ------------------------------------------------------------------ *
+ * The student's phone dashboard
+ *
+ * The greeting — same text, buttons and assistant as the wide screen — laid
+ * straight onto an accent band, today's date above it. The band continues the
+ * top bar, which the shell paints in the same accent on this page
+ * (`.shell-bar-accent`). Everything under it sits on a sheet with rounded top
+ * corners that overlaps the band: the inventory search first, then the four
+ * figures as a staggered set of cards. From `sm` the page is unchanged.
+ * ------------------------------------------------------------------ */
+
+function PhoneAccentBackdrop({ children }) {
+  const today = new Date().toLocaleDateString(undefined, {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  })
+  return (
+    // Edge to edge under the top bar: the negative margins undo the shell's
+    // phone padding. The deep bottom padding is the room the sheet overlaps.
+    <div className="relative -mx-3 -mt-4 px-3 pb-10 pt-3">
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0"
+        style={{
+          // From the bar's accent at the top down to a lighter amber.
+          background: 'linear-gradient(180deg, rgb(var(--hero-bg)) 0%, rgb(var(--hero-bg-2)) 100%)',
+        }}
+      />
+      {/* A soft light behind the assistant, so it lifts off the band. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute right-0 top-8 h-56 w-56 rounded-full"
+        style={{
+          background: 'radial-gradient(circle, rgb(var(--hero-glow)) 0%, transparent 68%)',
+        }}
+      />
+      <div className="relative px-4">
+        <span
+          className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11.5px] font-semibold"
+          style={{ background: 'rgb(var(--hero-fg) / 0.08)', color: 'rgb(var(--hero-fg))' }}
+        >
+          <CalendarDays className="h-3.5 w-3.5 opacity-70" />
+          {today}
+        </span>
+      </div>
+      <div className="relative">{children}</div>
+    </div>
+  )
+}
+
+const BENTO_TONES = {
+  // The one filled card, the way the reference leads with its main figure.
+  primary: {
+    card: 'text-white',
+    style: { background: 'linear-gradient(160deg, #3b82f6 0%, #1d4ed8 100%)' },
+    chip: 'bg-white/20 text-white',
+  },
+  plain: { card: 'card', chip: 'bg-orange-500/10 text-orange-600 dark:text-orange-400' },
+  success: {
+    card: 'bg-emerald-500/10 text-emerald-800 dark:text-emerald-300',
+    chip: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
+  },
+  danger: {
+    card: 'bg-red-500/10 text-red-800 dark:text-red-300',
+    chip: 'bg-red-500/15 text-red-600 dark:text-red-400',
+  },
+}
+
+function BentoStat({ label, value, icon: Icon, to, tone }) {
+  const t = BENTO_TONES[tone]
+  return (
+    // One layout for all four: the icon and what the figure is on the top
+    // row, a small arrow saying it opens, and the figure itself below.
+    <Link
+      to={to}
+      className={cx(
+        'flex h-[112px] flex-col justify-between rounded-3xl p-3.5 shadow-lift transition-transform',
+        'active:scale-[0.98]',
+        t.card,
+      )}
+      style={t.style}
+    >
+      <span className="flex items-center gap-2">
+        <span className={cx('grid h-8 w-8 shrink-0 place-items-center rounded-full', t.chip)}>
+          <Icon className="h-4 w-4" />
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[12.5px] font-bold">{label}</span>
+        <ArrowUpRight className="h-4 w-4 shrink-0 opacity-50" />
+      </span>
+      <span className="block px-0.5 text-[32px] font-extrabold leading-none tabular-nums">{value}</span>
+    </Link>
+  )
+}
+
+/**
+ * The student's figures as small chips under the greeting on a phone: what is
+ * out, what is due soon, and — only when there is any — what is overdue. The
+ * two that need acting on take their warning tone only when they are non-zero.
+ */
+function HeroStatusChips({ data }) {
+  const chip = 'inline-flex items-center rounded-full px-2.5 py-0.5 text-[11.5px] font-bold'
+  const plain = { background: 'rgb(var(--hero-fg) / 0.08)', color: 'rgb(var(--hero-fg))' }
+  return (
+    <span className="flex flex-wrap gap-1.5">
+      <span className={chip} style={plain}>
+        {data.activeLoans} out
+      </span>
+      <span
+        className={cx(chip, data.dueSoon > 0 && 'bg-orange-500/15 text-orange-800 dark:text-orange-300')}
+        style={data.dueSoon > 0 ? undefined : plain}
+      >
+        {data.dueSoon} due soon
+      </span>
+      {data.overdue > 0 && (
+        <span className={cx(chip, 'bg-red-500/15 text-red-700 dark:text-red-300')}>
+          {data.overdue} overdue
+        </span>
+      )}
+    </span>
+  )
+}
+
+/** The sheet the phone's content sits on, lifted over the bottom of the band. */
+function PhoneSheet({ enabled, children }) {
+  if (!enabled) return children
+  return (
+    <div
+      className="relative z-10 -mx-3 -mt-8 rounded-t-[28px] px-3 pt-4"
+      style={{ background: 'rgb(var(--app-bg))' }}
+    >
+      {children}
+    </div>
+  )
+}
+
+/**
+ * The phone's overview at the top of the sheet: a way into the inventory
+ * search, then the four figures as an even 2 × 2 set of cards.
+ */
+function PhoneStudentStats({ data, requestCounts }) {
+  return (
+    <div className="space-y-3">
+      <Link
+        to="/tools"
+        className="card flex items-center gap-2.5 rounded-2xl px-4 py-3.5 text-sm shadow-lift"
+      >
+        <Search className="subtle h-4 w-4 shrink-0" />
+        <span className="subtle truncate">Search tools in the inventory</span>
+      </Link>
+      <div className="grid grid-cols-2 gap-3">
+        <BentoStat tone="primary" label="Tools out" value={data.activeLoans} icon={Package} to="/transactions?status=Borrowed" />
+        <BentoStat tone="plain" label="Due soon" value={data.dueSoon} icon={ClipboardList} to="/transactions" />
+        <BentoStat tone="success" label="Requests" value={requestCounts.open} icon={ClipboardList} to="/requests" />
+        <BentoStat tone="danger" label="Overdue" value={data.overdue} icon={AlertTriangle} to="/transactions?status=Overdue" />
+      </div>
+    </div>
   )
 }
 
@@ -439,6 +633,9 @@ function StaffDashboard({
 
   // Once per account on this device, remembered separately from every other page.
   const tour = usePageTour('dashboard', userId)
+  // A phone sets the greeting on the accent band and the page on a sheet over
+  // it, the same as the student's dashboard; from `sm` nothing changes.
+  const isPhone = useMediaQuery('(max-width: 639px)')
   const tourSteps = useMemo(() => staffDashboardTour(isInstructor), [isInstructor])
 
   // Staff panels each show the three latest rows only, so the whole screen stays
@@ -454,37 +651,45 @@ function StaffDashboard({
           An instructor is the exception — they run the counter rather than
           monitor it, and on a phone their bar carries Borrow and Return only
           behind "More", so the three counter actions are on the hero itself. */}
-      <DashboardHero
-        // The tighter greeting: it gives back the height it was taking at the
-        // top so the stat bands and the queues below start higher.
-        compact
-        // The same counter actions an instructor has, in the same place: the
-        // administrator's greeting now opens the screen exactly as the
-        // instructor's and the student's do. Routes and guards are unchanged.
-        actions={<CribActions can={can} />}
-        data-tour="dash-hero"
-        title={`Good ${greeting()}, ${firstName}`}
-        subtitle={
-          stats?.overdue
-            ? `${stats.overdue} tool${stats.overdue === 1 ? '' : 's'} overdue — worth chasing up.`
-            : 'The laboratory is running to schedule.'
-        }
-        signals={{
-          online,
-          loading: busy,
-          overdue: stats?.overdue ?? 0,
-          maintenance: stats?.maintenance ?? 0,
-          dueSoon: stats?.dueSoon ?? 0,
-          activeLoans: stats?.activeLoans ?? 0,
-          availableTools: stats?.availableTools ?? null,
-          returnRequests,
-          pendingRequests,
-          approvals,
-          damaged: stats?.damaged ?? 0,
-          messages: unreadMessages,
-        }}
-        role={isInstructor ? 'Instructor' : 'Admin'}
-      />
+      {(() => {
+        const hero = (
+          <DashboardHero
+            // The tighter greeting: it gives back the height it was taking at the
+            // top so the stat bands and the queues below start higher.
+            compact
+            // The same counter actions an instructor has, in the same place: the
+            // administrator's greeting now opens the screen exactly as the
+            // instructor's and the student's do. Routes and guards are unchanged.
+            actions={<CribActions can={can} onAccent={isPhone} />}
+            blend={isPhone}
+            data-tour="dash-hero"
+            title={`Good ${greeting()}, ${firstName}`}
+            subtitle={
+              stats?.overdue
+                ? `${stats.overdue} tool${stats.overdue === 1 ? '' : 's'} overdue — worth chasing up.`
+                : 'The laboratory is running to schedule.'
+            }
+            signals={{
+              online,
+              loading: busy,
+              overdue: stats?.overdue ?? 0,
+              maintenance: stats?.maintenance ?? 0,
+              dueSoon: stats?.dueSoon ?? 0,
+              activeLoans: stats?.activeLoans ?? 0,
+              availableTools: stats?.availableTools ?? null,
+              returnRequests,
+              pendingRequests,
+              approvals,
+              damaged: stats?.damaged ?? 0,
+              messages: unreadMessages,
+            }}
+            role={isInstructor ? 'Instructor' : 'Admin'}
+          />
+        )
+        return isPhone ? <PhoneAccentBackdrop>{hero}</PhoneAccentBackdrop> : hero
+      })()}
+
+      <PhoneSheet enabled={isPhone}>
 
       {/* ----------------------- what needs a decision ----------------------- */}
       {/* The one band above the counters, and the reason this screen opens on a
@@ -988,6 +1193,7 @@ function StaffDashboard({
       <TransactionDetail transaction={selected} open={!!selected} onClose={() => onSelect(null)} />
 
       <Walkthrough steps={tourSteps} open={tour.open} onClose={tour.close} />
+      </PhoneSheet>
     </>
   )
 }
@@ -999,11 +1205,14 @@ function StaffDashboard({
  * wording — so the hero reads identically in every role and the mascot beside it
  * can explain the one control there is.
  */
-function CribActions({ can }) {
+function CribActions({ can, onAccent = false }) {
   return (
     <HeroScanAction
+      onAccent={onAccent}
+      // On a phone Requests is already in the bottom bar, so the band keeps
+      // Scan alone, the same as the student's.
       secondary={
-        can(PERM.REQUEST_DECIDE) ? (
+        !onAccent && can(PERM.REQUEST_DECIDE) ? (
           <Link to="/requests" className={HERO_ACTION.outline}>
             <ClipboardList className="h-4 w-4 shrink-0" />
             Requests
@@ -1278,6 +1487,36 @@ function StudentDashboard({
     [requests],
   )
 
+  // A phone sets the greeting on the curved accent band and the figures as
+  // staggered cards; from `sm` the page is the card and tiles it always was.
+  const isPhone = useMediaQuery('(max-width: 639px)')
+  // The side panels: quiet reference beside the main column on a wide screen,
+  // the phone dashboard's rounded card when they stack under it.
+  const asidePanel = isPhone
+    ? { variant: 'panel', flat: true, className: 'rounded-3xl shadow-lift' }
+    : { variant: 'quiet' }
+  // Kept as short as the staff heroes': a subtitle that wraps to two lines on a
+  // phone is what pushed the buttons down and stretched the row. The advice it
+  // used to carry is the assistant's job.
+  const heroSubtitle = busy
+    ? undefined
+    : data.overdue
+      ? `${data.overdue} overdue tool${data.overdue === 1 ? '' : 's'}.`
+      : data.activeLoans
+        ? `${data.activeLoans} tool${data.activeLoans === 1 ? '' : 's'} in your hands.`
+        : 'Nothing out at the moment.'
+  const heroSignals = {
+    online,
+    loading: busy,
+    overdue: data?.overdue ?? 0,
+    dueSoon: data?.dueSoon ?? 0,
+    activeLoans: data?.activeLoans ?? 0,
+    availableTools: data?.availableTools ?? null,
+    openRequests: openRequests.length,
+    messages: unreadMessages,
+    unread,
+  }
+
   return (
     <>
       {/* The greeting carries the two everyday actions, which is the first thing
@@ -1285,44 +1524,38 @@ function StudentDashboard({
           duplicated by the bottom bar but sit here as well: this is the top of
           the screen a student lands on, and reaching the thumb bar to start a
           borrow is a step this saves. */}
-      <DashboardHero
-        compact
-        title={`Good ${greeting()}, ${firstName}`}
-        subtitle={
-          // Kept as short as the staff heroes': a subtitle that wraps to two
-          // lines on a phone is what pushed the buttons down and stretched the
-          // row. The advice it used to carry is the assistant's job.
-          busy
-            ? undefined
-            : data.overdue
-              ? `${data.overdue} overdue tool${data.overdue === 1 ? '' : 's'}.`
-              : data.activeLoans
-                ? `${data.activeLoans} tool${data.activeLoans === 1 ? '' : 's'} in your hands.`
-                : 'Nothing out at the moment.'
-        }
-        signals={{
-          online,
-          loading: busy,
-          overdue: data?.overdue ?? 0,
-          dueSoon: data?.dueSoon ?? 0,
-          activeLoans: data?.activeLoans ?? 0,
-          availableTools: data?.availableTools ?? null,
-          openRequests: openRequests.length,
-          messages: unreadMessages,
-          unread,
-        }}
-        role="Student"
-        actions={
-          <HeroScanAction
-            secondary={
-              <Link to="/return" className={HERO_ACTION.outline}>
-                <Repeat className="h-4 w-4 shrink-0" />
-                Return a tool
-              </Link>
+      {(() => {
+        const hero = (
+          <DashboardHero
+            compact
+            blend={isPhone}
+            title={`Good ${greeting()}, ${firstName}`}
+            subtitle={isPhone && !busy ? <HeroStatusChips data={data} /> : heroSubtitle}
+            signals={heroSignals}
+            role="Student"
+            actions={
+              <HeroScanAction
+                onAccent={isPhone}
+                // A phone shows Scan alone here: returning is reached from the
+                // loan itself on Transactions, and the band keeps its room for
+                // the assistant.
+                secondary={
+                  isPhone ? null : (
+                    <Link to="/return" className={HERO_ACTION.outline}>
+                      <Repeat className="h-4 w-4 shrink-0" />
+                      Return a tool
+                    </Link>
+                  )
+                }
+              />
             }
           />
-        }
-      />
+        )
+        // On a phone the same greeting sits straight on the curved accent band.
+        return isPhone ? <PhoneAccentBackdrop>{hero}</PhoneAccentBackdrop> : hero
+      })()}
+
+      <PhoneSheet enabled={isPhone}>
 
       {/* ----------------------------- middle: statistics -----------------------------
           Four compact tiles, full width above the content grid. They are `tile`
@@ -1330,7 +1563,13 @@ function StudentDashboard({
           as a summary strip and the panels below it clearly outrank it.
           2 × 2 on a phone, 1 × 4 from `lg`. */}
       <div data-tour="dash-stats" className="mb-5 lg:mb-7">
-        {busy ? (
+        {isPhone ? (
+          busy ? (
+            <SkeletonCards count={4} className="grid-cols-2" />
+          ) : (
+            <PhoneStudentStats data={data} requestCounts={requestCounts} />
+          )
+        ) : busy ? (
           <SkeletonCards count={4} className="grid-cols-2 lg:grid-cols-4" />
         ) : (
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-5">
@@ -1391,11 +1630,21 @@ function StudentDashboard({
           <div data-tour="dash-history">
             <SectionCard
               variant="panel"
+              // On a phone: the same rounded, flat-headed card as the figures
+              // above it, rather than a panel with a filled header strip.
+              flat={isPhone}
+              className={isPhone ? 'rounded-3xl shadow-lift' : undefined}
               title="Recent transactions"
               description="The last two borrowings and returns"
               bodyClassName="p-0"
               action={
-                <Link to="/transactions" className="btn btn-ghost btn-sm">
+                <Link
+                  to="/transactions"
+                  className={cx(
+                    'btn btn-sm',
+                    isPhone ? 'rounded-full bg-amberline-400/15 text-amberline-700 dark:text-amberline-400' : 'btn-ghost',
+                  )}
+                >
                   View all
                 </Link>
               }
@@ -1426,113 +1675,119 @@ function StudentDashboard({
             On a phone the bottom bar already owns Tools and Notifications, so
             rather than stacking this column underneath, the phone gets one
             compact strip at the end of the page — see below. */}
-        {!isPwa && (
-          <aside className="min-w-0 space-y-4 lg:col-span-4 lg:space-y-6">
-            {/* The student's own open requests, read through the same hook the
-                Requests page uses — one ask per row, with its state, and the
-                page itself one tap away. Nothing is decided from here. */}
-            <SectionCard
-              variant="quiet"
-              title="Requests"
-              description="Your asks waiting on the laboratory"
-              bodyClassName="p-0"
-            >
-              {loadingRequests && !openRequests.length ? (
-                <SkeletonRows rows={2} columns={1} />
-              ) : openRequests.length === 0 ? (
-                <EmptyState
-                  icon={ClipboardList}
-                  title="No open requests."
-                  description="Ask for a tool from the inventory and it will appear here."
-                  compact
-                />
-              ) : (
-                <ul className="space-y-1 px-2 pb-2 sm:px-3">
-                  {openRequests.map((request) => (
-                    <li key={request.id}>
-                      <Link
-                        to={`/requests/${request.id}`}
-                        className="flex items-center gap-3 rounded-xl px-2 py-2.5 transition-colors
-                                   hover:bg-black/[0.03] dark:hover:bg-white/5"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-bold">{request.toolName}</p>
-                          <p className="muted mono truncate text-[11px]">{request.id}</p>
-                        </div>
-                        <RequestStatusBadge status={request.status} />
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <div className="px-3 pb-3 sm:px-4">
-                <Link to="/requests" className="btn btn-outline w-full">
-                  <ClipboardList className="h-4 w-4" />
-                  Open requests page
-                </Link>
-              </div>
-            </SectionCard>
-
-            <SectionCard
-              variant="quiet"
-              title="Reminders"
-              description="What needs your attention"
-              bodyClassName="p-0"
-            >
-              {busy ? (
-                <SkeletonRows rows={2} columns={1} />
-              ) : data.overdueLoans.length === 0 && data.dueSoon === 0 ? (
-                <EmptyState
-                  icon={CheckCircle2}
-                  title="You are all clear."
-                  description="No overdue tools and nothing due in the next few days."
-                  compact
-                />
-              ) : (
-                // No dividers in here: a quiet panel with three hairlines across
-                // it puts back exactly the visual noise the tier is meant to shed.
-                <ul className="space-y-1 px-2 pb-3 sm:px-3">
-                  {data.overdueLoans.map((txn) => (
-                    <li key={txn.id} className="flex items-center gap-3 rounded-xl px-2 py-2.5">
-                      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-red-500/10">
-                        <AlertTriangle className="h-4 w-4 text-red-500" />
-                      </span>
+        {/* Requests and Reminders show at every width — stacked under the recent
+            transactions on a phone, in the same rounded card as the rest of the
+            phone dashboard. Notifications stays with the wide screen: on a
+            phone the bell in the top bar is the way there. */}
+        <aside className="min-w-0 space-y-4 lg:col-span-4 lg:space-y-6">
+          {/* The student's own open requests, read through the same hook the
+              Requests page uses — one ask per row, with its state, and the
+              page itself one tap away. Nothing is decided from here. */}
+          <SectionCard
+            {...asidePanel}
+            title="Requests"
+            description="Your asks waiting on the laboratory"
+            bodyClassName="p-0"
+          >
+            {loadingRequests && !openRequests.length ? (
+              <SkeletonRows rows={2} columns={1} />
+            ) : openRequests.length === 0 ? (
+              <EmptyState
+                icon={ClipboardList}
+                title="No open requests."
+                description="Ask for a tool from the inventory and it will appear here."
+                compact
+              />
+            ) : (
+              <ul className="space-y-1 px-2 pb-2 sm:px-3">
+                {openRequests.map((request) => (
+                  <li key={request.id}>
+                    <Link
+                      to={`/requests/${request.id}`}
+                      className="flex items-center gap-3 rounded-xl px-2 py-2.5 transition-colors
+                                 hover:bg-black/[0.03] dark:hover:bg-white/5"
+                    >
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-bold">{txn.toolName}</p>
-                        <p className="muted truncate text-xs">
-                          Overdue — was due {formatDate(txn.dueDate)}
-                        </p>
+                        <p className="truncate text-sm font-bold">{request.toolName}</p>
+                        <p className="muted mono truncate text-[11px]">{request.id}</p>
                       </div>
-                    </li>
-                  ))}
-                  {data.dueSoon > 0 && (
-                    <li className="flex items-center gap-3 rounded-xl px-2 py-2.5">
-                      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-orange-500/10">
-                        <ClipboardList className="h-4 w-4 text-orange-500" />
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-bold">
-                          {data.dueSoon} tool{data.dueSoon === 1 ? '' : 's'} due soon
-                        </p>
-                        <p className="muted truncate text-xs">
-                          Return within {settings.dueSoonThresholdDays} day(s) to stay on schedule.
-                        </p>
-                      </div>
-                    </li>
-                  )}
-                </ul>
-              )}
-            </SectionCard>
+                      <RequestStatusBadge status={request.status} />
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="px-3 pb-3 sm:px-4">
+              <Link to="/requests" className="btn btn-outline w-full">
+                <ClipboardList className="h-4 w-4" />
+                Open requests page
+              </Link>
+            </div>
+          </SectionCard>
 
+          <SectionCard
+            {...asidePanel}
+            title="Reminders"
+            description="What needs your attention"
+            bodyClassName="p-0"
+          >
+            {busy ? (
+              <SkeletonRows rows={2} columns={1} />
+            ) : data.overdueLoans.length === 0 && data.dueSoon === 0 ? (
+              <EmptyState
+                icon={CheckCircle2}
+                title="You are all clear."
+                description="No overdue tools and nothing due in the next few days."
+                compact
+              />
+            ) : (
+              // No dividers in here: a quiet panel with three hairlines across
+              // it puts back exactly the visual noise the tier is meant to shed.
+              <ul className="space-y-1 px-2 pb-3 sm:px-3">
+                {data.overdueLoans.map((txn) => (
+                  <li key={txn.id} className="flex items-center gap-3 rounded-xl px-2 py-2.5">
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-red-500/10">
+                      <AlertTriangle className="h-4 w-4 text-red-500" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-bold">{txn.toolName}</p>
+                      <p className="muted truncate text-xs">
+                        Overdue — was due {formatDate(txn.dueDate)}
+                      </p>
+                    </div>
+                  </li>
+                ))}
+                {data.dueSoon > 0 && (
+                  <li className="flex items-center gap-3 rounded-xl px-2 py-2.5">
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-orange-500/10">
+                      <ClipboardList className="h-4 w-4 text-orange-500" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-bold">
+                        {data.dueSoon} tool{data.dueSoon === 1 ? '' : 's'} due soon
+                      </p>
+                      <p className="muted truncate text-xs">
+                        Return within {settings.dueSoonThresholdDays} day(s) to stay on schedule.
+                      </p>
+                    </div>
+                  </li>
+                )}
+              </ul>
+            )}
+          </SectionCard>
+
+          {!isPwa && (
             <SectionCard variant="quiet" title="Notifications" description="Alerts addressed to you">
               <Link to="/notifications" className="btn btn-outline w-full">
                 <Bell className="h-4 w-4" />
                 {unread > 0 ? `${unread} unread` : 'Open notification centre'}
               </Link>
             </SectionCard>
-          </aside>
-        )}
+          )}
+        </aside>
       </div>
+
+      </PhoneSheet>
 
       <TransactionDetail transaction={selected} open={!!selected} onClose={() => onSelect(null)} />
 

@@ -33,10 +33,7 @@ export default function TransactionDetail({ transaction, open, onClose, footer, 
           )}
         </div>
 
-        <div
-          className="rounded-lg border p-3.5"
-          style={{ background: 'rgb(var(--surface-2))' }}
-        >
+        <div className="border-t pt-3.5">
           <p className="subtle text-[11px] font-bold uppercase tracking-wider">Tool</p>
           <div className="mt-1 flex items-center justify-between gap-3">
             <div className="min-w-0">

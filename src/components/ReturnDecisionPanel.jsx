@@ -49,7 +49,7 @@ export default function ReturnDecisionPanel({ activeLoan, actor, onDecided }) {
   }
 
   return (
-    <div className="rounded-xl border p-3.5" style={{ background: 'rgb(var(--surface-2))' }}>
+    <div>
       <p className="text-[13px] font-bold">Return requested</p>
       {activeLoan.returnRequestCondition && (
         <p className="mt-1 flex items-center gap-1.5 text-xs">
@@ -280,7 +280,7 @@ export function ReturnDecidedNotice({ activeLoan }) {
         ? 'Rejected'
         : 'Accepted'
   return (
-    <div className="rounded-xl border p-3.5" style={{ background: 'rgb(var(--surface-2))' }}>
+    <div>
       <p className="text-[13px] font-bold">Return already processed — {label}</p>
       {activeLoan.returnProcessedByName && (
         <p className="subtle mt-1 text-xs">

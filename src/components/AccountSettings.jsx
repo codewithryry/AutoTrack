@@ -195,7 +195,8 @@ export function ChangePasswordControl({ className }) {
 
   return (
     <div className={className}>
-      <div className="flex items-start gap-3 rounded-lg border p-3.5">
+      {/* Straight in the card it sits in — no second box inside it. */}
+      <div className="flex items-start gap-3">
         <span
           className="grid h-9 w-9 shrink-0 place-items-center rounded-lg"
           style={{ background: 'rgb(var(--surface-3))' }}
@@ -302,10 +303,9 @@ export function DeleteAccountControl({ className }) {
 
   return (
     <div className={className}>
-      <div
-        className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 p-3.5
-                   dark:border-red-500/30 dark:bg-red-500/10"
-      >
+      {/* Straight in the card it sits in — the red icon and title carry the
+          warning without a second, tinted box inside it. */}
+      <div className="flex items-start gap-3">
         <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-red-500/10">
           <Trash2 className="h-4 w-4 text-red-600 dark:text-red-400" />
         </span>

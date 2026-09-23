@@ -12,6 +12,45 @@ About screen, `android/app/build.gradle` derives the Android `versionName` and `
 it, and `npm run verify` fails if the two drift apart. `scripts/set-version.mjs` writes all of
 them together.
 
+## 0.2.8
+
+### What's new
+- **Tool Map.** A new page at `/tools/map` shows where each tool was last recorded during its
+  current loan, on a map with clustered markers. Borrowed and overdue tools show their latest
+  checkpoint (or the borrow point if no checkpoint exists yet). Available tools get their own pin
+  style. Past location points, including return points of closed loans, are listed per tool as
+  history and never drawn as live markers. Staff see every loan's points. Students see only
+  their own.
+- **Tool Map in navigation** for every role, placed after Inventory. On the phone bottom bar it
+  appears as a tab beside Inventory.
+- **Search and link previews.** The sign-in and sign-up pages now have descriptive titles, meta
+  descriptions, canonical URLs, Open Graph tags and structured data. Every other route is marked
+  `noindex`, and the new `public/robots.txt` and `public/sitemap.xml` list only the public pages.
+
+### Changed
+- **New phone layout for every role.** The top bar uses the accent colour, with a short accent
+  band under it. Pages sit on a rounded sheet above the band, and cards, buttons and fields are
+  rounded.
+- **Floating bottom bar.** The bottom bar is now a translucent glass pill. The current page opens
+  into a named pill, and Scan is raised above the others. When you're on a page the bar doesn't
+  normally carry (Settings, Notifications, Requests, Return, Tool Map), that page is added to the
+  bar while you're on it.
+- **Page action in the centre slot.** On admin pages with an Add action (tools, users, services),
+  the centre slot runs that action. On the maintenance log, instructors get the scheduler there.
+  Everywhere else it stays Scan.
+- **Redesigned phone dashboard.** It now opens on the accent band with a greeting and a single
+  Scan button.
+- **TOBI assistant placeholder.** TOBI shows a "Coming soon" pill when tapped. It is not connected
+  yet.
+- **Fewer boxes inside boxes.** Removed the inner bordered or tinted panels in Account settings
+  (change password, delete account), location capture, return decisions, scan results,
+  transaction details, problem reports and tool location checkpoints. Content now sits directly
+  in its card.
+
+### Fixed
+- On `/tools/map` only Tool Map is highlighted in navigation, not Inventory as well. A tool's
+  own record (`/tools/:id`) still highlights Inventory.
+
 ## 0.2.7-beta.1
 
 ### Added

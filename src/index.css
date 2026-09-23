@@ -25,6 +25,21 @@
     --rail-text: 226 232 242;
     --rail-muted: 130 148 178;
     --rail-hover: 27 37 55;
+    /* The student phone header (bar, band and dashboard hero): the accent in
+       light, a deep navy in dark, where a full-width yellow band glares. */
+    --hero-bg: 240 180 41;
+    --hero-bg-2: 250 219 95;
+    --hero-fg: 11 18 32;
+    --hero-cta-bg: 11 18 32;
+    --hero-cta-fg: 226 232 242;
+    /* The student's floating bottom bar: a translucent grey glass, not black,
+       with its own light ink. In dark it is lifted a step, so it does not
+       vanish into the page. */
+    /* A soft light behind the phone dashboard's assistant. */
+    --hero-glow: 255 255 255 / 0.6;
+    --dock-bg: 92 102 120;
+    --dock-fg: 248 250 252;
+    --dock-muted: 214 222 234;
   }
 
   [data-theme='dark'] {
@@ -43,6 +58,15 @@
     --rail-text: 226 232 242;
     --rail-muted: 130 148 178;
     --rail-hover: 24 34 51;
+    --hero-bg: 19 28 43;
+    --hero-bg-2: 30 42 62;
+    --hero-fg: 231 237 246;
+    --hero-cta-bg: 247 201 72;
+    --hero-cta-fg: 11 18 32;
+    --hero-glow: 247 201 72 / 0.16;
+    --dock-bg: 62 76 102;
+    --dock-fg: 241 245 249;
+    --dock-muted: 170 184 208;
   }
 
   * {
@@ -489,3 +513,126 @@
     color: #000;
   }
 }
+
+/* ToolTrack Map markers (Leaflet divIcons). */
+.tooltrack-pin {
+  display: block;
+  width: 28px;
+  height: 28px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  background: rgb(var(--accent));
+  border: 3px solid #fff;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
+}
+.tooltrack-pin.is-overdue {
+  background: #ef4444;
+}
+.tooltrack-pin.is-available {
+  background: #10b981;
+}
+.tooltrack-pin.is-selected {
+  background: #2563eb;
+}
+.tooltrack-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  background: rgb(var(--accent));
+}
+.tooltrack-dot.is-overdue {
+  background: #ef4444;
+}
+.tooltrack-dot.is-available {
+  background: #10b981;
+}
+.tooltrack-fit {
+  display: grid !important;
+  place-items: center;
+}
+.tooltrack-cluster {
+  display: grid;
+  place-items: center;
+  border-radius: 9999px;
+  background: rgb(var(--accent));
+  color: rgb(var(--accent-contrast));
+  border: 3px solid #fff;
+  font-size: 12px;
+  font-weight: 800;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.35);
+}
+
+/* The top bar over a student's phone dashboard: the band's accent, no hairline.
+   `!important` because the bar's own colours are set inline. */
+@media (max-width: 639px) {
+  .shell-bar-accent {
+    background: rgb(var(--hero-bg)) !important;
+    border-color: transparent !important;
+    color: rgb(var(--hero-fg));
+  }
+  /* The bell while Notifications is open: its usual accent tint vanishes on
+     the accent bar, so it takes the bar's own ink on a soft pill instead. */
+  .shell-bar-accent a[aria-current='page'] {
+    background: rgb(var(--hero-fg) / 0.12) !important;
+    color: rgb(var(--hero-fg)) !important;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * The student's phone look — every page they use, below `sm` only.
+ *
+ * `.student-band` is a short accent band under the bar (the bar names the page);
+ * `.student-sheet` lifts the page over it with rounded top corners, the way
+ * the dashboard's own band and sheet do. `.student-modern` rounds the page's
+ * cards, buttons and fields and trades hairlines for a soft shadow.
+ * ------------------------------------------------------------------ */
+@media (max-width: 639px) {
+  .student-band {
+    margin: -1rem -0.75rem 0;
+    /* Exactly the sheet's overlap below, so no strip of it shows between the
+       bar and the page — only the sheet's rounded corners reveal it. */
+    height: 1.75rem;
+    /* Solid, the bar's own colour: a fade in so short a band read as a pale
+       stripe between the bar and the sheet. */
+    background: rgb(var(--hero-bg));
+    color: rgb(var(--hero-fg));
+  }
+  .student-sheet {
+    position: relative;
+    z-index: 10;
+    margin: -1.75rem -0.75rem 0;
+    padding: 1rem 0.75rem 0;
+    border-radius: 28px 28px 0 0;
+    background: rgb(var(--app-bg));
+  }
+  .student-modern .card,
+  .student-modern .panel,
+  .student-modern .tile {
+    border-radius: 1.5rem;
+    border-color: transparent;
+    box-shadow: 0 10px 30px -12px rgb(11 18 32 / 0.25);
+  }
+  .student-modern .panel-quiet {
+    border-radius: 1.5rem;
+  }
+  .student-modern .btn {
+    border-radius: 9999px;
+  }
+  .student-modern .input {
+    border-radius: 1rem;
+  }
+  /* Section headers read flat, the way the dashboard's do: no filled strip and
+     no rule under it. `!important` because the strip's colour is set inline. */
+  .student-modern :is(.card, .panel) > header {
+    background: transparent !important;
+    border-bottom-color: transparent;
+  }
+  /* In dark, the dark "selected" fill (a chip, a view switch, the section
+     tabs) is the page's own colour and disappears; it takes the accent. */
+  [data-theme='dark'] .student-modern .btn-dark {
+    background: rgb(var(--accent));
+    color: rgb(var(--accent-contrast));
+  }
+}
+

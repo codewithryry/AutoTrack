@@ -222,10 +222,7 @@ export default function ToolScanResult({ tool, loan, can, user, onNavigate, onRe
 
         {/* ---------------------------- borrowing ---------------------------- */}
         {activeLoan && (
-          <div
-            className="mt-4 rounded-lg border p-3.5"
-            style={{ background: 'rgb(var(--surface-2))' }}
-          >
+          <div className="mt-4 border-t pt-4">
             <p className="subtle text-[11px] font-bold uppercase tracking-wider">
               {showBorrowerDetail ? 'Borrower' : 'Currently borrowed by'}
             </p>

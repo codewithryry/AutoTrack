@@ -1,0 +1,25 @@
+# ToolTrack — only the sign-in and sign-up pages are public.
+# Everything else is behind an account; these rules keep crawlers out of it,
+# and authentication is what actually protects it.
+User-agent: *
+Allow: /login
+Allow: /signup
+Disallow: /dashboard
+Disallow: /profile
+Disallow: /tools
+Disallow: /scan
+Disallow: /borrow
+Disallow: /return
+Disallow: /transactions
+Disallow: /requests
+Disallow: /messages
+Disallow: /users
+Disallow: /notifications
+Disallow: /activity
+Disallow: /maintenance
+Disallow: /problem-reports
+Disallow: /reports
+Disallow: /settings
+Disallow: /api/
+
+Sitemap: https://autotracking.vercel.app/sitemap.xml

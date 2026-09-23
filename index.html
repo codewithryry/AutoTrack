@@ -20,7 +20,33 @@
     <!-- iOS uses its own 180px mark, which is already in `public/icons`; it was
          being handed the 192px Android icon instead and rescaling it. -->
     <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
-    <title>ToolTrack</title>
+    <title>ToolTrack — QR-Based Automotive Laboratory Tool Monitoring</title>
+
+    <!-- Link previews and search. Crawlers that do not run scripts read these as
+         written; the canonical URL and per-page title are set by the app for
+         the public sign-in and sign-up pages (see `usePageMeta` in App.jsx). -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ToolTrack" />
+    <meta property="og:title" content="ToolTrack — QR-Based Automotive Laboratory Tool Monitoring" />
+    <meta
+      property="og:description"
+      content="Scan, borrow, track and return automotive laboratory tools with QR codes."
+    />
+    <meta property="og:url" content="https://autotracking.vercel.app/login" />
+    <meta property="og:image" content="https://autotracking.vercel.app/icons/icon-512.png" />
+    <meta property="og:image:alt" content="ToolTrack app icon" />
+    <meta name="twitter:card" content="summary" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "ToolTrack",
+        "url": "https://autotracking.vercel.app/login",
+        "description": "QR-based automotive laboratory tool monitoring system: scan, borrow, track and return laboratory tools.",
+        "applicationCategory": "BusinessApplication",
+        "operatingSystem": "Web, Android"
+      }
+    </script>
 
     <!-- The app background, painted before the stylesheet and the bundle load.
          Without it the browser shows its own white page for the first frames of

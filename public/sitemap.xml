@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Public pages only. Every other route requires an account. -->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://autotracking.vercel.app/login</loc>
+  </url>
+  <url>
+    <loc>https://autotracking.vercel.app/signup</loc>
+  </url>
+</urlset>

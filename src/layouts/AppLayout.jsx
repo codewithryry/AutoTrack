@@ -6,8 +6,7 @@ import {
   LogOut,
   Menu,
   Plus,
-  Settings as SettingsIcon,
-  User as UserIcon,
+  Sparkles,
   WifiOff,
   X,
 } from 'lucide-react'
@@ -15,10 +14,12 @@ import { AppearanceToggleButton } from '../components/AccountSettings'
 import ErrorBoundary from '../components/ErrorBoundary'
 import Avatar from '../components/Avatar'
 import { PageLoading, RoleBadge } from '../components/ui'
+
 import {
   ACCOUNT_NAV,
   accountNavLabel,
   EXTRA_PAGES,
+  hasNestedNavMatch,
   INSTRUCTOR_EXTRA_PAGES,
   INSTRUCTOR_QUICK_ACTIONS,
   instructorRailItems,
@@ -113,6 +114,13 @@ export default function AppLayout() {
 
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  // TOBI's "Coming soon" pill, shown for a moment after a tap.
+  const [tobiHint, setTobiHint] = useState(false)
+  useEffect(() => {
+    if (!tobiHint) return undefined
+    const timer = setTimeout(() => setTobiHint(false), 2500)
+    return () => clearTimeout(timer)
+  }, [tobiHint])
   const menuRef = useRef(null)
 
   const isStudent = user?.role === ROLE.STUDENT
@@ -252,6 +260,21 @@ export default function AppLayout() {
     .map((to) => NAV_ITEMS.find((item) => item.to === to))
     .filter((item) => item && allowed.has(item.to))
 
+  // A bottom-bar destination's own sections — Inventory and Tool Map. The bar's
+  // five slots are fixed, so a nested item the role may see is reached as a tab
+  // beside its parent instead: same items, same permission filter. Only where
+  // the parent is in this role's bar (so a staff shell, which reaches Tool Map
+  // from its drawer, is unchanged), and only on the parent page and its tabs —
+  // not on a tool's own record under `/tools/:id`.
+  const sectionParent = mobileItems.find((item) => location.pathname.startsWith(`${item.to}/`) || location.pathname === item.to)
+  const sectionTabs = sectionParent
+    ? navItems.filter((item) => item.to.startsWith(`${sectionParent.to}/`))
+    : []
+  const showSectionTabs =
+    sectionTabs.length > 0 &&
+    (location.pathname === sectionParent.to ||
+      sectionTabs.some((item) => location.pathname === item.to))
+
   // The staff drawer follows the desktop rail: the same items, in the same
   // order, minus the ones reached another way — the bottom bar's own four,
   // Notifications (the bell in the top bar) and Settings (the account menu
@@ -296,9 +319,8 @@ export default function AppLayout() {
   const currentPage =
     location.pathname === ACCOUNT_NAV.to
       ? { ...ACCOUNT_NAV, label: accountNavLabel(user?.role) }
-      : (NAV_ITEMS.find(
-          (item) => location.pathname === item.to || location.pathname.startsWith(`${item.to}/`),
-        ) ??
+      : (NAV_ITEMS.find((item) => location.pathname === item.to) ??
+        NAV_ITEMS.find((item) => location.pathname.startsWith(`${item.to}/`)) ??
         // An instructor works from routes that were never rail items — Borrow and
         // Return, which they reach from the hero and the scan result — so the bar can
         // still name the page instead of falling back to the product name.
@@ -306,6 +328,201 @@ export default function AppLayout() {
         (isInstructor
           ? (INSTRUCTOR_EXTRA_PAGES.find((page) => location.pathname === page.to) ?? null)
           : null))
+
+  // A student on a page their bar does not carry — their account, Settings,
+  // Notifications, Requests, Return, Tool Map — gets that page in the bar for
+  // as long as they are on it, at the end after Transactions and marked as the
+  // current one, so
+  // the bar never reads as nothing selected. It is gone again on the next page
+  // the bar does carry.
+  const studentBarExtra = (() => {
+    if (onThread || !currentPage?.icon) return null
+    const carried = mobileItems.some(
+      (item) =>
+        location.pathname === item.to ||
+        (location.pathname.startsWith(`${item.to}/`) && !hasNestedNavMatch(item.to, location.pathname)),
+    )
+    return carried ? null : { to: currentPage.to, label: currentPage.label, icon: currentPage.icon }
+  })()
+  const barItems = studentBarExtra ? [...mobileItems, studentBarExtra] : mobileItems
+  // Six slots instead of five: the icons give up a little room to the name.
+  const barIconSlot = studentBarExtra ? 'w-8 shrink-0' : 'w-10 shrink-0'
+
+  // One bottom-bar slot, shared by both bars.
+  const renderBarItem = (item) => {
+    const Icon = item.icon
+    // The scan button: about an eighth larger than a plain item, raised
+    // just clear of the bar rather than floating away from it.
+    if (item.primary) {
+      // While an instructor is on the service log the raised slot carries
+      // that page's own action instead — the same scheduler dialog the
+      // page's button opens, reached through `?schedule=1`. Scan is not
+      // renamed or removed: leaving /maintenance restores it.
+      // The administrator's slot carries a page's own Add action where there is
+      // one (a tool, a user, a service); elsewhere, like everyone's, it is Scan
+      // or the page's "+".
+      const action =
+        (isAdmin && adminAddSlot ? { ...adminAddSlot, icon: Plus } : null) ??
+        scheduleSlot ??
+        messageSlot ??
+        requestSlot ??
+        item
+      const ActionIcon = action.icon
+      // Only Scan itself opens into a named pill; an Add or "+" is an action on
+      // the page that is open, so it stays a circle.
+      const namesItself = action === item
+      if (studentModern) {
+        return (
+          <NavLink
+            key={item.to}
+            to={action.to}
+            end
+            aria-label={action.ariaLabel ?? action.label}
+            className={({ isActive }) =>
+              cx(
+                'flex h-11 min-w-0 items-center justify-center gap-1.5 rounded-full shadow-lift',
+                'text-[11px] font-bold tracking-tight transition-all active:scale-95',
+                'motion-reduce:transition-none',
+                // Pressed — its own page open — it opens into the named pill.
+                isActive && namesItself ? 'flex-1 px-3' : barIconSlot,
+              )
+            }
+            style={{ background: 'rgb(var(--accent))', color: 'rgb(var(--accent-contrast))' }}
+          >
+            {({ isActive }) => (
+              <>
+                <ActionIcon className="h-5 w-5 shrink-0" />
+                {isActive && namesItself ? (
+                  <span className="min-w-0 truncate">{action.label}</span>
+                ) : (
+                  <span className="sr-only">{action.label}</span>
+                )}
+              </>
+            )}
+          </NavLink>
+        )
+      }
+      return (
+        <NavLink
+          key={item.to}
+          to={action.to}
+          className="flex flex-1 flex-col items-center justify-end gap-1 rounded-2xl px-1 pb-1"
+          aria-label={action.ariaLabel ?? action.label}
+        >
+          <span
+            className="grid h-[52px] w-[52px] -translate-y-3.5 place-items-center rounded-2xl
+                       shadow-lift ring-[5px] transition-transform active:scale-95
+                       motion-reduce:transition-none"
+            style={{
+              background: 'rgb(var(--accent))',
+              color: 'rgb(var(--accent-contrast))',
+              '--tw-ring-color': 'rgb(var(--surface))',
+            }}
+          >
+            <ActionIcon className="h-[26px] w-[26px]" />
+          </span>
+          <span className="-mt-3.5 max-w-full truncate px-0.5 text-[10px] font-extrabold tracking-tight">
+            {action.label}
+          </span>
+        </NavLink>
+      )
+    }
+    if (studentModern) {
+      return (
+        <NavLink
+          key={item.to}
+          to={item.to}
+          end={hasNestedNavMatch(item.to, location.pathname)}
+          aria-label={item.label}
+          className={({ isActive }) =>
+            cx(
+              'flex h-11 min-w-0 items-center justify-center gap-1.5 rounded-full transition-all',
+              'text-[11px] font-bold tracking-tight',
+              isActive ? 'flex-1 px-3' : barIconSlot,
+            )
+          }
+          style={({ isActive }) =>
+            // The current page is a white pill — the accent stays Scan's alone,
+            // so the two never read as the same thing.
+            isActive
+              ? { background: 'rgb(var(--dock-fg))', color: 'rgb(11 18 32)' }
+              : { color: 'rgb(var(--dock-fg) / 0.85)' }
+          }
+        >
+          {({ isActive }) => (
+            <>
+            <span
+              className="relative grid shrink-0 place-items-center"
+            >
+              <span className="relative">
+                <Icon className="h-5 w-5" strokeWidth={2} />
+                {barBadge(item.to) > 0 && (
+                  <span
+                    className="absolute -right-2 -top-1.5 grid h-3.5 min-w-[14px] place-items-center
+                               rounded-full bg-red-500 px-1 text-[9px] font-bold text-white"
+                  >
+                    {barBadge(item.to) > 9 ? '9+' : barBadge(item.to)}
+                  </span>
+                )}
+              </span>
+            </span>
+            {/* Pressed — the current page — it is named; the rest are icons. */}
+            {isActive ? (
+              <span className="min-w-0 truncate">{item.label}</span>
+            ) : (
+              <span className="sr-only">{item.label}</span>
+            )}
+            </>
+          )}
+        </NavLink>
+      )
+    }
+    return (
+      <NavLink
+        key={item.to}
+        to={item.to}
+        end={hasNestedNavMatch(item.to, location.pathname)}
+        aria-label={item.label}
+        className={({ isActive }) =>
+          cx(
+            'flex flex-1 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-[10px]',
+            'font-bold tracking-tight transition-colors',
+            isActive ? 'text-amberline-600 dark:text-amberline-400' : 'subtle',
+          )
+        }
+      >
+        {({ isActive }) => (
+          <>
+            {/* The active item is marked by a filled pill behind its
+                icon — clearer at a glance than the old hairline, and it
+                keeps every item on the same baseline. */}
+            <span
+              className={cx(
+                'relative grid h-8 w-12 place-items-center rounded-xl transition-colors',
+                isActive && 'bg-amberline-400/15',
+              )}
+            >
+              {/* One weight for every item, active or not: the filled
+                  pill and the colour already mark the current page, and a
+                  thicker stroke on top made that one glyph read as a
+                  different set of icons from its neighbours. */}
+              <Icon className="h-[22px] w-[22px]" strokeWidth={2} />
+              {barBadge(item.to) > 0 && (
+                <span
+                  className="absolute right-1.5 top-0.5 grid h-3.5 min-w-[14px]
+                             place-items-center rounded-full bg-red-500 px-1 text-[9px]
+                             font-bold text-white"
+                >
+                  {barBadge(item.to) > 9 ? '9+' : barBadge(item.to)}
+                </span>
+              )}
+            </span>
+            <span className="max-w-full truncate px-0.5">{item.label}</span>
+          </>
+        )}
+      </NavLink>
+    )
+  }
 
   // The newest live notification, if any. The queue, its messages, variants and
   // timers all stay in `ToastProvider`; the shell only reads the current one.
@@ -325,6 +542,15 @@ export default function AppLayout() {
   }
 
   const [bare, setBare] = useState(false)
+
+  // The student's phone look, shared by every page they use: the bar in the
+  // accent, cards and buttons rounded (`.student-modern`), and — on every page
+  // but the dashboard, which draws its own — a short accent band under the bar
+  // with the page itself on a sheet over it. All of it is phone-only in CSS,
+  // so from `sm` the shell is unchanged; an open thread keeps its own layout.
+  // Every role now — the student's look became the app's phone look.
+  const studentModern = !bare
+  const studentBand = studentModern && location.pathname !== '/dashboard' && !onThread
   const chrome = useMemo(() => ({ setBare }), [])
 
   return (
@@ -405,81 +631,82 @@ export default function AppLayout() {
             onClick={() => setDrawerOpen(false)}
             aria-hidden="true"
           />
-          {/* The administrator's menu: one panel carrying the five destinations
-               and nothing else. Alerts are the bell in the top bar and account
-               actions — Sign out included — are the account dropdown beside it,
-               so neither is repeated here.
-
-               Painted from the surface tokens rather than a hardcoded white:
-               the panel used to stay light while the rest of the app went dark,
-               which is the one place in the shell the theme did not reach. */}
-            <aside
-              className="safe-top absolute inset-y-0 left-0 flex w-[78vw] max-w-[288px] flex-col
-                         shadow-panel animate-slide-in-right"
-              // The panel runs the full height of the window, so its own header
-              // has to start below the status bar rather than under it. The
-              // surface carries on into the inset; only the content moves down.
-              style={{ paddingLeft: 'var(--sal)', background: 'rgb(var(--surface))' }}
-              role="dialog"
-              aria-modal="true"
-              aria-label="Navigation menu"
-            >
-              <div className="flex items-center justify-between border-b px-4 py-4">
-                <p className="subtle text-[11px] font-bold uppercase tracking-[0.16em]">Menu</p>
-                <button
-                  type="button"
-                  onClick={() => setDrawerOpen(false)}
-                  className="grid h-9 w-9 place-items-center rounded-lg subtle transition-colors
-                             hover:bg-black/5 dark:hover:bg-white/5"
-                  aria-label="Close menu"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-              {/* `pb-[max(…)]`, not `.safe-bottom` + `p-3`: the helper is a
-                  components-layer rule and `p-3` a utility, so the utility won
-                  and the drawer's last row sat under the gesture bar. */}
-              <nav className="min-h-0 flex-1 overflow-y-auto p-3 pb-[max(0.75rem,var(--sab))]">
-                <ul className="space-y-1">
-                  {drawerItems.map((item) => {
-                    const Icon = item.icon
-                    return (
-                      <li key={item.to}>
-                        <NavLink
-                          to={item.to}
-                          className={({ isActive }) =>
-                            cx(
-                              'flex items-center gap-3 rounded-xl px-3 py-3 text-[14px] tracking-tight',
-                              'transition-colors duration-150',
-                              isActive
-                                ? 'bg-black/[0.05] font-bold dark:bg-white/[0.07]'
-                                : 'muted font-semibold hover:bg-black/[0.035] dark:hover:bg-white/5',
-                            )
+          {/* The staff menu as a bottom sheet, the way the rest of the phone
+              opens things: a rounded sheet rising from the bar with the
+              destinations the bar does not carry laid out as a grid of tiles —
+              each an icon on a soft chip with its name under it, the current
+              page in the accent. Alerts are the bell in the top bar and account
+              actions — Sign out included — the account menu beside it, so
+              neither is repeated here. Painted from the surface tokens, so it
+              follows the theme. */}
+          <aside
+            className="absolute inset-x-0 bottom-0 max-h-[80dvh] overflow-y-auto rounded-t-[28px] px-4 pt-3
+                       pb-[max(1.25rem,var(--sab))] shadow-panel animate-slide-up"
+            style={{
+              background: 'rgb(var(--surface))',
+              paddingLeft: 'calc(var(--sal) + 1rem)',
+              paddingRight: 'calc(var(--sar) + 1rem)',
+            }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Navigation menu"
+          >
+            <span
+              className="mx-auto block h-1 w-10 rounded-full"
+              style={{ background: 'rgb(var(--border-strong))' }}
+            />
+            <div className="mb-3 mt-3 flex items-center justify-between">
+              <p className="text-base font-extrabold tracking-tight">Menu</p>
+              <button
+                type="button"
+                onClick={() => setDrawerOpen(false)}
+                className="btn btn-ghost btn-icon"
+                aria-label="Close menu"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <nav className="grid grid-cols-3 gap-2.5">
+              {drawerItems.map((item) => {
+                const Icon = item.icon
+                return (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    end={hasNestedNavMatch(item.to, location.pathname)}
+                    className={({ isActive }) =>
+                      cx(
+                        'flex min-w-0 flex-col items-center gap-2 rounded-2xl px-1.5 py-3.5 text-center',
+                        'text-[12px] font-bold leading-tight tracking-tight transition-colors',
+                        isActive
+                          ? 'bg-amberline-400/15 text-amberline-700 dark:text-amberline-300'
+                          : 'hover:bg-black/[0.035] dark:hover:bg-white/5',
+                      )
+                    }
+                    style={({ isActive }) =>
+                      isActive ? undefined : { background: 'rgb(var(--surface-2))' }
+                    }
+                  >
+                    {({ isActive }) => (
+                      <>
+                        <span
+                          className="grid h-11 w-11 place-items-center rounded-full"
+                          style={
+                            isActive
+                              ? { background: 'rgb(var(--accent))', color: 'rgb(var(--accent-contrast))' }
+                              : { background: 'rgb(var(--surface-3))' }
                           }
                         >
-                          {({ isActive }) => (
-                            <>
-                              <span className="grid w-5 shrink-0 place-items-center">
-                                <Icon
-                                  strokeWidth={2}
-                                  className={cx(
-                                    'h-[18px] w-[18px]',
-                                    isActive
-                                      ? 'text-amberline-600 dark:text-amberline-400'
-                                      : 'opacity-60',
-                                  )}
-                                />
-                              </span>
-                              <span className="min-w-0 flex-1 truncate">{item.label}</span>
-                            </>
-                          )}
-                        </NavLink>
-                      </li>
-                    )
-                  })}
-                </ul>
-              </nav>
-            </aside>
+                          <Icon className="h-5 w-5" strokeWidth={2} />
+                        </span>
+                        <span className="line-clamp-2 min-w-0">{item.label}</span>
+                      </>
+                    )}
+                  </NavLink>
+                )
+              })}
+            </nav>
+          </aside>
         </div>
       )}
 
@@ -501,7 +728,14 @@ export default function AppLayout() {
         <header
           // Above the dashboard greeting, so the bar and the account menu it
           // opens are painted over the mascot rather than under it.
-          className="safe-top sticky top-0 z-40 border-b"
+          className={cx(
+            'safe-top sticky top-0 z-40 border-b',
+            // A student's dashboard on a phone opens on an accent band that
+            // starts right under the bar; the bar takes the same accent and
+            // drops its hairline so the two read as one surface.
+            // Every student page uses it now, not only the dashboard.
+            studentModern && 'shell-bar-accent',
+          )}
           style={{
             // Solid rather than translucent: with no blur behind it, the page
             // scrolling past would otherwise show through the bar.
@@ -658,19 +892,15 @@ export default function AppLayout() {
                   )}
                   <div className="mb-1.5 border-t" />
                   {user?.role === ROLE.STUDENT && (
-                    /* Rows built the way the phone builds a list: an icon in its
-                       own soft tile, the name, and one quiet line saying what is
-                       behind it. Same routes, same order, same permissions. */
+                    /* Text-only rows, level with Sign out below them. Same
+                       routes, same order, same permissions. */
                     <>
                       <Link
                         to="/profile"
-                        className="flex min-h-[46px] items-center gap-3 rounded-xl px-2 py-1.5
+                        className="flex min-h-[46px] items-center gap-3 rounded-xl px-2.5 py-1.5
                                    transition-colors hover:bg-black/5 dark:hover:bg-white/5"
                         role="menuitem"
                       >
-                        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-black/5 dark:bg-white/10">
-                          <UserIcon className="h-4 w-4" />
-                        </span>
                         <span className="min-w-0 flex-1 truncate text-sm font-semibold">
                           My account
                         </span>
@@ -680,13 +910,10 @@ export default function AppLayout() {
                           administrators. */}
                       <Link
                         to="/settings"
-                        className="flex min-h-[46px] items-center gap-3 rounded-xl px-2 py-1.5
+                        className="flex min-h-[46px] items-center gap-3 rounded-xl px-2.5 py-1.5
                                    transition-colors hover:bg-black/5 dark:hover:bg-white/5"
                         role="menuitem"
                       >
-                        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-black/5 dark:bg-white/10">
-                          <SettingsIcon className="h-4 w-4" />
-                        </span>
                         <span className="min-w-0 flex-1 truncate text-sm font-semibold">
                           Settings
                         </span>
@@ -703,13 +930,10 @@ export default function AppLayout() {
                     <>
                       <Link
                         to="/profile"
-                        className="flex min-h-[46px] items-center gap-3 rounded-xl px-2 py-1.5
+                        className="flex min-h-[46px] items-center gap-3 rounded-xl px-2.5 py-1.5
                                    transition-colors hover:bg-black/5 dark:hover:bg-white/5"
                         role="menuitem"
                       >
-                        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-black/5 dark:bg-white/10">
-                          <UserIcon className="h-4 w-4" />
-                        </span>
                         <span className="min-w-0 flex-1 truncate text-sm font-semibold">
                           My account
                         </span>
@@ -722,13 +946,10 @@ export default function AppLayout() {
                       {can(PERM.SETTINGS_VIEW) && (
                         <Link
                           to="/settings"
-                          className="flex min-h-[46px] items-center gap-3 rounded-xl px-2 py-1.5
+                          className="flex min-h-[46px] items-center gap-3 rounded-xl px-2.5 py-1.5
                                      transition-colors hover:bg-black/5 dark:hover:bg-white/5 lg:hidden"
                           role="menuitem"
                         >
-                          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-black/5 dark:bg-white/10">
-                            <SettingsIcon className="h-4 w-4" />
-                          </span>
                           <span className="min-w-0 flex-1 truncate text-sm font-semibold">
                             Settings
                           </span>
@@ -774,18 +995,52 @@ export default function AppLayout() {
             // The room under the last card for the floating bar — dropped on a
             // thread, where there is no bar to clear.
             !bare && !onThread && 'shell-main-pad',
+            studentModern && 'student-modern',
           )}
         >
+          {/* The bar already names the page; the band is only the accent the
+              sheet below rises out of. */}
+          {studentBand && <div aria-hidden="true" className="student-band sm:hidden" />}
+          <div className={cx(studentBand && 'student-sheet')}>
           {/* Keyed on the path so navigating away from a failed page clears
               the error rather than sticking on it. */}
           {/* Pages are loaded on first visit rather than all at start-up, so the
               page area may briefly have nothing to render while its chunk
               arrives. The shell around it is already painted. */}
+          {!bare && showSectionTabs && (
+            <nav
+              aria-label={`${sectionParent.label} sections`}
+              className="mb-3 flex items-center gap-0.5 rounded-xl border p-0.5 lg:hidden"
+              style={{ background: 'rgb(var(--surface-2))' }}
+            >
+              {[sectionParent, ...sectionTabs].map((item) => {
+                const Icon = item.icon
+                return (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    end={hasNestedNavMatch(item.to, location.pathname)}
+                    className={({ isActive }) =>
+                      cx(
+                        'flex h-9 flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5',
+                        'text-[11px] font-bold uppercase tracking-wide transition-colors',
+                        isActive ? 'btn-dark shadow-sm' : 'muted hover:bg-black/[0.04] dark:hover:bg-white/5',
+                      )
+                    }
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    {item.label}
+                  </NavLink>
+                )
+              })}
+            </nav>
+          )}
           <ErrorBoundary key={location.pathname}>
             <Suspense fallback={<PageLoading />}>
               <Outlet />
             </Suspense>
           </ErrorBoundary>
+          </div>
         </main>
       </div>
 
@@ -813,139 +1068,65 @@ export default function AppLayout() {
           paddingRight: 'calc(var(--sar) + 0.75rem)',
         }}
       >
+        {/* A translucent grey glass pill, for every role: icons, with the
+            pressed one — the current page — opened into a named pill (white;
+            Scan's is the accent). Staff keep their Menu slot at the end of it.
+            The assistant is its own round button beside the bar. */}
+        <div className="mx-auto flex max-w-md items-center gap-2">
         <nav
-          className="mx-auto flex max-w-md items-stretch rounded-[22px] border px-1.5 py-1.5 shadow-panel"
-          style={{ background: 'rgb(var(--surface))' }}
+          className={cx(
+            'flex min-w-0 flex-1 shadow-panel',
+            'items-center gap-0.5 rounded-full px-1.5 py-1.5 ring-1 ring-white/15 backdrop-blur-xl',
+          )}
+          style={{ background: 'rgb(var(--dock-bg) / 0.78)' }}
           aria-label="Primary"
         >
-          {mobileItems.map((item) => {
-            const Icon = item.icon
-            // The scan button: about an eighth larger than a plain item, raised
-            // just clear of the bar rather than floating away from it.
-            if (item.primary && isAdmin && adminAddSlot) {
-              // The administrator's raised slot on a page that has something to
-              // add: the same shape as the scan button, carrying that page's own
-              // Add action. Everywhere else the slot stays Scan.
-              return (
-                <Link
-                  key={item.to}
-                  to={adminAddSlot.to}
-                  className="flex flex-1 flex-col items-center justify-end gap-1 rounded-2xl px-1 pb-1"
-                  aria-label={adminAddSlot.ariaLabel}
-                >
-                  <span
-                    className="grid h-[52px] w-[52px] -translate-y-3.5 place-items-center rounded-2xl
-                               shadow-lift ring-[5px] transition-transform active:scale-95
-                               motion-reduce:transition-none"
-                    style={{
-                      background: 'rgb(var(--accent))',
-                      color: 'rgb(var(--accent-contrast))',
-                      '--tw-ring-color': 'rgb(var(--surface))',
-                    }}
-                  >
-                    <Plus className="h-[26px] w-[26px]" />
-                  </span>
-                  <span className="-mt-3.5 max-w-full truncate px-0.5 text-[10px] font-extrabold tracking-tight">
-                    {adminAddSlot.label}
-                  </span>
-                </Link>
-              )
-            }
-            if (item.primary) {
-              // While an instructor is on the service log the raised slot carries
-              // that page's own action instead — the same scheduler dialog the
-              // page's button opens, reached through `?schedule=1`. Scan is not
-              // renamed or removed: leaving /maintenance restores it.
-              const action = scheduleSlot ?? messageSlot ?? requestSlot ?? item
-              const ActionIcon = action.icon
-              return (
-                <NavLink
-                  key={item.to}
-                  to={action.to}
-                  className="flex flex-1 flex-col items-center justify-end gap-1 rounded-2xl px-1 pb-1"
-                  aria-label={action.ariaLabel ?? action.label}
-                >
-                  <span
-                    className="grid h-[52px] w-[52px] -translate-y-3.5 place-items-center rounded-2xl
-                               shadow-lift ring-[5px] transition-transform active:scale-95
-                               motion-reduce:transition-none"
-                    style={{
-                      background: 'rgb(var(--accent))',
-                      color: 'rgb(var(--accent-contrast))',
-                      '--tw-ring-color': 'rgb(var(--surface))',
-                    }}
-                  >
-                    <ActionIcon className="h-[26px] w-[26px]" />
-                  </span>
-                  <span className="-mt-3.5 max-w-full truncate px-0.5 text-[10px] font-extrabold tracking-tight">
-                    {action.label}
-                  </span>
-                </NavLink>
-              )
-            }
-            return (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                aria-label={item.label}
-                className={({ isActive }) =>
-                  cx(
-                    'flex flex-1 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-[10px]',
-                    'font-bold tracking-tight transition-colors',
-                    isActive ? 'text-amberline-600 dark:text-amberline-400' : 'subtle',
-                  )
-                }
-              >
-                {({ isActive }) => (
-                  <>
-                    {/* The active item is marked by a filled pill behind its
-                        icon — clearer at a glance than the old hairline, and it
-                        keeps every item on the same baseline. */}
-                    <span
-                      className={cx(
-                        'relative grid h-8 w-12 place-items-center rounded-xl transition-colors',
-                        isActive && 'bg-amberline-400/15',
-                      )}
-                    >
-                      {/* One weight for every item, active or not: the filled
-                          pill and the colour already mark the current page, and a
-                          thicker stroke on top made that one glyph read as a
-                          different set of icons from its neighbours. */}
-                      <Icon className="h-[22px] w-[22px]" strokeWidth={2} />
-                      {barBadge(item.to) > 0 && (
-                        <span
-                          className="absolute right-1.5 top-0.5 grid h-3.5 min-w-[14px]
-                                     place-items-center rounded-full bg-red-500 px-1 text-[9px]
-                                     font-bold text-white"
-                        >
-                          {barBadge(item.to) > 9 ? '9+' : barBadge(item.to)}
-                        </span>
-                      )}
-                    </span>
-                    <span className="max-w-full truncate px-0.5">{item.label}</span>
-                  </>
-                )}
-              </NavLink>
-            )
-          })}
+          {barItems.map(renderBarItem)}
           {/* Staff's last slot opens the menu panel rather than navigating: the
               drawer carries the rest of their destinations. */}
           {hasDrawer && (
             <button
               type="button"
               onClick={() => setDrawerOpen(true)}
-              className="flex flex-1 flex-col items-center gap-1 rounded-2xl px-1 py-2 text-[10px]
-                         font-bold tracking-tight subtle transition-colors"
+              className={cx('grid h-11 place-items-center rounded-full transition-colors', barIconSlot)}
+              style={{ color: 'rgb(var(--dock-fg) / 0.85)' }}
               aria-label="Open navigation menu"
               aria-expanded={drawerOpen}
             >
-              <span className="grid h-8 w-12 place-items-center rounded-xl">
-                <Menu className="h-[22px] w-[22px]" strokeWidth={2} />
-              </span>
-              <span className="max-w-full truncate px-0.5">Menu</span>
+              <Menu className="h-5 w-5" strokeWidth={2} />
             </button>
           )}
         </nav>
+        {studentModern && (
+          // TOBI, the AI assistant — not connected yet. Nothing opens: a tap
+          // widens it into a pill that says so, the way a pressed page widens
+          // into its name, and it folds back on its own a moment later.
+          <button
+            type="button"
+            onClick={() => setTobiHint(true)}
+            aria-label="TOBI, the AI assistant — coming soon"
+            className={cx(
+              'relative flex h-[52px] shrink-0 items-center justify-center gap-1.5 rounded-full',
+              'ring-2 ring-white/40 transition-all duration-300 motion-reduce:transition-none',
+              tobiHint ? 'px-4' : 'w-[52px]',
+            )}
+            // TOBI's own mark: a bright amber gradient with a warm glow — the
+            // brand's yellow, but not the flat accent Scan wears.
+            style={{
+              background: 'linear-gradient(135deg, #fde68a 0%, #F7C948 45%, #DE911D 100%)',
+              color: 'rgb(var(--accent-contrast))',
+              boxShadow: '0 8px 24px -6px rgb(222 145 29 / 0.6)',
+            }}
+          >
+            <Sparkles className="h-6 w-6 shrink-0" />
+            {tobiHint && (
+              <span className="whitespace-nowrap text-[11px] font-bold" role="status">
+                Coming soon
+              </span>
+            )}
+          </button>
+        )}
+        </div>
       </div>
       )}
     </div>
@@ -1030,6 +1211,7 @@ function SidebarLinks({
   showDescriptions = false,
   spacious = false,
 }) {
+  const { pathname } = useLocation()
   // Five rails carry a count: alerts, unread messages, open requests, accounts
   // waiting to be approved, and reports still needing attention. Same badge,
   // same rules — each reads its own number, so none of them affects another. A
@@ -1057,6 +1239,7 @@ function SidebarLinks({
           <li key={item.to}>
             <NavLink
               to={item.to}
+              end={hasNestedNavMatch(item.to, pathname)}
               className={({ isActive }) =>
                 cx(
                   'group relative flex items-center gap-3 rounded-xl px-3',

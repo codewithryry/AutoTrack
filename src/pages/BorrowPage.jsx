@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ClipboardList,
   MapPin,
+  PackageSearch,
   QrCode,
   Repeat,
   Undo2,

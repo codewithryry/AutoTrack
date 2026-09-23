@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AlertTriangle, ShieldOff } from 'lucide-react'
 import { Link } from 'react-router-dom'
@@ -30,6 +30,7 @@ const DashboardPage = lazy(() => import('./pages/DashboardPage'))
 const ToolsPage = lazy(() => import('./pages/ToolsPage'))
 const ToolDetailPage = lazy(() => import('./pages/ToolDetailPage'))
 const ToolHistoryPage = lazy(() => import('./pages/ToolHistoryPage'))
+const ToolMapPage = lazy(() => import('./pages/ToolMapPage'))
 const ScanPage = lazy(() => import('./pages/ScanPage'))
 const BorrowPage = lazy(() => import('./pages/BorrowPage'))
 const ReturnPage = lazy(() => import('./pages/ReturnPage'))
@@ -46,6 +47,72 @@ const RequestsPage = lazy(() => import('./pages/RequestsPage'))
 const NewRequestPage = lazy(() => import('./pages/NewRequestPage'))
 const RequestDetailPage = lazy(() => import('./pages/RequestDetailPage'))
 const MessagesPage = lazy(() => import('./pages/MessagesPage'))
+
+/*
+ * Search metadata.
+ *
+ * Only the sign-in and sign-up pages are public, so only they are indexable and
+ * carry a canonical URL. Every other route is behind an account: it is marked
+ * `noindex` here (and disallowed in `public/robots.txt`), which keeps it out of
+ * search results — authentication is still what protects it. The origin comes
+ * from the deployment address, never from `localhost`.
+ */
+const SITE_ORIGIN = (import.meta.env.VITE_PUBLIC_APP_URL || 'https://autotracking.vercel.app').replace(
+  /\/+$/,
+  '',
+)
+const DEFAULT_TITLE = typeof document !== 'undefined' ? document.title : 'ToolTrack'
+const PUBLIC_PAGES = {
+  '/login': {
+    title: 'Sign in — ToolTrack Automotive Laboratory Tool Monitoring',
+    description:
+      'Sign in to ToolTrack to scan, borrow, track and return automotive laboratory tools with QR codes.',
+  },
+  '/signup': {
+    title: 'Create an account — ToolTrack',
+    description:
+      'Create a ToolTrack account to request and borrow automotive laboratory tools and follow your loans.',
+  },
+}
+
+function setHeadTag(selector, create, attr, value) {
+  let el = document.head.querySelector(selector)
+  if (value == null) {
+    el?.remove()
+    return
+  }
+  if (!el) {
+    el = create()
+    document.head.appendChild(el)
+  }
+  el.setAttribute(attr, value)
+}
+
+function usePageMeta() {
+  const { pathname } = useLocation()
+  useEffect(() => {
+    const page = PUBLIC_PAGES[pathname]
+    const meta = (key, name) => () => {
+      const el = document.createElement('meta')
+      el.setAttribute(key, name)
+      return el
+    }
+    document.title = page?.title ?? DEFAULT_TITLE
+    setHeadTag('meta[name="robots"]', meta('name', 'robots'), 'content', page ? 'index, follow' : 'noindex, nofollow')
+    setHeadTag(
+      'link[rel="canonical"]',
+      () => Object.assign(document.createElement('link'), { rel: 'canonical' }),
+      'href',
+      page ? `${SITE_ORIGIN}${pathname}` : null,
+    )
+    if (page) {
+      setHeadTag('meta[name="description"]', meta('name', 'description'), 'content', page.description)
+      setHeadTag('meta[property="og:title"]', meta('property', 'og:title'), 'content', page.title)
+      setHeadTag('meta[property="og:description"]', meta('property', 'og:description'), 'content', page.description)
+      setHeadTag('meta[property="og:url"]', meta('property', 'og:url'), 'content', `${SITE_ORIGIN}${pathname}`)
+    }
+  }, [pathname])
+}
 
 /**
  * Blocks unauthenticated access and remembers where the user was heading.
@@ -125,6 +192,7 @@ export default function App() {
   // Android's back button means "go back one route", not "close the app".
   // Nothing happens in a browser build.
   useAndroidBack()
+  usePageMeta()
 
   // A boot that failed outright: the records or the stored session could not be
   // read, so there is nothing to route to yet. The ordinary error state carries
@@ -202,6 +270,16 @@ export default function App() {
             element={
               <RequirePermission permission={PERM.TOOL_VIEW}>
                 <ToolsPage />
+              </RequirePermission>
+            }
+          />
+          {/* Last recorded location of each tool. Scoped by role in the data
+              layer: staff read every loan's points, a student only their own. */}
+          <Route
+            path="/tools/map"
+            element={
+              <RequirePermission permission={PERM.TOOL_VIEW}>
+                <ToolMapPage />
               </RequirePermission>
             }
           />

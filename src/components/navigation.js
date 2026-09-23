@@ -3,6 +3,7 @@ import {
   Bell,
   Flag,
   LayoutDashboard,
+  MapPin,
   MessageSquare,
   Package,
   QrCode,
@@ -64,6 +65,16 @@ export const NAV_ITEMS = [
     label: 'Inventory',
     icon: Package,
     description: 'Laboratory tool inventory',
+    roles: ALL_ROLES,
+    permission: PERM.TOOL_VIEW,
+  },
+  {
+    // Where each tool was last recorded. Same permission as the inventory; the
+    // points behind it are scoped by role in the data layer.
+    to: '/tools/map',
+    label: 'Tool Map',
+    icon: MapPin,
+    description: 'Last known tool locations',
     roles: ALL_ROLES,
     permission: PERM.TOOL_VIEW,
   },
@@ -189,6 +200,7 @@ export const MOBILE_NAV = ['/dashboard', '/tools', '/scan', '/messages', '/trans
 const STUDENT_RAIL_ORDER = [
   '/dashboard',
   '/tools',
+  '/tools/map',
   '/requests',
   '/scan',
   '/return',
@@ -247,6 +259,7 @@ export const ADMIN_DRAWER_NAV = [
 const INSTRUCTOR_RAIL_ORDER = [
   '/dashboard',
   '/tools',
+  '/tools/map',
   '/requests',
   '/transactions',
   '/maintenance',
@@ -375,4 +388,18 @@ export function navItemsForRole(role) {
  */
 export function visibleNavItems(role, can) {
   return navItemsForRole(role).filter((item) => !item.permission || can(item.permission))
+}
+
+/**
+ * Whether a more specific navigation item owns this path — `/tools/map` under
+ * `/tools`. The shell passes this to the parent's `NavLink` as `end`, so on
+ * `/tools/map` only Tool Map is lit, while `/tools/:id` still lights Inventory.
+ */
+export function hasNestedNavMatch(to, pathname) {
+  return NAV_ITEMS.some(
+    (other) =>
+      other.to !== to &&
+      other.to.startsWith(`${to}/`) &&
+      (pathname === other.to || pathname.startsWith(`${other.to}/`)),
+  )
 }

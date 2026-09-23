@@ -349,10 +349,8 @@ function ReportProblemInline({ tool, open, onReported, onCancel }) {
 
   return (
     <form onSubmit={submit} className="space-y-3 p-3.5">
-      <div
-        className="flex items-start gap-2.5 rounded-lg border p-3"
-        style={{ background: 'rgb(var(--surface-2))' }}
-      >
+      {/* A note in the form itself, not a box inside the card. */}
+      <div className="flex items-start gap-2.5">
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-orange-500" />
         <p className="subtle text-xs leading-relaxed">
           This report is filed against <span className="font-semibold">{tool.name}</span> and goes

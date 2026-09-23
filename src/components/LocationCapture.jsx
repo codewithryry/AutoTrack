@@ -264,7 +264,7 @@ export function LocationCaptureField({
 
       {/* ------------------------------ captured ------------------------------ */}
       {isLocation(value) && (
-        <div className="mt-3 rounded-lg border p-3" style={{ background: 'rgb(var(--surface))' }}>
+        <div className="mt-3">
           <p className="mono text-xs font-bold">{formatCoords(value)}</p>
           <p className="subtle mt-1 text-[11px]">
             {formatDateTime(value.capturedAt)} · {formatAccuracy(value)}

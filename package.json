@@ -1,7 +1,7 @@
 {
   "name": "smart-tool-monitoring-pwa",
   "private": true,
-  "version": "0.2.7-beta.1",
+  "version": "0.2.8",
   "type": "module",
   "description": "ToolTrack: QR-Based Automotive Laboratory Tool Monitoring System",
   "scripts": {
@@ -24,6 +24,8 @@
     "@capacitor/local-notifications": "^8.3.1",
     "@supabase/supabase-js": "^2.112.3",
     "html5-qrcode": "^2.3.8",
+    "leaflet": "^1.9.4",
+    "leaflet.markercluster": "^1.5.3",
     "lucide-react": "^0.454.0",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",

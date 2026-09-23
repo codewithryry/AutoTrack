@@ -64,6 +64,7 @@ check('admin sidebar has every destination', () => {
   assert.deepEqual(labels(navItemsForRole(ROLE.ADMIN)), [
     'Dashboard',
     'Inventory',
+    'Tool Map',
     'Scan',
     'Transactions',
     'Requests',
@@ -83,6 +84,7 @@ check('instructor sidebar reaches every staff destination', () => {
   assert.deepEqual(labels(navItemsForRole(ROLE.INSTRUCTOR)), [
     'Dashboard',
     'Inventory',
+    'Tool Map',
     'Scan',
     'Transactions',
     'Requests',
@@ -103,6 +105,7 @@ check('student sidebar is the borrowing lifecycle, in order', () => {
   assert.deepEqual(labels(studentRailItems(navItemsForRole(ROLE.STUDENT))), [
     'Dashboard',
     'Inventory',
+    'Tool Map',
     'Requests',
     'Scan',
     'Return',

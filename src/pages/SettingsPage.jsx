@@ -10,7 +10,6 @@ import {
   ExternalLink,
   FlaskConical,
   Github,
-  Info,
   RefreshCw,
   RotateCcw,
   Save,
@@ -21,6 +20,7 @@ import { DeviceAccessControl } from '../components/DeviceAccess'
 import { resetTours } from '../components/Walkthrough'
 import {
   ConfirmDialog,
+  InsetSections,
   SectionCard,
   Spinner,
   TextField,
@@ -647,16 +647,13 @@ export default function SettingsPage() {
 
   const appSection = (
     <>
-      <SectionCard title={`About ${APP_NAME}`} description="What this application is">
-        <div className="flex items-start gap-3">
-          <span
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-xl"
-            style={{ background: 'rgb(var(--surface-3))' }}
-          >
-            <Info className="h-5 w-5" style={{ color: 'rgb(var(--text-subtle))' }} />
-          </span>
+      {/* The app opens its own group as a plain row — its mark, its name and
+          what it is — not a titled card inside the group. */}
+      <SectionCard>
+        <div className="flex items-center gap-3">
+          <img src="/Logoapp.png" alt="" className="h-12 w-12 shrink-0 rounded-2xl object-contain" />
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-bold">{APP_NAME}</p>
+            <p className="text-[15px] font-extrabold">{APP_NAME}</p>
             <p className="subtle mt-0.5 text-xs leading-snug">
               QR-Based Automotive Laboratory Tool Monitoring System
             </p>
@@ -957,7 +954,11 @@ function SettingsAccordion({ label, open, onToggle, children }) {
         style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
       >
         <div className="overflow-hidden">
-          <div className="space-y-4 border-t px-4 pb-4 pt-4">{children}</div>
+          {/* The group is the card; its sections sit straight in it, one rule
+              between each, rather than as cards of their own. */}
+          <div className="divide-y border-t px-4 pb-4 pt-4">
+            <InsetSections>{children}</InsetSections>
+          </div>
         </div>
       </div>
     </section>

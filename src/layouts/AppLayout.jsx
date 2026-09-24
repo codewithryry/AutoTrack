@@ -1,11 +1,13 @@
-import { createContext, Suspense, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createContext, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   Bell,
+  CircleUserRound,
   ChevronDown,
   LogOut,
   Menu,
   Plus,
+  Settings as SettingsIcon,
   Sparkles,
   WifiOff,
   X,
@@ -13,12 +15,15 @@ import {
 import { AppearanceToggleButton } from '../components/AccountSettings'
 import ErrorBoundary from '../components/ErrorBoundary'
 import Avatar from '../components/Avatar'
-import { PageLoading, RoleBadge } from '../components/ui'
+import TobiChat from '../components/TobiChat'
+import { PageLoading } from '../components/ui'
 
 import {
   ACCOUNT_NAV,
   accountNavLabel,
+  assistantContextFor,
   EXTRA_PAGES,
+  forRole,
   hasNestedNavMatch,
   INSTRUCTOR_EXTRA_PAGES,
   INSTRUCTOR_QUICK_ACTIONS,
@@ -55,8 +60,8 @@ import { PERM } from '../utils/permissions'
  *
  * Desktop gets a fixed dark rail plus a sticky top bar; mobile gets a slide-in
  * drawer (staff only — a student's bottom bar already carries every route they
- * may reach) and a bottom bar with a raised scan button, which is the action a
- * student standing at the tool crib actually needs.
+ * may reach) and a floating glass bottom bar with Scan in its centre, and TOBI,
+ * the assistant — or the open page's own "+" — in a named pill beside it.
  */
 /**
  * A page that stands alone inside the shell.
@@ -114,13 +119,27 @@ export default function AppLayout() {
 
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
-  // TOBI's "Coming soon" pill, shown for a moment after a tap.
-  const [tobiHint, setTobiHint] = useState(false)
+  // TOBI's conversation sheet. The conversation itself outlives it — see
+  // `TobiChat`, which keeps it for the browser session.
+  const [tobiOpen, setTobiOpen] = useState(false)
+  const closeTobi = useCallback(() => setTobiOpen(false), [])
+  // The button TOBI was opened from, so its card grows out of that spot and
+  // folds back into it.
+  const tobiOrigin = useRef(null)
+  const openTobi = (event) => {
+    tobiOrigin.current = event?.currentTarget ?? null
+    setTobiOpen(true)
+  }
+  // Anything outside the shell — the dashboard mascot's "Ask TOBI" — opens the
+  // same card with a `tobi:open` event, growing out of the bar's TOBI button.
   useEffect(() => {
-    if (!tobiHint) return undefined
-    const timer = setTimeout(() => setTobiHint(false), 2500)
-    return () => clearTimeout(timer)
-  }, [tobiHint])
+    const onOpen = () => {
+      tobiOrigin.current = document.querySelector('.tobi-launcher')
+      setTobiOpen(true)
+    }
+    window.addEventListener('tobi:open', onOpen)
+    return () => window.removeEventListener('tobi:open', onOpen)
+  }, [])
   const menuRef = useRef(null)
 
   const isStudent = user?.role === ROLE.STUDENT
@@ -157,7 +176,8 @@ export default function AppLayout() {
 
   // One navigation definition, filtered by the authenticated user's stored
   // role — the sidebar, the drawer and the bottom bar all read from it.
-  const navItems = visibleNavItems(user?.role, can)
+  // Each item carries the name this role sees (a student's Dashboard is Home).
+  const navItems = visibleNavItems(user?.role, can).map((item) => forRole(item, user?.role))
   const allowed = new Set(navItems.map((item) => item.to))
   // An instructor's rail is the same permitted set, reordered for the crib and
   // with the counter actions lifted into their own block; every other role gets
@@ -244,6 +264,10 @@ export default function AppLayout() {
   // the composer, and the thread has its own back control. The desktop is
   // unaffected — the bar is mobile-only.
   const onThread = location.pathname.startsWith('/messages/')
+  // TOBI's full page is laid out the same way: the composer owns the bottom of
+  // the screen, so there is no bar under it and no room kept for one.
+  const onTobiPage = location.pathname === '/tobi'
+  const fullBleed = onThread || onTobiPage
 
   // What each bottom-bar slot counts: alerts, unread messages, and requests
   // that are still waiting on somebody.
@@ -257,7 +281,7 @@ export default function AppLayout() {
           : 0
 
   const mobileItems = mobileNavForRole(user?.role)
-    .map((to) => NAV_ITEMS.find((item) => item.to === to))
+    .map((to) => forRole(NAV_ITEMS.find((item) => item.to === to), user?.role))
     .filter((item) => item && allowed.has(item.to))
 
   // A bottom-bar destination's own sections — Inventory and Tool Map. The bar's
@@ -283,14 +307,66 @@ export default function AppLayout() {
   // `ADMIN_DRAWER_NAV` is no longer read.
   const mobileRoutes = new Set(mobileItems.map((item) => item.to))
   const DRAWER_EXCLUDED = new Set(['/notifications', '/settings'])
-  const drawerItems = railItems.filter(
-    (item) => !mobileRoutes.has(item.to) && !DRAWER_EXCLUDED.has(item.to),
-  )
+  // Their account and Settings close the drawer's grid: on a phone that is
+  // where staff find them, and the account dropdown keeps only Sign out.
+  const drawerItems = [
+    ...railItems.filter((item) => !mobileRoutes.has(item.to) && !DRAWER_EXCLUDED.has(item.to)),
+    { to: '/profile', label: 'Account', icon: CircleUserRound },
+    ...(can(PERM.SETTINGS_VIEW) ? [{ to: '/settings', label: 'Settings', icon: SettingsIcon }] : []),
+  ]
+  // The drawer's sections, in reading order. A page not named here lands in
+  // "More" so nothing the rail carries is ever left out.
+  const DRAWER_SECTIONS = [
+    { title: 'Tools', routes: ['/tools', '/tools/map', '/maintenance', '/problem-reports'] },
+    { title: 'People', routes: ['/messages', '/users'] },
+    { title: 'Insights', routes: ['/reports', '/logs', '/activity'] },
+    { title: 'Account', routes: ['/profile', '/settings'] },
+  ]
+  const drawerGroups = (() => {
+    const placed = new Set()
+    const groups = DRAWER_SECTIONS.map((section) => {
+      const items = section.routes
+        .map((to) => drawerItems.find((item) => item.to === to))
+        .filter(Boolean)
+      items.forEach((item) => placed.add(item.to))
+      return { title: section.title, items }
+    })
+    const rest = drawerItems.filter((item) => !placed.has(item.to))
+    // Anything unplaced goes just before Account.
+    if (rest.length) groups.splice(groups.length - 1, 0, { title: 'More', items: rest })
+    return groups.filter((group) => group.items.length)
+  })()
+
+  // The pages the bar reaches, fetched once the app is idle, so switching tabs
+  // never waits on a download and never flashes the loading state. The same
+  // modules `App.jsx` loads lazily — one chunk each, shared.
+  useEffect(() => {
+    const warm = () => {
+      for (const load of [
+        () => import('../pages/DashboardPage'),
+        () => import('../pages/ToolsPage'),
+        () => import('../pages/ToolMapPage'),
+        () => import('../pages/ScanPage'),
+        () => import('../pages/TransactionsPage'),
+        () => import('../pages/RequestsPage'),
+        () => import('../pages/MessagesPage'),
+        () => import('../pages/ReturnPage'),
+        () => import('../pages/NotificationsPage'),
+        () => import('../pages/TobiPage'),
+      ]) {
+        load().catch(() => {})
+      }
+    }
+    const idle = window.requestIdleCallback
+    const handle = idle ? idle(warm, { timeout: 4000 }) : setTimeout(warm, 2500)
+    return () => (idle ? window.cancelIdleCallback(handle) : clearTimeout(handle))
+  }, [])
 
   // Close transient UI whenever the route changes.
   useEffect(() => {
     setDrawerOpen(false)
     setMenuOpen(false)
+    setTobiOpen(false)
   }, [location.pathname])
 
   useEffect(() => {
@@ -319,8 +395,8 @@ export default function AppLayout() {
   const currentPage =
     location.pathname === ACCOUNT_NAV.to
       ? { ...ACCOUNT_NAV, label: accountNavLabel(user?.role) }
-      : (NAV_ITEMS.find((item) => location.pathname === item.to) ??
-        NAV_ITEMS.find((item) => location.pathname.startsWith(`${item.to}/`)) ??
+      : (forRole(NAV_ITEMS.find((item) => location.pathname === item.to), user?.role) ??
+        forRole(NAV_ITEMS.find((item) => location.pathname.startsWith(`${item.to}/`)), user?.role) ??
         // An instructor works from routes that were never rail items — Borrow and
         // Return, which they reach from the hero and the scan result — so the bar can
         // still name the page instead of falling back to the product name.
@@ -346,87 +422,219 @@ export default function AppLayout() {
   })()
   const barItems = studentBarExtra ? [...mobileItems, studentBarExtra] : mobileItems
   // Six slots instead of five: the icons give up a little room to the name.
-  const barIconSlot = studentBarExtra ? 'w-8 shrink-0' : 'w-10 shrink-0'
+  const barIconSlot = studentBarExtra ? 'w-9 shrink-0' : 'w-10 shrink-0'
 
-  // One bottom-bar slot, shared by both bars.
-  const renderBarItem = (item) => {
-    const Icon = item.icon
-    // The scan button: about an eighth larger than a plain item, raised
-    // just clear of the bar rather than floating away from it.
-    if (item.primary) {
-      // While an instructor is on the service log the raised slot carries
-      // that page's own action instead — the same scheduler dialog the
-      // page's button opens, reached through `?schedule=1`. Scan is not
-      // renamed or removed: leaving /maintenance restores it.
-      // The administrator's slot carries a page's own Add action where there is
-      // one (a tool, a user, a service); elsewhere, like everyone's, it is Scan
-      // or the page's "+".
-      const action =
-        (isAdmin && adminAddSlot ? { ...adminAddSlot, icon: Plus } : null) ??
-        scheduleSlot ??
-        messageSlot ??
-        requestSlot ??
-        item
-      const ActionIcon = action.icon
-      // Only Scan itself opens into a named pill; an Add or "+" is an action on
-      // the page that is open, so it stays a circle.
-      const namesItself = action === item
-      if (studentModern) {
-        return (
-          <NavLink
-            key={item.to}
-            to={action.to}
-            end
-            aria-label={action.ariaLabel ?? action.label}
-            className={({ isActive }) =>
-              cx(
-                'flex h-11 min-w-0 items-center justify-center gap-1.5 rounded-full shadow-lift',
-                'text-[11px] font-bold tracking-tight transition-all active:scale-95',
-                'motion-reduce:transition-none',
-                // Pressed — its own page open — it opens into the named pill.
-                isActive && namesItself ? 'flex-1 px-3' : barIconSlot,
-              )
-            }
-            style={{ background: 'rgb(var(--accent))', color: 'rgb(var(--accent-contrast))' }}
-          >
-            {({ isActive }) => (
-              <>
-                <ActionIcon className="h-5 w-5 shrink-0" />
-                {isActive && namesItself ? (
-                  <span className="min-w-0 truncate">{action.label}</span>
-                ) : (
-                  <span className="sr-only">{action.label}</span>
-                )}
-              </>
-            )}
-          </NavLink>
-        )
-      }
+  // The role's Scan item — the centre slot of the bar, where the config lists it.
+  const scanItem = mobileItems.find((item) => item.primary) ?? null
+  // The open page's own action, where it has one — the same parameters those
+  // pages already honour: an administrator's Add on Tools, Users and
+  // Maintenance, an instructor's Schedule on the service log, New chat on the
+  // inbox, a student's New request on Requests. TOBI's orb beside the bar
+  // carries it while the page is open; Scan in the centre never changes, and
+  // leaving the page turns the orb back into TOBI.
+  const pageAction =
+    (isAdmin && adminAddSlot ? { ...adminAddSlot, icon: Plus } : null) ??
+    scheduleSlot ??
+    messageSlot ??
+    requestSlot
+  // What TOBI offers on this page — "Ask TOBI about requests" and so on.
+  const assistantLabel = assistantContextFor(location.pathname, user?.role)
+
+  // The pressed tab's name and the action's word are always shown, whole. What
+  // gives on a narrow screen is the room around them: each step tightens the
+  // slots, the pills' padding and the gap beside the bar. The step is worked
+  // out below from the bar's own measurements.
+  const BAR_DENSITY = [
+    { tab: studentBarExtra ? 36 : 40, scan: 60, tabPad: 12, scanPad: 14, actionPad: 16, rowGap: 8 },
+    { tab: 32, scan: 56, tabPad: 9, scanPad: 10, actionPad: 12, rowGap: 6 },
+    { tab: 28, scan: 54, tabPad: 7, scanPad: 8, actionPad: 10, rowGap: 4 },
+    { tab: 26, scan: 52, tabPad: 5, scanPad: 6, actionPad: 8, rowGap: 3 },
+  ]
+  const [barLevel, setBarLevel] = useState(0)
+  const density = BAR_DENSITY[Math.min(barLevel, BAR_DENSITY.length - 1)]
+
+  // Scan, always, in the bar's centre slot: the system's headline feature, so
+  // it is a large accent circle that rises out of the bar, icon only — the QR
+  // glyph says what it is. On its own page it gains a ring rather than a name.
+  const renderScanButton = () => {
+    const ScanIcon = scanItem.icon
+    return (
+      <NavLink
+        key={scanItem.to}
+        to={scanItem.to}
+        end
+        aria-label={scanItem.label}
+        className={({ isActive }) =>
+          cx(
+            'relative z-10 grid shrink-0 place-items-center rounded-full',
+            // Taller than the bar: the negative margins let it rise above the
+            // bar's top edge without making the bar itself any taller.
+            '-mb-2 -mt-6 transition-transform active:scale-95 motion-reduce:transition-none',
+            isActive && 'ring-4 ring-white/80 dark:ring-white/25',
+          )
+        }
+        style={{
+          background: 'radial-gradient(120% 120% at 30% 20%, rgb(255 222 120), rgb(var(--accent)) 60%)',
+          color: 'rgb(var(--accent-contrast))',
+          width: `${density.scan}px`,
+          height: `${density.scan}px`,
+          boxShadow:
+            'inset 0 1.5px 0 rgb(255 255 255 / 0.7), 0 10px 22px -8px rgb(180 120 0 / 0.65), 0 2px 6px rgb(15 23 42 / 0.18)',
+        }}
+        data-bar-slot="scan"
+      >
+        <ScanIcon className="h-7 w-7" strokeWidth={2.2} />
+      </NavLink>
+    )
+  }
+
+  // TOBI, the amber glass button beside the bar, for every role. On a page with
+  // its own action it is that action, named (a "+" with New request, New chat,
+  // Add tool, Add user or Schedule). Everywhere else it is TOBI's icon alone,
+  // which opens the conversation; what it offers on this page is its
+  // accessible name.
+  const orbClass =
+    'liquid-glass-orb flex h-[52px] shrink-0 items-center justify-center gap-1.5 rounded-full ' +
+    'whitespace-nowrap text-xs font-extrabold tracking-tight transition-all active:scale-95 ' +
+    'motion-reduce:transition-none'
+  const renderAssistant = () => {
+    if (pageAction) {
+      const ActionIcon = pageAction.icon
       return (
-        <NavLink
-          key={item.to}
-          to={action.to}
-          className="flex flex-1 flex-col items-center justify-end gap-1 rounded-2xl px-1 pb-1"
-          aria-label={action.ariaLabel ?? action.label}
+        <Link
+          to={pageAction.to}
+          aria-label={pageAction.ariaLabel ?? pageAction.label}
+          className={orbClass}
+          style={{ paddingInline: `${density.actionPad}px` }}
         >
-          <span
-            className="grid h-[52px] w-[52px] -translate-y-3.5 place-items-center rounded-2xl
-                       shadow-lift ring-[5px] transition-transform active:scale-95
-                       motion-reduce:transition-none"
-            style={{
-              background: 'rgb(var(--accent))',
-              color: 'rgb(var(--accent-contrast))',
-              '--tw-ring-color': 'rgb(var(--surface))',
-            }}
-          >
-            <ActionIcon className="h-[26px] w-[26px]" />
-          </span>
-          <span className="-mt-3.5 max-w-full truncate px-0.5 text-[10px] font-extrabold tracking-tight">
-            {action.label}
-          </span>
-        </NavLink>
+          <ActionIcon className="h-5 w-5 shrink-0" strokeWidth={2.4} />
+          <span data-bar-action-word="">{pageAction.label}</span>
+        </Link>
       )
     }
+    return (
+      <button
+        type="button"
+        onClick={openTobi}
+        aria-label={assistantLabel}
+        aria-haspopup="dialog"
+        aria-expanded={tobiOpen}
+        // While its card is open the button steps aside — the card is it,
+        // grown — and comes back as the card folds into it.
+        className={cx(orbClass, 'tobi-launcher w-[52px]')}
+      >
+        <Sparkles className="h-6 w-6 shrink-0" strokeWidth={2.2} />
+      </button>
+    )
+  }
+
+  // Which way the page moved along the bottom bar — later tab slides in from the
+  // right, earlier from the left, anything else just rises. Worked out while
+  // rendering the new route, from the one before it.
+  const barPosition = (path) => {
+    const order = barItems.map((item) => item.to)
+    let best = -1
+    order.forEach((to, i) => {
+      if ((path === to || path.startsWith(`${to}/`)) && (best < 0 || to.length > order[best].length)) best = i
+    })
+    return best
+  }
+  const routeMotion = useRef({ path: location.pathname, dir: 'none' })
+  if (routeMotion.current.path !== location.pathname) {
+    const from = barPosition(routeMotion.current.path)
+    const to = barPosition(location.pathname)
+    routeMotion.current = {
+      path: location.pathname,
+      dir: from >= 0 && to >= 0 && from !== to ? (to > from ? 'forward' : 'back') : 'none',
+    }
+  }
+
+  // Keep the bar's lens on the pressed tab. Its position is the tab's own, read
+  // as the tabs settle — a ResizeObserver follows the name easing open in one
+  // tab and closed in the other — so it glides with them instead of jumping.
+  // The first placement is not animated, so it never slides in from the edge.
+  const barRef = useRef(null)
+  const lensRef = useRef(null)
+  useLayoutEffect(() => {
+    const bar = barRef.current
+    const lens = lensRef.current
+    if (!bar || !lens) return undefined
+    let first = !lens.dataset.placed
+    const place = () => {
+      const active = bar.querySelector('[data-bar-tab][aria-current="page"]')
+      if (!active) {
+        lens.style.opacity = '0'
+        return
+      }
+      if (first) lens.style.transition = 'none'
+      lens.style.opacity = '1'
+      lens.style.width = `${active.offsetWidth}px`
+      lens.style.transform = `translate3d(${active.offsetLeft}px, 0, 0)`
+      if (first) {
+        first = false
+        lens.dataset.placed = '1'
+        requestAnimationFrame(() => {
+          lens.style.transition = ''
+        })
+      }
+    }
+    place()
+    const observer = new ResizeObserver(place)
+    bar.querySelectorAll('[data-bar-tab]').forEach((tab) => observer.observe(tab))
+    observer.observe(bar)
+    return () => observer.disconnect()
+  }, [location.pathname, barItems.length])
+
+  // Pick the roomiest step at which everything fits, names included. Widths
+  // come from the step being tried and from each name's own text width
+  // (scrollWidth, which a label still easing open reports whole), never from
+  // the bar as it is drawn now, so the answer cannot flip back and forth.
+  const barRowRef = useRef(null)
+  useLayoutEffect(() => {
+    const row = barRowRef.current
+    const bar = barRef.current
+    if (!row || !bar) return undefined
+    const decide = () => {
+      const slots = [...bar.children].filter((el) => el !== lensRef.current)
+      const style = getComputedStyle(bar)
+      const frame =
+        parseFloat(style.paddingLeft) +
+        parseFloat(style.paddingRight) +
+        (parseFloat(style.columnGap) || 0) * Math.max(0, slots.length - 1)
+      const word = row.querySelector('[data-bar-action-word]')
+      const fits = (step) => {
+        let used = frame
+        slots.forEach((el) => {
+          const isScan = el.dataset.barSlot === 'scan'
+          const isTab = isScan || el.dataset.barTab !== undefined
+          const min = isScan ? step.scan : step.tab
+          if (!isTab) {
+            used += el.offsetWidth
+            return
+          }
+          const label = el.getAttribute('aria-current') === 'page' && el.querySelector('.bar-tab-label')
+          // Pressed: its padding either side, the icon, the gap and the name.
+          const pad = isScan ? step.scanPad : step.tabPad
+          used += label ? Math.max(min, pad * 2 + 20 + 6 + label.scrollWidth) : min
+        })
+        // The amber button: its padding, the "+", the gap and the word — or
+        // TOBI's round 52px.
+        const action = word ? step.actionPad * 2 + 20 + 6 + word.scrollWidth : 52
+        return used + step.rowGap + action <= row.clientWidth
+      }
+      let next = BAR_DENSITY.findIndex(fits)
+      if (next < 0) next = BAR_DENSITY.length - 1
+      setBarLevel((prev) => (prev === next ? prev : next))
+    }
+    decide()
+    const observer = new ResizeObserver(decide)
+    observer.observe(row)
+    return () => observer.disconnect()
+  }, [location.pathname, barItems.length, pageAction?.label, hasDrawer])
+
+  // One bottom-bar tab.
+  const renderBarItem = (item) => {
+    const Icon = item.icon
     if (studentModern) {
       return (
         <NavLink
@@ -436,18 +644,25 @@ export default function AppLayout() {
           aria-label={item.label}
           className={({ isActive }) =>
             cx(
-              'flex h-11 min-w-0 items-center justify-center gap-1.5 rounded-full transition-all',
+              'bar-tab flex h-11 items-center justify-center rounded-full',
               'text-[11px] font-bold tracking-tight',
-              isActive ? 'flex-1 px-3' : barIconSlot,
+              // The current page is a clear glass lens with its name; the
+              // accent stays Scan's and TOBI's alone.
+              // Every tab keeps its full width — nothing is squeezed into an
+              // ellipsis; on a bar too narrow for the name, it is left out.
+              'shrink-0',
             )
           }
-          style={({ isActive }) =>
-            // The current page is a white pill — the accent stays Scan's alone,
-            // so the two never read as the same thing.
-            isActive
-              ? { background: 'rgb(var(--dock-fg))', color: 'rgb(11 18 32)' }
-              : { color: 'rgb(var(--dock-fg) / 0.85)' }
-          }
+          // Sized by what it holds: the icon at rest, the icon and its name when
+          // pressed. The name's width is what animates (`.bar-tab-label`), so the
+          // pill opens smoothly to just its label and the bar spreads the rest
+          // evenly — it never swallows the free space.
+          data-bar-tab=""
+          style={({ isActive }) => ({
+            minWidth: `${density.tab}px`,
+            paddingInline: isActive ? `${density.tabPad}px` : 0,
+            color: isActive ? 'rgb(var(--glass-lens-fg))' : 'rgb(var(--glass-fg) / 0.72)',
+          })}
         >
           {({ isActive }) => (
             <>
@@ -466,12 +681,11 @@ export default function AppLayout() {
                 )}
               </span>
             </span>
-            {/* Pressed — the current page — it is named; the rest are icons. */}
-            {isActive ? (
-              <span className="min-w-0 truncate">{item.label}</span>
-            ) : (
-              <span className="sr-only">{item.label}</span>
-            )}
+            {/* Pressed — the current page — it is named; the rest are icons.
+                The name is always there and eases open, rather than popping in. */}
+            <span className="bar-tab-label" data-open={isActive || undefined}>
+              {item.label}
+            </span>
             </>
           )}
         </NavLink>
@@ -550,12 +764,12 @@ export default function AppLayout() {
   // so from `sm` the shell is unchanged; an open thread keeps its own layout.
   // Every role now — the student's look became the app's phone look.
   const studentModern = !bare
-  const studentBand = studentModern && location.pathname !== '/dashboard' && !onThread
+  const studentBand = studentModern && location.pathname !== '/dashboard' && !fullBleed
   const chrome = useMemo(() => ({ setBare }), [])
 
   return (
     <ShellChromeContext.Provider value={chrome}>
-    <div className="flex min-h-[100dvh] w-full">
+    <div className="shell-enter flex min-h-[100dvh] w-full">
       {/* ------------------------------ desktop rail ------------------------------ */}
       {!bare && (
       <aside
@@ -617,6 +831,37 @@ export default function AppLayout() {
             footer is gone rather than left behind a condition no role meets.
             `settings.labName` and `labLocation` are still set and read on the
             Settings page and on the printed QR labels. */}
+
+        {/* TOBI, pinned under the navigation: the assistant is not one more
+            place in the list but something reached from anywhere, so it gets
+            its own tile — the amber orb, its name, and what it is for. Opens
+            the full page; lit while it is open. */}
+        <div className="shrink-0 px-3 pb-4 pt-2">
+          <NavLink
+            to="/tobi"
+            state={{ from: location.pathname }}
+            className={({ isActive }) =>
+              cx(
+                'group flex items-center gap-3 rounded-2xl p-2.5 ring-1 transition-colors',
+                isActive
+                  ? 'bg-white/[0.10] ring-amberline-400/40'
+                  : 'bg-white/[0.04] ring-white/10 hover:bg-white/[0.08]',
+              )
+            }
+          >
+            <span className="liquid-glass-orb grid h-10 w-10 shrink-0 place-items-center rounded-full transition-transform group-hover:scale-105">
+              <Sparkles className="h-5 w-5" />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-[14px] font-extrabold" style={{ color: 'rgb(var(--rail-text))' }}>
+                Ask TOBI
+              </span>
+              <span className="block truncate text-[11.5px]" style={{ color: 'rgb(var(--rail-muted))' }}>
+                Your Tool Track assistant
+              </span>
+            </span>
+          </NavLink>
+        </div>
       </aside>
       )}
 
@@ -666,45 +911,57 @@ export default function AppLayout() {
                 <X className="h-5 w-5" />
               </button>
             </div>
-            <nav className="grid grid-cols-3 gap-2.5">
-              {drawerItems.map((item) => {
-                const Icon = item.icon
-                return (
-                  <NavLink
-                    key={item.to}
-                    to={item.to}
-                    end={hasNestedNavMatch(item.to, location.pathname)}
-                    className={({ isActive }) =>
-                      cx(
-                        'flex min-w-0 flex-col items-center gap-2 rounded-2xl px-1.5 py-3.5 text-center',
-                        'text-[12px] font-bold leading-tight tracking-tight transition-colors',
-                        isActive
-                          ? 'bg-amberline-400/15 text-amberline-700 dark:text-amberline-300'
-                          : 'hover:bg-black/[0.035] dark:hover:bg-white/5',
-                      )
-                    }
-                    style={({ isActive }) =>
-                      isActive ? undefined : { background: 'rgb(var(--surface-2))' }
-                    }
-                  >
-                    {({ isActive }) => (
-                      <>
-                        <span
-                          className="grid h-11 w-11 place-items-center rounded-full"
-                          style={
-                            isActive
-                              ? { background: 'rgb(var(--accent))', color: 'rgb(var(--accent-contrast))' }
-                              : { background: 'rgb(var(--surface-3))' }
-                          }
-                        >
-                          <Icon className="h-5 w-5" strokeWidth={2} />
-                        </span>
-                        <span className="line-clamp-2 min-w-0">{item.label}</span>
-                      </>
-                    )}
-                  </NavLink>
-                )
-              })}
+            {/* Grouped, so the drawer reads as sections rather than one grid
+                of tiles: the tools, the people, the reports, and the account
+                last. Only groups with something in them are drawn. */}
+            <nav className="max-h-[70dvh] space-y-4 overflow-y-auto overscroll-contain pb-1">
+              {drawerGroups.map((group) => (
+                <section key={group.title}>
+                  <p className="subtle mb-2 px-1 text-[11px] font-bold uppercase tracking-wider">
+                    {group.title}
+                  </p>
+                  <div className="grid grid-cols-3 gap-2.5">
+                    {group.items.map((item) => {
+                        const Icon = item.icon
+                        return (
+                          <NavLink
+                            key={item.to}
+                            to={item.to}
+                            end={hasNestedNavMatch(item.to, location.pathname)}
+                            className={({ isActive }) =>
+                              cx(
+                                'flex min-w-0 flex-col items-center gap-2 rounded-2xl px-1.5 py-3.5 text-center',
+                                'text-[12px] font-bold leading-tight tracking-tight transition-colors',
+                                isActive
+                                  ? 'bg-amberline-400/15 text-amberline-700 dark:text-amberline-300'
+                                  : 'hover:bg-black/[0.035] dark:hover:bg-white/5',
+                              )
+                            }
+                            style={({ isActive }) =>
+                              isActive ? undefined : { background: 'rgb(var(--surface-2))' }
+                            }
+                          >
+                            {({ isActive }) => (
+                              <>
+                                <span
+                                  className="grid h-11 w-11 place-items-center rounded-full"
+                                  style={
+                                    isActive
+                                      ? { background: 'rgb(var(--accent))', color: 'rgb(var(--accent-contrast))' }
+                                      : { background: 'rgb(var(--surface-3))' }
+                                  }
+                                >
+                                  <Icon className="h-5 w-5" strokeWidth={2} />
+                                </span>
+                                <span className="line-clamp-2 min-w-0">{item.label}</span>
+                              </>
+                            )}
+                          </NavLink>
+                        )
+                    })}
+                  </div>
+                </section>
+              ))}
             </nav>
           </aside>
         </div>
@@ -784,6 +1041,23 @@ export default function AppLayout() {
             {location.pathname.startsWith('/settings') && (
               <AppearanceToggleButton className={cx(notice && 'hidden')} />
             )}
+
+            {/* TOBI on a desktop, where there is no bottom bar to carry it. */}
+            <button
+              type="button"
+              onClick={openTobi}
+              aria-haspopup="dialog"
+              aria-expanded={tobiOpen}
+              aria-label="Ask TOBI, the Tool Track assistant"
+              title="Ask TOBI"
+              className={cx(
+                'liquid-glass-orb hidden h-10 w-10 shrink-0 place-items-center rounded-full',
+                'transition-transform active:scale-95 lg:grid',
+                (notice || onTobiPage) && '!hidden',
+              )}
+            >
+              <Sparkles className="h-5 w-5" />
+            </button>
 
             {(isInstructor || isAdmin || isStudent) && (
               <NavLink
@@ -866,22 +1140,26 @@ export default function AppLayout() {
                     // `sm` the two insets already match.
                     'card absolute -right-1 top-full z-50 mt-2 max-w-[calc(100vw-1.5rem)] sm:right-0',
                     'overflow-hidden rounded-2xl p-1.5 shadow-panel animate-slide-up',
-                    isStudent ? 'w-max min-w-[13rem]' : 'w-64',
+                    'w-64',
                   )}
                   role="menu"
                 >
                   {/* Who is signed in, with the one or two details that tell one
                       account from another — the role, and a student's own ID. */}
-                  <div className="min-w-0 px-2.5 pb-2.5 pt-1.5">
-                    <p className="truncate text-sm font-bold">{user?.fullName}</p>
-                    {/* The same role badge the directory uses, so a colour means
-                        the same thing wherever it appears: amber Admin, violet
-                        Instructor, sky Student. */}
-                    <div className="mt-1 flex min-w-0 items-center gap-1.5">
-                      {user?.role && <RoleBadge role={user.role} />}
-                      {user?.studentId && (
-                        <span className="subtle truncate text-xs">{user.studentId}</span>
-                      )}
+                  {/* The avatar beside the name, and the role and ID as one
+                      quiet line under it, on a soft tinted block — a profile
+                      header rather than a row of badges. */}
+                  <div className="mb-1 flex min-w-0 items-center gap-3 rounded-xl bg-black/[0.035] px-3 py-3 dark:bg-white/[0.05]">
+                    <Avatar
+                      name={user?.fullName}
+                      url={user?.avatarUrl}
+                      className="h-10 w-10 shrink-0 text-sm ring-2 ring-white dark:ring-white/10"
+                    />
+                    <div className="min-w-0">
+                      <p className="truncate text-[14px] font-bold leading-tight">{user?.fullName}</p>
+                      <p className="muted mt-0.5 truncate text-[12px] font-medium">
+                        {[user?.role, user?.studentId].filter(Boolean).join(' · ')}
+                      </p>
                     </div>
                   </div>
                   {!online && (
@@ -920,44 +1198,23 @@ export default function AppLayout() {
                       </Link>
                     </>
                   )}
-                  {/* One block for both staff roles. There used to be three —
-                      one keyed off the role and two off `USER_MANAGE` and
-                      `SETTINGS_VIEW` — which an instructor now satisfies all of,
-                      so the menu repeated their account and their settings. The
-                      destinations and their guards are unchanged; only the
-                      duplication is gone. */}
+                  {/* Staff on a phone reach their account and Settings from the
+                      Menu drawer, so the dropdown there is who is signed in and
+                      Sign out. On desktop, with no drawer, My account stays here
+                      (Settings is in the rail). */}
                   {!isStudent && (
-                    <>
-                      <Link
-                        to="/profile"
-                        className="flex min-h-[46px] items-center gap-3 rounded-xl px-2.5 py-1.5
-                                   transition-colors hover:bg-black/5 dark:hover:bg-white/5"
-                        role="menuitem"
-                      >
-                        <span className="min-w-0 flex-1 truncate text-sm font-semibold">
-                          My account
-                        </span>
-                      </Link>
-                      {/* Staff reach Settings from the rail on desktop, so the
-                          menu there is their account and their way out. On a
-                          phone there is no rail, so this row is the way in —
-                          `lg:hidden` is the whole difference, and it is the same
-                          for an instructor and an administrator. */}
-                      {can(PERM.SETTINGS_VIEW) && (
-                        <Link
-                          to="/settings"
-                          className="flex min-h-[46px] items-center gap-3 rounded-xl px-2.5 py-1.5
-                                     transition-colors hover:bg-black/5 dark:hover:bg-white/5 lg:hidden"
-                          role="menuitem"
-                        >
-                          <span className="min-w-0 flex-1 truncate text-sm font-semibold">
-                            Settings
-                          </span>
-                        </Link>
-                      )}
-                    </>
+                    <Link
+                      to="/profile"
+                      className="hidden min-h-[46px] items-center gap-3 rounded-xl px-2.5 py-1.5
+                                 transition-colors hover:bg-black/5 dark:hover:bg-white/5 lg:flex"
+                      role="menuitem"
+                    >
+                      <span className="min-w-0 flex-1 truncate text-sm font-semibold">
+                        My account
+                      </span>
+                    </Link>
                   )}
-                  <div className="my-1.5 border-t" />
+                  <div className={cx('my-1.5 border-t', !isStudent && 'hidden lg:block')} />
                   <button
                     type="button"
                     onClick={handleLogout}
@@ -994,7 +1251,7 @@ export default function AppLayout() {
             bare ? 'flex' : 'px-3 pt-4 sm:px-5 lg:px-8 lg:pt-6',
             // The room under the last card for the floating bar — dropped on a
             // thread, where there is no bar to clear.
-            !bare && !onThread && 'shell-main-pad',
+            !bare && !fullBleed && 'shell-main-pad',
             studentModern && 'student-modern',
           )}
         >
@@ -1036,9 +1293,14 @@ export default function AppLayout() {
             </nav>
           )}
           <ErrorBoundary key={location.pathname}>
-            <Suspense fallback={<PageLoading />}>
-              <Outlet />
-            </Suspense>
+            {/* Remounted per route by the key above, so its entrance plays on
+                every page change: a short slide in the direction travelled and
+                a fade (phone only — see `.page-enter`). */}
+            <div className="page-enter" data-dir={routeMotion.current.dir}>
+              <Suspense fallback={<PageLoading />}>
+                <Outlet />
+              </Suspense>
+            </div>
           </ErrorBoundary>
           </div>
         </main>
@@ -1047,9 +1309,10 @@ export default function AppLayout() {
       {/* ----------------------------- mobile bottom bar ----------------------------
           A floating bar: it sits clear of the bottom edge with the iOS/Android
           safe-area inset added underneath, so the home indicator never crowds it.
-          The surface is solid — no blur and no translucency — so the cards
-          scrolling past behind it never show through and the labels stay legible.
-          Same items, same routes, same badge as before. */}
+          The surface is white Liquid Glass (`.liquid-glass` in index.css): the
+          blur is strong enough that cards scrolling behind it read as colour, not
+          detail, so the labels stay legible. Same items, same routes, same badges
+          as before. */}
       {/* The gap is an offset on the fixed element rather than padding inside
           it, so the bar's own box ends where it is drawn: nothing invisible
           hangs below it, and it cannot be pushed under the gesture bar.
@@ -1057,7 +1320,7 @@ export default function AppLayout() {
           has its clearance, and a phone that reports none still gets a full
           1rem — so the bar sits the same distance clear of the edge on every
           device instead of doubling up on the ones with a home indicator. */}
-      {!bare && !onThread && (
+      {!bare && !fullBleed && (
       <div
         className="fixed inset-x-0 z-30 lg:hidden"
         style={{
@@ -1068,20 +1331,20 @@ export default function AppLayout() {
           paddingRight: 'calc(var(--sar) + 0.75rem)',
         }}
       >
-        {/* A translucent grey glass pill, for every role: icons, with the
-            pressed one — the current page — opened into a named pill (white;
-            Scan's is the accent). Staff keep their Menu slot at the end of it.
-            The assistant is its own round button beside the bar. */}
-        <div className="mx-auto flex max-w-md items-center gap-2">
+        {/* White Liquid Glass, for every role: the tabs as icons, with the
+            pressed one — the current page — opened into a named lens, and Scan
+            in the middle; staff's Menu slot at the end. Beside the bar, the amber
+            button: TOBI's icon, or the open page's own "+" with its name. */}
+        <div ref={barRowRef} className="mx-auto flex max-w-md items-center" style={{ gap: `${density.rowGap}px` }}>
         <nav
-          className={cx(
-            'flex min-w-0 flex-1 shadow-panel',
-            'items-center gap-0.5 rounded-full px-1.5 py-1.5 ring-1 ring-white/15 backdrop-blur-xl',
-          )}
-          style={{ background: 'rgb(var(--dock-bg) / 0.78)' }}
+          ref={barRef}
+          className="liquid-glass relative flex min-w-0 flex-1 items-center justify-between gap-0.5 rounded-full px-1.5 py-1.5"
           aria-label="Primary"
         >
-          {barItems.map(renderBarItem)}
+          {/* The pressed tab's pill: one lens for the bar, gliding from tab to
+              tab (transform), rather than each tab switching its own on. */}
+          <span ref={lensRef} aria-hidden="true" className="bar-lens liquid-glass-lens" />
+          {barItems.map((item) => (item.primary ? renderScanButton() : renderBarItem(item)))}
           {/* Staff's last slot opens the menu panel rather than navigating: the
               drawer carries the rest of their destinations. */}
           {hasDrawer && (
@@ -1089,7 +1352,7 @@ export default function AppLayout() {
               type="button"
               onClick={() => setDrawerOpen(true)}
               className={cx('grid h-11 place-items-center rounded-full transition-colors', barIconSlot)}
-              style={{ color: 'rgb(var(--dock-fg) / 0.85)' }}
+              style={{ color: 'rgb(var(--glass-fg) / 0.72)' }}
               aria-label="Open navigation menu"
               aria-expanded={drawerOpen}
             >
@@ -1097,38 +1360,11 @@ export default function AppLayout() {
             </button>
           )}
         </nav>
-        {studentModern && (
-          // TOBI, the AI assistant — not connected yet. Nothing opens: a tap
-          // widens it into a pill that says so, the way a pressed page widens
-          // into its name, and it folds back on its own a moment later.
-          <button
-            type="button"
-            onClick={() => setTobiHint(true)}
-            aria-label="TOBI, the AI assistant — coming soon"
-            className={cx(
-              'relative flex h-[52px] shrink-0 items-center justify-center gap-1.5 rounded-full',
-              'ring-2 ring-white/40 transition-all duration-300 motion-reduce:transition-none',
-              tobiHint ? 'px-4' : 'w-[52px]',
-            )}
-            // TOBI's own mark: a bright amber gradient with a warm glow — the
-            // brand's yellow, but not the flat accent Scan wears.
-            style={{
-              background: 'linear-gradient(135deg, #fde68a 0%, #F7C948 45%, #DE911D 100%)',
-              color: 'rgb(var(--accent-contrast))',
-              boxShadow: '0 8px 24px -6px rgb(222 145 29 / 0.6)',
-            }}
-          >
-            <Sparkles className="h-6 w-6 shrink-0" />
-            {tobiHint && (
-              <span className="whitespace-nowrap text-[11px] font-bold" role="status">
-                Coming soon
-              </span>
-            )}
-          </button>
-        )}
+        {renderAssistant()}
         </div>
       </div>
       )}
+      {!bare && <TobiChat open={tobiOpen} onClose={closeTobi} originRef={tobiOrigin} />}
     </div>
     </ShellChromeContext.Provider>
   )

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
+  Check,
   ClipboardCheck,
   Eye,
   EyeOff,
@@ -14,9 +15,8 @@ import {
 } from 'lucide-react'
 import {
   AuthBrandLockup,
-  InstitutionLogos,
-  InstitutionNames,
 } from '../components/AuthBranding'
+import Mascot from '../components/Mascot'
 import { SelectField, Spinner, TextField } from '../components/ui'
 import { useToast } from '../context/ToastContext'
 import * as userService from '../services/users'
@@ -208,30 +208,50 @@ export default function SignUpPage() {
       </section>
 
       {/* --------------------------- form --------------------------- */}
-      <section
-        // On a phone the column starts at the top rather than sitting centred,
-        // so the marks are the first thing on screen instead of floating in the
-        // middle of it. From `sm` the centred desktop layout is unchanged.
-        className="flex min-w-0 flex-col justify-start px-5 sm:justify-center sm:px-10
-                   pb-[calc(env(safe-area-inset-bottom,0px)+2.5rem)]
-                   pt-[calc(env(safe-area-inset-top,0px)+2.5rem)] sm:py-10"
-      >
-        <div className="mx-auto w-full max-w-md">
-
-          {/* The institutional marks sit across the top of the phone screen,
-              above everything else, rather than inside the form block. The
-              desktop keeps them on the brand panel to the left. */}
-          <div className="mb-5 lg:hidden">
-            <InstitutionNames className="mb-2" />
-            <InstitutionLogos size="sm" />
+      <section className="flex min-w-0 flex-col lg:justify-center lg:px-10 lg:py-10">
+        {/* The phone's header, the same accent band as sign-in — without the
+            marks here, so the long form starts sooner. From `lg` the brand
+            panel on the left does this job instead. */}
+        <div
+          className="relative overflow-hidden px-6 pb-14 pt-[calc(env(safe-area-inset-top,0px)+2.25rem)] lg:hidden"
+          style={{
+            background: 'linear-gradient(180deg, rgb(var(--hero-bg)) 0%, rgb(var(--hero-bg-2)) 100%)',
+            color: 'rgb(var(--hero-fg))',
+          }}
+        >
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0"
+            style={{ background: 'radial-gradient(120% 70% at 0% 0%, rgb(255 255 255 / 0.3) 0%, transparent 55%)' }}
+          />
+          <div className="relative mx-auto flex max-w-md items-end justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[13px] font-semibold opacity-70">Join the laboratory</p>
+              <h2 className="mt-0.5 text-[28px] font-extrabold leading-[1.1] tracking-tight">
+                Create your account
+              </h2>
+            </div>
+            <Mascot state="playful" size={88} className="-mb-2 shrink-0" />
           </div>
+        </div>
 
-          <div className="mb-7 mt-2 flex flex-col items-center text-center">
+        {/* The form on a sheet that rises over the band on a phone; a plain,
+            centred column from `lg`. */}
+        <div
+          className="relative z-10 -mt-8 flex-1 rounded-t-[28px] px-6 pb-[calc(env(safe-area-inset-bottom,0px)+2rem)] pt-7
+                     lg:mt-0 lg:flex-none lg:rounded-none lg:p-0"
+          style={{ background: 'rgb(var(--app-bg))' }}
+        >
+        <div className="mx-auto w-full max-w-md">
+          <div className="mb-7 hidden flex-col items-center text-center lg:flex">
             <h2 className="text-2xl font-extrabold tracking-tight">Create account</h2>
             <p className="muted mt-1.5 text-sm">
               Register for access to the laboratory tool monitoring system.
             </p>
           </div>
+          <p className="muted mb-5 text-[13.5px] lg:hidden">
+            Register for access to the tool monitoring system.
+          </p>
 
           <form onSubmit={submit} className="auth-form space-y-4" noValidate>
             {errors.form && (
@@ -260,19 +280,33 @@ export default function SignUpPage() {
                       onClick={() => chooseRole(value)}
                       aria-pressed={active}
                       className={cx(
-                        'flex flex-col gap-1.5 rounded-lg border-2 p-3 text-left transition-all',
+                        'relative flex flex-col gap-1.5 rounded-2xl border-2 p-3.5 text-left shadow-sm transition-all',
                         active
                           ? 'border-amberline-500 bg-amberline-400/10'
                           : 'hover:bg-black/[0.03] dark:hover:bg-white/5',
                       )}
-                      style={active ? undefined : { borderColor: 'rgb(var(--border))' }}
+                      style={
+                        active
+                          ? undefined
+                          : { borderColor: 'rgb(var(--border))', background: 'rgb(var(--surface))' }
+                      }
                     >
-                      <Icon
-                        className={cx(
-                          'h-5 w-5',
-                          active ? 'text-amberline-600 dark:text-amberline-400' : 'opacity-60',
-                        )}
-                      />
+                      {/* A tick in the corner of the chosen card. */}
+                      {active && (
+                        <span className="absolute right-3 top-3 grid h-5 w-5 place-items-center rounded-full bg-amberline-500 text-white">
+                          <Check className="h-3 w-3" strokeWidth={3} />
+                        </span>
+                      )}
+                      <span
+                        className="grid h-9 w-9 place-items-center rounded-full"
+                        style={
+                          active
+                            ? { background: 'rgb(var(--accent))', color: 'rgb(var(--accent-contrast))' }
+                            : { background: 'rgb(var(--surface-3))' }
+                        }
+                      >
+                        <Icon className="h-[18px] w-[18px]" />
+                      </span>
                       <span className="text-sm font-bold">{title}</span>
                       <span className="subtle text-xs leading-snug">{text}</span>
                       <span className="subtle text-[11.5px] font-bold">{note}</span>
@@ -464,18 +498,32 @@ export default function SignUpPage() {
               </div>
             )}
 
-            <button type="submit" className="btn btn-primary btn-lg w-full rounded-xl" disabled={submitting}>
+            <button
+              type="submit"
+              className="btn btn-lg !mt-6 h-12 w-full rounded-2xl text-[15px] font-bold shadow-lift
+                         transition-transform active:scale-[0.98]"
+              style={{ background: 'rgb(var(--hero-cta-bg))', color: 'rgb(var(--hero-cta-fg))' }}
+              disabled={submitting}
+            >
               {submitting ? <Spinner /> : <UserPlus className="h-4 w-4" />}
               {submitting ? 'Creating account…' : 'Create account'}
             </button>
-
-            <p className="subtle text-xs leading-relaxed">
-              Already have an account?{' '}
-              <Link to="/login" className="font-bold text-amberline-700 hover:underline dark:text-amberline-400">
-                Sign in
-              </Link>
-            </p>
           </form>
+
+          {/* ------------------------ existing account ------------------------ */}
+          <div className="my-6 flex items-center gap-3">
+            <span className="h-px flex-1" style={{ background: 'rgb(var(--border))' }} />
+            <span className="subtle text-[12px] font-semibold">Already have an account?</span>
+            <span className="h-px flex-1" style={{ background: 'rgb(var(--border))' }} />
+          </div>
+          <Link
+            to="/login"
+            className="flex h-12 w-full items-center justify-center rounded-2xl border text-[14.5px] font-bold
+                       transition-colors hover:bg-black/[0.03] dark:hover:bg-white/5"
+            style={{ background: 'rgb(var(--surface))' }}
+          >
+            Sign in
+          </Link>
 
           {/* Kept with the form column so it centres under it at every width and
               stays clear of the phone's home indicator via the section's own
@@ -486,6 +534,7 @@ export default function SignUpPage() {
               Smart Tool Monitoring System · Version {APP_VERSION}
             </p>
           </div>
+        </div>
         </div>
       </section>
     </div>

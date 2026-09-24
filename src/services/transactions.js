@@ -189,35 +189,11 @@ function toStoredLocation(location, actor, note) {
   }
 }
 
-export const checkpointsOf = (txn) =>
-  Array.isArray(txn?.locationCheckpoints) ? txn.locationCheckpoints : []
+// Where a loan's tool was last recorded. The rule lives in `utils/loanLocation`
+// so TOBI's server functions read locations exactly the way the Tool Map does.
+import { checkpointsOf, lastKnownLocation } from '../utils/loanLocation'
 
-/**
- * Where this loan's tool was last actually recorded.
- *
- * Read from the loan itself, which is what ties a tool to the one borrower
- * holding it — so the answer is that student's own recorded whereabouts for
- * that tool and cannot be another borrower's. The most recent usage checkpoint
- * wins; failing that, the point captured when the tool was collected. A loan
- * with neither returns null, which is "not recorded" and not a default.
- *
- * No new store: these are the same two columns `0008` added and the trail
- * already displays.
- */
-export function lastKnownLocation(txn) {
-  const stamped = (point) => new Date(point?.capturedAt ?? 0).getTime() || 0
-  const latest = checkpointsOf(txn)
-    .filter((point) => Number.isFinite(point?.lat) && Number.isFinite(point?.lng))
-    .reduce((newest, point) => (!newest || stamped(point) >= stamped(newest) ? point : newest), null)
-
-  if (latest) return { ...latest, source: 'checkpoint' }
-
-  const borrow = txn?.borrowLocation
-  if (Number.isFinite(borrow?.lat) && Number.isFinite(borrow?.lng)) {
-    return { ...borrow, source: 'borrow' }
-  }
-  return null
-}
+export { checkpointsOf, lastKnownLocation }
 
 /**
  * Record where the tool is right now, on a loan that is still open.

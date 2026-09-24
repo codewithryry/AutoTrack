@@ -1,4 +1,4 @@
-import { ROLE } from './constants'
+import { ROLE } from './constants.js'
 
 /**
  * Single source of truth for who may do what.

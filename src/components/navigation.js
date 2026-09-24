@@ -2,7 +2,6 @@ import {
   BarChart3,
   Bell,
   Flag,
-  LayoutDashboard,
   MapPin,
   MessageSquare,
   Package,
@@ -14,9 +13,11 @@ import {
   ClipboardList,
   FileCheck2,
   HardHat,
+  House,
+  LayoutDashboard,
 } from 'lucide-react'
-import { PERM } from '../utils/permissions'
-import { ROLE } from '../utils/constants'
+import { PERM } from '../utils/permissions.js'
+import { ROLE } from '../utils/constants.js'
 
 /**
  * Single navigation definition, shared by the desktop sidebar, the mobile drawer
@@ -52,6 +53,8 @@ const ADMIN_ONLY = [ROLE.ADMIN]
 
 export const NAV_ITEMS = [
   {
+    // Dashboard for staff; a student sees it as "Home" with a house (see
+    // `ROLE_LABELS` / `ROLE_ICONS`). The route is /dashboard for everyone.
     to: '/dashboard',
     label: 'Dashboard',
     icon: LayoutDashboard,
@@ -184,9 +187,9 @@ export const NAV_ITEMS = [
  * The student's bottom bar — their only navigation, five fixed slots:
  * Dashboard · Inventory · action · Messages · Transactions.
  *
- * The middle slot is the raised action rather than a destination: Scan by
- * default, and the page's own "+" while Requests or Messages is open (see the
- * slots in `AppLayout`). Requests is reached from the inventory — asking for a
+ * The middle slot is Scan, always. The page's own "+" while Requests or
+ * Messages is open is carried by TOBI's pill beside the bar (see the slots in
+ * `AppLayout`). Requests is reached from the inventory — asking for a
  * tool is what starts one — and Return from the borrowing on Transactions.
  * Notifications sits beside the account pill in the top bar.
  */
@@ -321,7 +324,10 @@ export const INSTRUCTOR_MOBILE_NAV = [
  * Routes the top bar names although they are not rail items for any role — the
  * activity log is reached from the dashboard panel rather than the navigation.
  */
-export const EXTRA_PAGES = [{ to: '/activity', label: 'Logs' }]
+export const EXTRA_PAGES = [
+  { to: '/activity', label: 'Logs' },
+  { to: '/tobi', label: 'TOBI' },
+]
 
 export const INSTRUCTOR_EXTRA_PAGES = [
   { to: '/borrow', label: 'Borrow a tool' },
@@ -388,6 +394,47 @@ export function navItemsForRole(role) {
  */
 export function visibleNavItems(role, can) {
   return navItemsForRole(role).filter((item) => !item.permission || can(item.permission))
+}
+
+/**
+ * The name a role sees for a navigation item.
+ *
+ * The one place a role could be shown a different name for the same item —
+ * the route, its guard and the item itself stay the same for everyone. Empty
+ * today: Home now reads "Home" for every role, so the item's own label is it.
+ */
+// A student's dashboard is their Home, with a house; staff keep Dashboard.
+const ROLE_LABELS = { [ROLE.STUDENT]: { '/dashboard': 'Home' } }
+const ROLE_ICONS = { [ROLE.STUDENT]: { '/dashboard': House } }
+
+export const navLabel = (item, role) => ROLE_LABELS[role]?.[item?.to] ?? item?.label
+
+/** The same item, carrying the name and icon this role sees. */
+export const forRole = (item, role) =>
+  item
+    ? { ...item, label: navLabel(item, role), icon: ROLE_ICONS[role]?.[item.to] ?? item.icon }
+    : item
+
+/**
+ * What TOBI, the assistant in the bottom bar's centre slot, offers on a page.
+ *
+ * The assistant is the same button for every role; only its wording follows the
+ * page, so the offer reads as being about what is on screen. A student's
+ * `/tools` is their catalogue of tools, staff's is the inventory they keep.
+ * Anything not listed is the plain assistant.
+ */
+export function assistantContextFor(pathname, role) {
+  if (pathname === '/tools/map') return 'Ask TOBI about tool locations'
+  if (pathname.startsWith('/tools/')) return 'Ask TOBI about this tool'
+  if (pathname === '/tools') {
+    return role === ROLE.STUDENT ? 'Ask TOBI about tools' : 'Ask TOBI about inventory'
+  }
+  if (pathname === '/requests' || pathname.startsWith('/requests/')) return 'Ask TOBI about requests'
+  if (pathname === '/transactions') return 'Ask TOBI about transactions'
+  if (pathname === '/return') return 'Ask TOBI about returns'
+  if (pathname === '/maintenance') return 'Ask TOBI about maintenance'
+  if (pathname === '/scan') return 'Ask TOBI about scanning'
+  return 'Ask TOBI'
 }
 
 /**

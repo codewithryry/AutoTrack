@@ -23,6 +23,56 @@ them together.
   their own.
 - **Tool Map in navigation** for every role, placed after Inventory. On the phone bottom bar it
   appears as a tab beside Inventory.
+- **TOBI, the Tool Track assistant.** Tap the ✨ TOBI button beside the phone bottom bar (or in the
+  desktop top bar) to open a floating chat card over the page. Ask in English, Filipino or Taglish: "Anong tools ang hiniram
+  ko?", "Show overdue tools", "Nasaan yung drill?". TOBI answers from Tool Track records only:
+  - Students: their own loans, due dates, overdue tools, requests, return status and where their
+    borrowed tools were last recorded. Other students' loans are never shown.
+  - Instructors and admins: active and overdue loans and who has them, availability, tool history,
+    the requests queue, maintenance and problem reports. Admins also get account summaries.
+  - Locations follow the Tool Map rule (latest checkpoint, else the borrow point, open loans only)
+    and are always worded as "last recorded at".
+  - TOBI can prepare a return request for your own borrowed tool. It asks you to confirm and pick
+    the condition first, then uses the normal return-request workflow.
+  - **Actions through conversation.** Every action is prepared by TOBI and shown as a card; only
+    Continue runs Tool Track's existing workflow, with the usual permission and database checks:
+    - "Request a hammer for me bukas": checks the tool, turns the dates into real days, and shows
+      a request card with editable dates and purpose.
+    - "The drill is broken": a problem-report card with the type and description.
+    - Staff, "approve REQ-00009": an approve or reject card with an optional note. Batches are
+      decided together, as on the Requests page.
+  - **Open-page buttons.** "Show pending requests" answers with an **Open Requests** button, and
+    "open the Tool Map" gives a button to it. TOBI only offers pages from the role's own
+    navigation. A student asking for Users is told it isn't available, and the route guards
+    still block restricted pages typed in by hand.
+  - Chats get a short topic title, such as "Overdue tools check" or "Tool request steps",
+    instead of the student's first message.
+  - Suggested prompts per role and page, links to the relevant screens, retry on errors, and a
+    new-conversation button.
+  - **Voice.** Tap the mic to dictate, or the voice button to talk with TOBI hands-free: it
+    listens, answers out loud, then listens again. It works in browsers with speech recognition
+    (Chrome, Edge, Safari). The mic is hidden where it isn't supported, including the Android app.
+  - **Full screen.** The maximise button on the card opens TOBI as a full page at `/tobi`, with
+    your recent chats. Minimise goes back to where you were.
+  - **Usage limits.** TOBI requests are limited per account, and enforced on the server before
+    anything is sent to Cohere. Defaults are 20 a day and 5 a minute for students, 50 and 10
+    for instructors, and 100 and 15 for admins. The daily quota resets at midnight Asia/Manila.
+    Oversized messages are refused, the context is trimmed to the last 15 messages, and output
+    is capped per role. A Cohere call is cut off after 15 seconds and retried at most once. A
+    failed request doesn't use up quota. When the daily limit is reached TOBI says so in the chat.
+    The rest of Tool Track is never limited. Limits are set through `TOBI_*` environment variables and need
+    migration `0037_tobi_usage.sql`.
+  - **Saved chats.** Conversations are saved on this device for your account, and cleared when
+    you sign out. Nothing is stored on the server.
+  - **Opens pages directly.** "Open Tool Map" or "punta sa requests" takes you there straight
+    away, without a button and without using any of your daily quota. A page your role can't
+    open is refused with a short reply.
+  - **Animations.** The card grows out of the TOBI button and folds back into it when closed.
+    Every reply ends with "TOBI can make mistakes. Check important info."
+- **Dashboard mascot talks through AI.** What the mascot says is reworded by the assistant
+  service, so tapping it gives a different line each time instead of the same fixed sentence.
+  Its bubble has an **Ask TOBI** button that opens the TOBI chat. With no connection, or no
+  Cohere key, it falls back to its written lines.
 - **Search and link previews.** The sign-in and sign-up pages now have descriptive titles, meta
   descriptions, canonical URLs, Open Graph tags and structured data. Every other route is marked
   `noindex`, and the new `public/robots.txt` and `public/sitemap.xml` list only the public pages.
@@ -31,17 +81,38 @@ them together.
 - **New phone layout for every role.** The top bar uses the accent colour, with a short accent
   band under it. Pages sit on a rounded sheet above the band, and cards, buttons and fields are
   rounded.
-- **Floating bottom bar.** The bottom bar is now a translucent glass pill. The current page opens
-  into a named pill, and Scan is raised above the others. When you're on a page the bar doesn't
-  normally carry (Settings, Notifications, Requests, Return, Tool Map), that page is added to the
-  bar while you're on it.
-- **Page action in the centre slot.** On admin pages with an Add action (tools, users, services),
-  the centre slot runs that action. On the maintenance log, instructors get the scheduler there.
-  Everywhere else it stays Scan.
-- **Redesigned phone dashboard.** It now opens on the accent band with a greeting and a single
-  Scan button.
-- **TOBI assistant placeholder.** TOBI shows a "Coming soon" pill when tapped. It is not connected
-  yet.
+- **Liquid Glass bottom bar.** The phone bottom bar is now liquid glass: frosted, with a bright
+  top edge, a curved sheen and a soft shadow. The current page sits in a plain translucent lens
+  that glides from tab to tab and opens into its name. Scan is the headline feature: a large
+  amber circle in the centre, icon only, rising above the bar. Names are never cut short: on a
+  narrow screen the spacing and padding tighten instead, so the tab's name and the button's
+  word ("New chat") always fit whole. The TOBI / page-action button beside the bar is the same
+  glass as the bar, so the amber is Scan's alone. When you're
+  on a page the bar doesn't normally carry (Settings, Notifications, Requests, Return, Tool Map),
+  that page is added to the bar while you're on it.
+- **Page actions on the TOBI button.** Beside the bar, the amber ✨ TOBI button becomes the
+  page's own action where there is one: New request (students, on Requests), New chat (on
+  Messages), Schedule (instructors, on Maintenance), and Add tool, Add user or Schedule (admins).
+- **Redesigned phone dashboard.** It now opens on the accent band with a two-line greeting, one line on where things stand ("1 tool ready to borrow today", "2 tools with you, 1
+  due soon") and a single Scan button, with the mascot beside it. The "0 out / 0 due soon" chips
+  are gone. There's more room above the mascot, so its bubble no longer runs into the greeting.
+- **Plain summary cards.** Tools out, Due soon, Requests and Overdue are now plain white cards
+  with grey icons. The only colour left is the Overdue count, which turns red when it's above 0.
+- **"Home" for students.** A student's Dashboard is called Home, with a house icon. Admins and
+  instructors keep Dashboard. The route is still `/dashboard` for everyone.
+- **Staff hero.** On the admin and instructor dashboard the button reads "Scan a tool" (staff
+  lend and check in tools, they don't request them), with "Review requests" under it on the
+  phone. Students get "Scan to request" and "Return a tool".
+- **Tidier staff Menu.** The phone Menu drawer is grouped into Tools, People, Insights and
+  Account, and now holds Account and Settings. The account dropdown on the phone shows who is
+  signed in and Sign out.
+- **Account dropdown header.** Your avatar, name, and role and ID on one quiet line, in place of
+  the coloured role badge.
+- **Smoother phone transitions.** Pages slide in the direction you moved along the bottom bar,
+  the bar's pages are loaded ahead of time, and signing in fades into the app. All of it is
+  switched off when the device asks for reduced motion.
+- **Settings without nested cards.** Sections in Settings no longer sit in a card inside another
+  card. The About group is called "About app".
 - **Fewer boxes inside boxes.** Removed the inner bordered or tinted panels in Account settings
   (change password, delete account), location capture, return decisions, scan results,
   transaction details, problem reports and tool location checkpoints. Content now sits directly

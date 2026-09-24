@@ -16,6 +16,7 @@ import {
   SESSION_IDLE_LIMIT_MS,
 } from '../utils/constants'
 import { PERM, can as hasPermission, isStaff } from '../utils/permissions'
+import { clearTobiHistory } from '../hooks/useTobi'
 
 /**
  * Application shell state: the local session, the signed-in user's stored
@@ -345,6 +346,8 @@ export function AppProvider({ children }) {
       void offlineCache.clearAccount(uid)
       void offlineCache.clearAccountOutbox(uid)
     }
+    // So do the TOBI chats saved on this device.
+    clearTobiHistory()
   }, [user])
 
   /* --------------------------- standby --------------------------- */

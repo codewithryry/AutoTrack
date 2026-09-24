@@ -29,17 +29,20 @@ let unavailable = false
 const cache = new Map()
 
 /**
- * Reword `line` for `page`, or return `line` unchanged.
+ * Reword `line` for `page`, or return `line` unchanged. `fresh` asks for a new
+ * wording each call instead of the one cached for that line.
  *
  * Never rejects: every failure — offline, no endpoint, no key, a slow or broken
  * service, an unusable reply — resolves to the line that was passed in.
  */
-export async function assistantLine(line, { page, role, offline = false } = {}) {
+export async function assistantLine(line, { page, role, offline = false, fresh = false } = {}) {
   if (!line) return line
   if (offline || unavailable) return line
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return line
 
-  const cached = cache.get(line)
+  // A fresh line (the mascot answering a tap) is reworded every time; the
+  // cache only serves the steady, once-a-screen lines.
+  const cached = fresh ? null : cache.get(line)
   if (cached) return cached
 
   const controller = new AbortController()
@@ -48,7 +51,7 @@ export async function assistantLine(line, { page, role, offline = false } = {}) 
     const response = await fetch(apiUrl(ENDPOINT), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ line, page, role }),
+      body: JSON.stringify({ line, page, role, vary: fresh }),
       signal: controller.signal,
     })
     if (response.status === 503 || response.status === 404) {
@@ -60,7 +63,7 @@ export async function assistantLine(line, { page, role, offline = false } = {}) 
     if (!response.ok) return line
     const { text } = await response.json()
     if (typeof text !== 'string' || !text.trim()) return line
-    cache.set(line, text)
+    if (!fresh) cache.set(line, text)
     return text
   } catch {
     return line

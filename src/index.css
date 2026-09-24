@@ -40,6 +40,27 @@
     --dock-bg: 92 102 120;
     --dock-fg: 248 250 252;
     --dock-muted: 214 222 234;
+    /* The Liquid Glass bottom bar (see `.liquid-glass`): white glass with dark
+       ink. In dark it stays white glass — only thinner, with light ink — so it
+       never turns into a grey slab. */
+    --glass-top: 255 255 255 / 0.68;
+    --glass-bottom: 255 255 255 / 0.46;
+    --glass-solid: 255 255 255;
+    --glass-tint-top: 226 232 240 / 0.62;
+    --glass-tint-bottom: 203 213 225 / 0.5;
+    --glass-edge: 15 23 42 / 0.07;
+    --glass-lens-tint: 15 23 42 / 0.07;
+    --glass-lens-edge: 15 23 42 / 0.06;
+    --glass-rim-top: 255 255 255 / 0.95;
+    --glass-rim: 255 255 255 / 0.55;
+    --glass-rim-low: 15 23 42 / 0.05;
+    --glass-shadow: 15 23 42 / 0.28;
+    --glass-shadow-soft: 15 23 42 / 0.14;
+    --glass-fg: 15 23 42;
+    --glass-lens: 255 255 255 / 0.96;
+    --glass-lens-fg: 11 18 32;
+    --glass-card-top: 255 255 255 / 0.9;
+    --glass-card-bottom: 248 250 252 / 0.84;
   }
 
   [data-theme='dark'] {
@@ -67,6 +88,24 @@
     --dock-bg: 62 76 102;
     --dock-fg: 241 245 249;
     --dock-muted: 170 184 208;
+    --glass-top: 255 255 255 / 0.18;
+    --glass-bottom: 255 255 255 / 0.09;
+    --glass-solid: 36 48 70;
+    --glass-tint-top: 51 65 85 / 0.7;
+    --glass-tint-bottom: 30 41 59 / 0.62;
+    --glass-edge: 255 255 255 / 0.1;
+    --glass-lens-tint: 255 255 255 / 0.16;
+    --glass-lens-edge: 255 255 255 / 0.12;
+    --glass-rim-top: 255 255 255 / 0.35;
+    --glass-rim: 255 255 255 / 0.14;
+    --glass-rim-low: 0 0 0 / 0.2;
+    --glass-shadow: 0 0 0 / 0.55;
+    --glass-shadow-soft: 0 0 0 / 0.3;
+    --glass-fg: 241 245 249;
+    --glass-lens: 255 255 255 / 0.9;
+    --glass-lens-fg: 255 255 255;
+    --glass-card-top: 36 48 70 / 0.9;
+    --glass-card-bottom: 24 34 51 / 0.88;
   }
 
   * {
@@ -343,7 +382,7 @@
      `pl-*` / `px-*` a field with an icon sets, which this rule would otherwise
      override on specificity and push the text under the icon. */
   .auth-form .input {
-    @apply rounded-xl;
+    @apply rounded-2xl;
     min-height: 48px;
     font-size: 15px;
     padding-top: 10px;
@@ -486,6 +525,328 @@
       animation: none;
     }
   }
+
+  /* ------------------------------------------------------------------ *
+   * Liquid Glass — the phone's floating bottom bar.
+   *
+   * `.liquid-glass` is the bar itself: white, very
+   * translucent, blurred hard enough that the page behind it reads as colour
+   * rather than detail, with a bright rim and a top highlight for its edge in
+   * place of a border. `.liquid-glass-lens` is the pressed tab's named pill,
+   * `.liquid-glass-orb` the assistant beside the bar — the same glass as
+   * the bar, so the amber is Scan's alone.
+   * ------------------------------------------------------------------ */
+  /* The bar itself is the liquid glass: frosted so the page moving under it
+     never competes with the icons, with a bright specular edge along the top,
+     a curved sheen over the upper half, a rim where the "glass" bends light
+     away at the bottom, and a soft drop shadow. */
+  .liquid-glass {
+    background:
+      radial-gradient(120% 90% at 50% -20%, rgb(255 255 255 / 0.55) 0%, rgb(255 255 255 / 0) 60%),
+      linear-gradient(180deg, rgb(var(--glass-top)), rgb(var(--glass-bottom)));
+    -webkit-backdrop-filter: blur(18px) saturate(180%);
+    backdrop-filter: blur(18px) saturate(180%);
+    box-shadow:
+      inset 0 1.5px 0 rgb(var(--glass-rim-top)),
+      inset 0 0 0 1px rgb(var(--glass-rim)),
+      inset 0 -2px 4px rgb(var(--glass-rim-low)),
+      0 12px 32px -14px rgb(var(--glass-shadow)),
+      0 2px 8px -3px rgb(var(--glass-shadow-soft));
+    color: rgb(var(--glass-fg));
+  }
+
+  /* The pressed tab's lens: plain translucent, no blur and no sheen — a soft
+     see-through disc on the glass, so the bar stays the one glass surface. */
+  .liquid-glass-lens {
+    background: rgb(var(--glass-lens-tint));
+    box-shadow: inset 0 0 0 1px rgb(var(--glass-lens-edge));
+    color: rgb(var(--glass-lens-fg));
+  }
+
+  /* The same liquid glass as the bar, so the amber belongs to Scan alone and
+     the TOBI / page-action button reads as part of the bar beside it. */
+  .liquid-glass-orb {
+    background:
+      radial-gradient(120% 90% at 50% -20%, rgb(255 255 255 / 0.55) 0%, rgb(255 255 255 / 0) 60%),
+      linear-gradient(180deg, rgb(var(--glass-top)), rgb(var(--glass-bottom)));
+    -webkit-backdrop-filter: blur(18px) saturate(180%);
+    backdrop-filter: blur(18px) saturate(180%);
+    box-shadow:
+      inset 0 1.5px 0 rgb(var(--glass-rim-top)),
+      inset 0 0 0 1px rgb(var(--glass-rim)),
+      inset 0 -2px 4px rgb(var(--glass-rim-low)),
+      0 12px 32px -14px rgb(var(--glass-shadow)),
+      0 2px 8px -3px rgb(var(--glass-shadow-soft));
+    color: rgb(var(--glass-fg));
+  }
+
+  /* ------------------------------------------------------------------ *
+   * TOBI's motion. Transform and opacity only — a `filter` on a glass
+   * surface would break its backdrop blur.
+   *
+   *   .tobi-card     springs up out of the TOBI button (bottom right) and
+   *                  drops back into it on close
+   *   .tobi-scrim    the dim behind a card or drawer, fading with it
+   *   .tobi-item     the card's header and composer, easing in just after it
+   *   .tobi-drawer   recent chats, sliding in from the left and back out
+   *   .tobi-page     the full page, rising in as it opens
+   *
+   * A closing element carries `data-state="closing"` (useExitTransition).
+   * ------------------------------------------------------------------ */
+  /* The origin is set on the element to the centre of the button it opened
+     from (TobiChat); this corner is only the fallback. */
+  .tobi-card {
+    transform-origin: 88% 100%;
+    animation: tobi-pop-in 360ms cubic-bezier(0.32, 1.25, 0.5, 1) both;
+  }
+  .tobi-card[data-state='closing'] .tobi-item {
+    animation: tobi-fade-out 110ms ease-in both;
+  }
+
+  /* The TOBI button steps aside while its card is open, and returns as the
+     card folds back into it. */
+  .tobi-launcher {
+    transition:
+      transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      opacity 180ms ease;
+  }
+  .tobi-launcher[aria-expanded='true'] {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+
+  /* Signing in: the app fades up from the page background (opacity only, so
+     the fixed bottom bar is never carried along by a transform). */
+  .shell-enter {
+    /* `backwards`: nothing is left applied once it ends, so the shell and the
+       bar are never kept on a separate, softer-rendered layer. */
+    animation: tobi-fade-in 240ms ease-out backwards;
+  }
+
+  /* The bottom bar's one pill, gliding between tabs. */
+  .bar-lens {
+    position: absolute;
+    top: 0.375rem;
+    bottom: 0.375rem;
+    left: 0;
+    width: 0;
+    border-radius: 9999px;
+    pointer-events: none;
+    opacity: 0;
+    transition:
+      transform 300ms cubic-bezier(0.25, 0.9, 0.3, 1),
+      width 300ms cubic-bezier(0.25, 0.9, 0.3, 1),
+      opacity 160ms ease;
+  }
+  .bar-tab {
+    position: relative;
+  }
+  /* The card holds text to read and type, so its glass is denser than the
+     bar's: the page still shows through, but never over the words. */
+  .tobi-card.liquid-glass {
+    background: linear-gradient(180deg, rgb(var(--glass-card-top)), rgb(var(--glass-card-bottom)));
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    backdrop-filter: blur(24px) saturate(180%);
+  }
+  .tobi-card[data-state='closing'] {
+    animation: tobi-pop-out 220ms cubic-bezier(0.5, 0, 0.75, 0) both;
+    pointer-events: none;
+  }
+
+  .tobi-scrim {
+    animation: tobi-fade-in 240ms ease-out both;
+  }
+  .tobi-scrim[data-state='closing'] {
+    animation: tobi-fade-out 200ms ease-in both;
+  }
+
+  .tobi-item {
+    animation: tobi-rise 320ms cubic-bezier(0.2, 0.8, 0.2, 1) 90ms both;
+  }
+
+  .tobi-drawer {
+    animation: tobi-slide-in 300ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  .tobi-drawer[data-state='closing'] {
+    animation: tobi-slide-out 200ms cubic-bezier(0.4, 0, 1, 1) both;
+  }
+
+  .tobi-page {
+    animation: tobi-rise 360ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  /* The full page's greeting orb: a soft amber halo, breathing slowly. */
+  .tobi-glow {
+    box-shadow:
+      0 0 0 10px rgb(247 201 72 / 0.14),
+      0 0 0 22px rgb(247 201 72 / 0.06),
+      0 16px 40px -10px rgb(222 145 29 / 0.6);
+    animation: tobi-breathe 3.2s ease-in-out infinite;
+  }
+  @keyframes tobi-breathe {
+    50% {
+      transform: scale(1.04);
+    }
+  }
+
+  @keyframes tobi-pop-in {
+    from {
+      opacity: 0;
+      transform: scale(0.14);
+    }
+    35% {
+      opacity: 1;
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes tobi-pop-out {
+    to {
+      opacity: 0;
+      transform: scale(0.14);
+    }
+  }
+  @keyframes tobi-fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes tobi-fade-out {
+    to {
+      opacity: 0;
+    }
+  }
+  @keyframes tobi-rise {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+  }
+  @keyframes tobi-slide-in {
+    from {
+      transform: translateX(-100%);
+    }
+  }
+  @keyframes tobi-slide-out {
+    to {
+      transform: translateX(-100%);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tobi-card,
+    .tobi-card[data-state='closing'],
+    .tobi-scrim,
+    .tobi-scrim[data-state='closing'],
+    .tobi-item,
+    .tobi-drawer,
+    .tobi-drawer[data-state='closing'],
+    .tobi-page,
+    .tobi-glow,
+    .shell-enter,
+    .tobi-card[data-state='closing'] .tobi-item {
+      animation: none;
+    }
+    .tobi-launcher,
+    .bar-lens {
+      transition: none;
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Moving between pages on a phone.
+   *
+   * `.page-enter` wraps the routed page and is remounted per route, so this
+   * plays once on every change: 200ms, a 14px slide in the direction the bar
+   * was travelled (a rise when it was not a bar move) and a fade. Transform and
+   * opacity only, both compositor-run, so it is cheap on slow phones; and
+   * `backwards` fill, so once it ends there is no transform left on the page to
+   * disturb its fixed dialogs or its scrolling. The page background is the
+   * shell's, so nothing flashes between the two.
+   *
+   * `.bar-tab` / `.bar-tab-label`: the pressed tab's pill widens and its name
+   * eases open instead of popping in.
+   * ------------------------------------------------------------------ */
+  @media (max-width: 1023px) {
+    .page-enter {
+      animation: page-in-rise 200ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+    }
+    .page-enter[data-dir='forward'] {
+      animation-name: page-in-forward;
+    }
+    .page-enter[data-dir='back'] {
+      animation-name: page-in-back;
+    }
+  }
+  @keyframes page-in-forward {
+    from {
+      opacity: 0;
+      transform: translate3d(14px, 0, 0);
+    }
+  }
+  @keyframes page-in-back {
+    from {
+      opacity: 0;
+      transform: translate3d(-14px, 0, 0);
+    }
+  }
+  @keyframes page-in-rise {
+    from {
+      opacity: 0;
+      transform: translate3d(0, 6px, 0);
+    }
+  }
+
+  .bar-tab {
+    transition:
+      flex-grow 280ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      padding 280ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      background-color 200ms ease,
+      box-shadow 200ms ease,
+      color 200ms ease;
+  }
+  .bar-tab-label {
+    display: inline-block;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    max-width: 0;
+    margin-left: 0;
+    opacity: 0;
+    transition:
+      max-width 280ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      margin-left 280ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      opacity 160ms ease;
+  }
+  .bar-tab-label[data-open] {
+    /* Room for the longest name; the bar leaves a name out rather than cut it. */
+    max-width: 10rem;
+    margin-left: 0.375rem;
+    opacity: 1;
+    transition-delay: 0ms, 0ms, 90ms;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .page-enter,
+    .page-enter[data-dir='forward'],
+    .page-enter[data-dir='back'] {
+      animation: none;
+    }
+    .bar-tab,
+    .bar-tab-label {
+      transition: none;
+    }
+  }
+
+  /* No blur to lean on: the glass turns nearly opaque so the icons stay legible. */
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .liquid-glass {
+      background: rgb(var(--glass-solid));
+    }
+  }
+
 }
 
 @layer utilities {

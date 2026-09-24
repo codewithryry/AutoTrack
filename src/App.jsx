@@ -47,6 +47,7 @@ const RequestsPage = lazy(() => import('./pages/RequestsPage'))
 const NewRequestPage = lazy(() => import('./pages/NewRequestPage'))
 const RequestDetailPage = lazy(() => import('./pages/RequestDetailPage'))
 const MessagesPage = lazy(() => import('./pages/MessagesPage'))
+const TobiPage = lazy(() => import('./pages/TobiPage'))
 
 /*
  * Search metadata.
@@ -392,6 +393,9 @@ export default function App() {
             }
           />
           <Route path="/notifications" element={<NotificationsPage />} />
+          {/* TOBI, full page. No permission gate: every account may ask, and
+              what each one is told is decided by /api/tobi on the server. */}
+          <Route path="/tobi" element={<TobiPage />} />
           {/* The activity log is staff-only, the same audience the service and
               the security rules already scope it to. */}
           <Route

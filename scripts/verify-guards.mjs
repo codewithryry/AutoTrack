@@ -39,6 +39,18 @@ const check = (name, fn) => {
     process.exitCode = 1
   }
 }
+/** The same, for a check that has to await — awaited where it is called. */
+const checkAsync = async (name, fn) => {
+  try {
+    await fn()
+    passed++
+    console.log(`  ok  ${name}`)
+  } catch (err) {
+    console.error(`  FAIL ${name}
+       ${err.message}`)
+    process.exitCode = 1
+  }
+}
 
 const {
   NAV_ITEMS,
@@ -49,6 +61,8 @@ const {
   instructorRailItems,
   ADMIN_MOBILE_NAV,
   INSTRUCTOR_MOBILE_NAV,
+  assistantContextFor,
+  forRole,
 } = await import('../src/components/navigation.js')
 const perms = await import('../src/utils/permissions.js')
 const { ROLE, ROLES } = await import('../src/utils/constants.js')
@@ -102,8 +116,9 @@ check('student sidebar is the borrowing lifecycle, in order', () => {
   // Each destination owns one step: Inventory and Scan identify a tool,
   // Requests is where one ask lives from Pending to Approved to collected,
   // Return closes a loan, Transactions is the history afterwards.
-  assert.deepEqual(labels(studentRailItems(navItemsForRole(ROLE.STUDENT))), [
-    'Dashboard',
+  // Shown as the shell shows it: a student's Dashboard is named Home.
+  assert.deepEqual(labels(studentRailItems(navItemsForRole(ROLE.STUDENT)).map((i) => forRole(i, ROLE.STUDENT))), [
+    'Home',
     'Inventory',
     'Tool Map',
     'Requests',
@@ -147,6 +162,124 @@ check('the student bottom bar is the lifecycle, with Scan in the middle', () => 
   assert.ok(ADMIN_MOBILE_NAV.includes('/requests'))
   assert.ok(INSTRUCTOR_MOBILE_NAV.includes('/requests'))
   assert.ok(!INSTRUCTOR_MOBILE_NAV.includes('/tools'), 'staff bars keep their own layout')
+})
+
+check('the assistant speaks to the open page, for every role', () => {
+  assert.equal(assistantContextFor('/dashboard', ROLE.STUDENT), 'Ask TOBI')
+  assert.equal(assistantContextFor('/dashboard', ROLE.ADMIN), 'Ask TOBI')
+  assert.equal(assistantContextFor('/tools', ROLE.STUDENT), 'Ask TOBI about tools')
+  assert.equal(assistantContextFor('/tools', ROLE.INSTRUCTOR), 'Ask TOBI about inventory')
+  assert.equal(assistantContextFor('/tools/map', ROLE.STUDENT), 'Ask TOBI about tool locations')
+  assert.equal(assistantContextFor('/requests', ROLE.ADMIN), 'Ask TOBI about requests')
+  assert.equal(assistantContextFor('/settings', ROLE.INSTRUCTOR), 'Ask TOBI')
+})
+
+/* --------------------------------- TOBI --------------------------------- */
+
+const tobi = await import('../api/_lib/tobi/tools.js')
+const { lastKnownLocation } = await import('../src/utils/loanLocation.js')
+const tobiNames = (role) => tobi.toolsFor({ role }).map((t) => t.name)
+
+check('TOBI offers a student only their own records and the shared inventory', () => {
+  const student = tobiNames(ROLE.STUDENT)
+  for (const staffOnly of ['get_active_loans', 'get_request_queue', 'get_maintenance', 'get_user_summary']) {
+    assert.ok(!student.includes(staffOnly), `a student must not be offered ${staffOnly}`)
+  }
+  assert.ok(student.includes('get_my_loans'))
+  assert.ok(tobiNames(ROLE.ADMIN).includes('get_user_summary'))
+  assert.ok(tobiNames(ROLE.INSTRUCTOR).includes('get_active_loans'))
+})
+
+await checkAsync('TOBI refuses a staff function called for a student, before any read', async () => {
+  const untouched = new Proxy({}, { get: () => { throw new Error('the database was read') } })
+  for (const name of ['get_active_loans', 'get_request_queue', 'get_maintenance', 'get_user_summary']) {
+    const result = await tobi.runTool(name, {}, { db: untouched, user: { id: 'u1', role: ROLE.STUDENT }, now: new Date() })
+    assert.match(result.error ?? '', /not available/, name)
+  }
+})
+
+check('TOBI takes the role from the session, never from the request', () => {
+  const endpoint = read('api/tobi.js')
+  assert.ok(!/body\??\.\s*role|body\??\.\s*user\b/.test(endpoint), 'api/tobi.js must not read a role from the body')
+  assert.ok(/from\('profiles'\)/.test(endpoint), 'the role is read from the caller\'s own profile')
+  for (const file of ['src/services/tobi.js', 'src/components/TobiChat.jsx']) {
+    assert.ok(!/COHERE/i.test(read(file)), `${file} must not know the provider key`)
+  }
+})
+
+await checkAsync('TOBI actions follow the role: no decisions or staff pages for a student', async () => {
+  assert.ok(!tobiNames(ROLE.STUDENT).includes('prepare_request_decision'))
+  assert.ok(tobiNames(ROLE.INSTRUCTOR).includes('prepare_request_decision'))
+  for (const name of ['prepare_tool_request', 'prepare_return_request', 'prepare_problem_report', 'open_page']) {
+    assert.ok(tobiNames(ROLE.STUDENT).includes(name), `a student can ${name}`)
+  }
+  const links = []
+  const hooks = { propose: () => {}, link: () => {}, navigate: (page) => links.push(page.to) }
+  const student = { db: {}, user: { id: 'u1', role: ROLE.STUDENT }, now: new Date() }
+  for (const page of ['users', 'reports', 'settings', 'maintenance']) {
+    const result = await tobi.runTool('open_page', { page }, student, hooks)
+    assert.ok(result.notAvailable, `a student was offered ${page}`)
+  }
+  await tobi.runTool('open_page', { page: 'requests' }, student, hooks)
+  assert.deepEqual(links, ['/requests'])
+})
+
+await checkAsync('"open Tool Map" navigates; questions do not; a student cannot open Users', async () => {
+  const { navigationIntent } = await import('../api/tobi.js')
+  const student = { id: 'u1', role: ROLE.STUDENT }
+  const route = (q, user = student) => {
+    const wanted = navigationIntent(q)
+    const page = wanted ? tobi.resolvePage(user, wanted) : null
+    return page ? (page.allowed ? page.to : `refused ${page.label}`) : null
+  }
+  assert.equal(route('TOBI, open Tool Map'), '/tools/map')
+  assert.equal(route('TOBI, open Requests'), '/requests')
+  assert.equal(route('TOBI, open Inventory'), '/tools')
+  assert.equal(route('take me to the returns page'), '/return')
+  assert.equal(route('TOBI, open Users'), 'refused Users')
+  assert.equal(route('open Users', { id: 'a1', role: ROLE.ADMIN }), '/users')
+  for (const question of ['Where is my drill?', 'Show me overdue tools', 'What requests are pending?']) {
+    assert.equal(route(question), null, `"${question}" is a question, not navigation`)
+  }
+})
+
+const tobiConfig = await import('../api/_lib/tobi/config.js')
+
+check('TOBI limits: 20 / 50 / 100 a day, 5 / 10 / 15 a minute, by role', () => {
+  const { limitsFor } = tobiConfig
+  assert.deepEqual(
+    [ROLE.STUDENT, ROLE.INSTRUCTOR, ROLE.ADMIN].map((role) => {
+      const l = limitsFor(role)
+      return [l.daily, l.perMinute, l.maxInputTokens, l.maxOutputTokens]
+    }),
+    [
+      [20, 5, 2000, 1000],
+      [50, 10, 2000, 1000],
+      [100, 15, 3000, 1500],
+    ],
+  )
+  assert.equal(limitsFor('Somebody').daily, 20, 'an unknown role gets the strictest limits')
+  assert.equal(tobiConfig.CONTEXT_MESSAGES, 15)
+})
+
+check('TOBI checks the quota before it ever calls the provider', () => {
+  const endpoint = read('api/tobi.js')
+  const handler = endpoint.slice(endpoint.indexOf('export default async function handler'))
+  const gate = handler.indexOf("rpc('tobi_usage_begin'")
+  const refused = handler.indexOf('if (!gate.allowed)')
+  const call = handler.indexOf('await chatTurn(')
+  assert.ok(gate > 0 && refused > gate && call > refused, 'tobi_usage_begin and its refusal must come before chatTurn')
+  assert.ok(/gateError \|\| !gate\)[\s\S]{0,300}status\(503\)/.test(handler), 'no usage record must mean no request')
+  assert.ok(!/p_user|user_id/.test(handler.slice(gate, gate + 300)), 'the account is auth.uid(), never sent')
+})
+
+check('a tool\'s current location is its latest checkpoint, else its borrow point', () => {
+  const borrow = { lat: 1, lng: 1, capturedAt: '2026-01-01T08:00:00Z' }
+  const early = { lat: 2, lng: 2, capturedAt: '2026-01-01T09:00:00Z' }
+  const late = { lat: 3, lng: 3, capturedAt: '2026-01-01T10:00:00Z' }
+  assert.equal(lastKnownLocation({ borrowLocation: borrow, locationCheckpoints: [late, early] }).lat, 3)
+  assert.equal(lastKnownLocation({ borrowLocation: borrow, locationCheckpoints: [] }).source, 'borrow')
+  assert.equal(lastKnownLocation({ locationCheckpoints: [] }), null)
 })
 
 check('staff share the destinations; the student list is their own', () => {

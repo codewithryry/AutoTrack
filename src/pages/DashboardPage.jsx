@@ -3,11 +3,11 @@ import { Link } from 'react-router-dom'
 import {
   AlertTriangle,
   ArrowRight,
-  ArrowUpRight,
   Bell,
   Boxes,
   CalendarDays,
   CheckCircle2,
+  ChevronRight,
   ClipboardList,
   HardHat,
   Package,
@@ -90,23 +90,32 @@ const HERO_ACTION = {
  * beside it — a student's returns, staff's queue — on the routes they already
  * have.
  */
-function HeroScanAction({ secondary, onAccent = false }) {
+function HeroScanAction({ secondary, onAccent = false, label = 'Scan to request' }) {
   return (
     <>
       {/* On the accent band the accent button would vanish, so it is the dark
           one there instead. */}
-      <Link
-        to="/scan"
-        className={HERO_ACTION.primary}
-        style={
-          onAccent
-            ? { background: 'rgb(var(--hero-cta-bg))', color: 'rgb(var(--hero-cta-fg))' }
-            : HERO_ACTION_STYLE
-        }
-      >
-        <QrCode className="h-4 w-4 shrink-0" />
-        Scan to request
-      </Link>
+      {onAccent ? (
+        // On the phone's band: the dark pill, its QR mark in an accent bubble at
+        // the leading edge and an arrow at the end — one clear thing to press.
+        <Link
+          to="/scan"
+          className="group inline-flex h-12 items-center rounded-full px-6 text-[14.5px]
+                     font-bold tracking-tight transition-transform active:scale-[0.97] motion-reduce:transition-none"
+          style={{
+            background: 'rgb(var(--hero-cta-bg))',
+            color: 'rgb(var(--hero-cta-fg))',
+            boxShadow: '0 12px 26px -12px rgb(11 18 32 / 0.65)',
+          }}
+        >
+          {label}
+        </Link>
+      ) : (
+        <Link to="/scan" className={HERO_ACTION.primary} style={HERO_ACTION_STYLE}>
+          <QrCode className="h-4 w-4 shrink-0" />
+          {label}
+        </Link>
+      )}
       {secondary}
     </>
   )
@@ -198,11 +207,16 @@ function DashboardHero({
         // as the page's first card while the figure keeps the size it has.
         blend ? 'relative' : 'tile relative',
         'flex items-start justify-between gap-3 rounded-3xl sm:gap-8 lg:gap-12',
-        'px-4 py-4 sm:px-6 sm:py-5 lg:px-8 lg:py-6',
+        // On the phone's band the greeting sits a little lower, clear of the
+        // date, with its button nearer the mascot's feet.
+        blend ? 'px-4 pb-5 pt-6' : 'px-4 py-4',
+        'sm:px-6 sm:py-5 lg:px-8 lg:py-6',
         // Only as tall as the figure standing in it needs.
         // On the phone's band it is only as tall as the assistant standing in
         // it, now that Scan is the one button under the greeting.
-        blend ? 'min-h-[196px]' : 'min-[360px]:min-h-[236px]',
+        // Tall enough that the mascot's two-line bubble fits over its head
+        // without reaching the top bar.
+        blend ? 'min-h-[248px]' : 'min-[360px]:min-h-[236px]',
         'sm:min-h-[248px] lg:min-h-[260px]',
         compact ? 'mb-4 sm:mb-5 lg:mb-6' : 'mb-6 sm:mb-8',
       )}
@@ -260,7 +274,17 @@ function DashboardHero({
           // Directly under the greeting rather than pushed to the floor of the
           // band, so the title, its line of status and the two buttons read as
           // one block.
-          <div className="mt-7 flex flex-wrap items-center justify-start gap-x-2 gap-y-1.5 sm:mt-8 sm:gap-x-2.5 lg:mt-9">
+          <div
+            className={cx(
+              // Closer under the band's status line on a phone.
+              // On the band the two stack, Scan over Return, filling the space
+              // beside the assistant.
+              blend
+                ? 'mt-5 flex flex-col items-start gap-2'
+                : 'mt-7 flex flex-wrap items-center justify-start gap-x-2 gap-y-1.5',
+              'sm:mt-8 sm:gap-x-2.5 lg:mt-9',
+            )}
+          >
             {actions}
           </div>
         )}
@@ -276,7 +300,15 @@ function DashboardHero({
         autoSpeak
         // The assistant opens by pointing at the card's one button and saying
         // what it is for, in the same words for every role.
-        intro={actions ? 'Tap Scan to request a tool.' : undefined}
+        // Staff do not request tools: for them Scan looks a tool up to lend it
+        // out or check it back in.
+        intro={
+          actions
+            ? role === 'Student'
+              ? 'Tap Scan to request a tool.'
+              : 'Tap Scan to lend or check in a tool.'
+            : undefined
+        }
         // Sized against the text beside it, not against the screen — the same
         // heights as before, now given to the figure itself so the bubble can
         // sit above it or beside it without squashing it.
@@ -298,7 +330,7 @@ function DashboardHero({
  * The student's phone dashboard
  *
  * The greeting — same text, buttons and assistant as the wide screen — laid
- * straight onto an accent band, today's date above it. The band continues the
+ * straight onto an accent band. The band continues the
  * top bar, which the shell paints in the same accent on this page
  * (`.shell-bar-accent`). Everything under it sits on a sheet with rounded top
  * corners that overlaps the band: the inventory search first, then the four
@@ -306,21 +338,35 @@ function DashboardHero({
  * ------------------------------------------------------------------ */
 
 function PhoneAccentBackdrop({ children }) {
-  const today = new Date().toLocaleDateString(undefined, {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-  })
   return (
     // Edge to edge under the top bar: the negative margins undo the shell's
     // phone padding. The deep bottom padding is the room the sheet overlaps.
-    <div className="relative -mx-3 -mt-4 px-3 pb-10 pt-3">
+    <div className="relative -mx-3 -mt-4 px-3 pb-10 pt-1">
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-0"
         style={{
           // From the bar's accent at the top down to a lighter amber.
           background: 'linear-gradient(180deg, rgb(var(--hero-bg)) 0%, rgb(var(--hero-bg-2)) 100%)',
+        }}
+      />
+      {/* A light sheen from the top left, and a fine dot texture that fades out
+          towards the sheet — depth without another colour. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background: 'radial-gradient(120% 70% at 0% 0%, rgb(255 255 255 / 0.28) 0%, transparent 55%)',
+        }}
+      />
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0"
+        style={{
+          backgroundImage: 'radial-gradient(rgb(var(--hero-fg) / 0.09) 1px, transparent 1.2px)',
+          backgroundSize: '14px 14px',
+          WebkitMaskImage: 'linear-gradient(180deg, #000 0%, transparent 75%)',
+          maskImage: 'linear-gradient(180deg, #000 0%, transparent 75%)',
         }}
       />
       {/* A soft light behind the assistant, so it lifts off the band. */}
@@ -331,89 +377,35 @@ function PhoneAccentBackdrop({ children }) {
           background: 'radial-gradient(circle, rgb(var(--hero-glow)) 0%, transparent 68%)',
         }}
       />
-      <div className="relative px-4">
-        <span
-          className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11.5px] font-semibold"
-          style={{ background: 'rgb(var(--hero-fg) / 0.08)', color: 'rgb(var(--hero-fg))' }}
-        >
-          <CalendarDays className="h-3.5 w-3.5 opacity-70" />
-          {today}
-        </span>
-      </div>
       <div className="relative">{children}</div>
     </div>
   )
 }
 
-const BENTO_TONES = {
-  // The one filled card, the way the reference leads with its main figure.
-  primary: {
-    card: 'text-white',
-    style: { background: 'linear-gradient(160deg, #3b82f6 0%, #1d4ed8 100%)' },
-    chip: 'bg-white/20 text-white',
-  },
-  plain: { card: 'card', chip: 'bg-orange-500/10 text-orange-600 dark:text-orange-400' },
-  success: {
-    card: 'bg-emerald-500/10 text-emerald-800 dark:text-emerald-300',
-    chip: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
-  },
-  danger: {
-    card: 'bg-red-500/10 text-red-800 dark:text-red-300',
-    chip: 'bg-red-500/15 text-red-600 dark:text-red-400',
-  },
-}
-
-function BentoStat({ label, value, icon: Icon, to, tone }) {
-  const t = BENTO_TONES[tone]
+function BentoStat({ label, value, icon: Icon, to, alert = false }) {
+  // Plain for all four: the same white card, a quiet grey icon and the figure.
+  // Colour is kept for the one thing that needs it — an overdue count above
+  // zero turns red — so the row reads as a summary, not a set of buttons.
+  const warn = alert && value > 0
   return (
-    // One layout for all four: the icon and what the figure is on the top
-    // row, a small arrow saying it opens, and the figure itself below.
     <Link
       to={to}
-      className={cx(
-        'flex h-[112px] flex-col justify-between rounded-3xl p-3.5 shadow-lift transition-transform',
-        'active:scale-[0.98]',
-        t.card,
-      )}
-      style={t.style}
+      className="card flex h-[96px] flex-col justify-between rounded-2xl p-3.5 transition-transform active:scale-[0.98]"
     >
       <span className="flex items-center gap-2">
-        <span className={cx('grid h-8 w-8 shrink-0 place-items-center rounded-full', t.chip)}>
-          <Icon className="h-4 w-4" />
-        </span>
-        <span className="min-w-0 flex-1 truncate text-[12.5px] font-bold">{label}</span>
-        <ArrowUpRight className="h-4 w-4 shrink-0 opacity-50" />
-      </span>
-      <span className="block px-0.5 text-[32px] font-extrabold leading-none tabular-nums">{value}</span>
-    </Link>
-  )
-}
-
-/**
- * The student's figures as small chips under the greeting on a phone: what is
- * out, what is due soon, and — only when there is any — what is overdue. The
- * two that need acting on take their warning tone only when they are non-zero.
- */
-function HeroStatusChips({ data }) {
-  const chip = 'inline-flex items-center rounded-full px-2.5 py-0.5 text-[11.5px] font-bold'
-  const plain = { background: 'rgb(var(--hero-fg) / 0.08)', color: 'rgb(var(--hero-fg))' }
-  return (
-    <span className="flex flex-wrap gap-1.5">
-      <span className={chip} style={plain}>
-        {data.activeLoans} out
+        <Icon className={cx('h-4 w-4 shrink-0', warn ? 'text-red-500' : 'subtle')} />
+        <span className="muted min-w-0 flex-1 truncate text-[12.5px] font-semibold">{label}</span>
+        <ChevronRight className="subtle h-4 w-4 shrink-0 opacity-60" />
       </span>
       <span
-        className={cx(chip, data.dueSoon > 0 && 'bg-orange-500/15 text-orange-800 dark:text-orange-300')}
-        style={data.dueSoon > 0 ? undefined : plain}
+        className={cx(
+          'block text-[28px] font-extrabold leading-none tabular-nums',
+          warn && 'text-red-600 dark:text-red-400',
+        )}
       >
-        {data.dueSoon} due soon
+        {value}
       </span>
-      {data.overdue > 0 && (
-        <span className={cx(chip, 'bg-red-500/15 text-red-700 dark:text-red-300')}>
-          {data.overdue} overdue
-        </span>
-      )}
-    </span>
+    </Link>
   )
 }
 
@@ -445,10 +437,10 @@ function PhoneStudentStats({ data, requestCounts }) {
         <span className="subtle truncate">Search tools in the inventory</span>
       </Link>
       <div className="grid grid-cols-2 gap-3">
-        <BentoStat tone="primary" label="Tools out" value={data.activeLoans} icon={Package} to="/transactions?status=Borrowed" />
-        <BentoStat tone="plain" label="Due soon" value={data.dueSoon} icon={ClipboardList} to="/transactions" />
-        <BentoStat tone="success" label="Requests" value={requestCounts.open} icon={ClipboardList} to="/requests" />
-        <BentoStat tone="danger" label="Overdue" value={data.overdue} icon={AlertTriangle} to="/transactions?status=Overdue" />
+        <BentoStat label="Tools out" value={data.activeLoans} icon={Package} to="/transactions?status=Borrowed" />
+        <BentoStat label="Due soon" value={data.dueSoon} icon={CalendarDays} to="/transactions" />
+        <BentoStat label="Requests" value={requestCounts.open} icon={ClipboardList} to="/requests" />
+        <BentoStat label="Overdue" value={data.overdue} icon={AlertTriangle} to="/transactions?status=Overdue" alert />
       </div>
     </div>
   )
@@ -1198,21 +1190,37 @@ function StaffDashboard({
   )
 }
 
+/** The quieter glass pill under Scan on the phone's accent band. */
+const BAND_SECONDARY =
+  'inline-flex h-10 items-center rounded-full px-5 text-[13.5px] font-bold tracking-tight ring-1 ' +
+  'transition-transform active:scale-[0.97] motion-reduce:transition-none'
+const BAND_SECONDARY_STYLE = {
+  background: 'rgb(255 255 255 / 0.35)',
+  color: 'rgb(var(--hero-fg))',
+  '--tw-ring-color': 'rgb(255 255 255 / 0.55)',
+}
+
 /**
- * The crib's one hero action.
+ * The crib's hero actions.
  *
- * The same button a student gets — same route, same icon, same size and the same
- * wording — so the hero reads identically in every role and the mascot beside it
- * can explain the one control there is.
+ * The same Scan button a student gets — same route and size — but worded for
+ * what staff do with it: a scan looks a tool up to lend it out or check it back
+ * in, never to request it. Requests sits beside it (under it on a phone) for
+ * whoever decides them.
  */
 function CribActions({ can, onAccent = false }) {
   return (
     <HeroScanAction
       onAccent={onAccent}
-      // On a phone Requests is already in the bottom bar, so the band keeps
-      // Scan alone, the same as the student's.
+      label="Scan a tool"
       secondary={
-        !onAccent && can(PERM.REQUEST_DECIDE) ? (
+        onAccent ? (
+          can(PERM.REQUEST_DECIDE) ? (
+            <Link to="/requests" className={BAND_SECONDARY} style={BAND_SECONDARY_STYLE}>
+              Review requests
+            </Link>
+          ) : null
+        ) : can(PERM.REQUEST_DECIDE) ? (
           <Link to="/requests" className={HERO_ACTION.outline}>
             <ClipboardList className="h-4 w-4 shrink-0" />
             Requests
@@ -1505,6 +1513,20 @@ function StudentDashboard({
       : data.activeLoans
         ? `${data.activeLoans} tool${data.activeLoans === 1 ? '' : 's'} in your hands.`
         : 'Nothing out at the moment.'
+  // The phone's band says one line about where things stand, so the greeting
+  // is not a name and a button alone: what is overdue, what is out, or what
+  // is ready to borrow.
+  const phoneSubtitle = busy || !data
+    ? undefined
+    : data.overdue
+      ? `${data.overdue} overdue — please return ${data.overdue === 1 ? 'it' : 'them'} soon.`
+      : data.activeLoans
+        ? `${data.activeLoans} tool${data.activeLoans === 1 ? '' : 's'} with you${
+            data.dueSoon ? `, ${data.dueSoon} due soon` : ''
+          }.`
+        : data.availableTools
+          ? `${data.availableTools} tool${data.availableTools === 1 ? '' : 's'} ready to borrow today.`
+          : "Scan a tool's QR to borrow it."
   const heroSignals = {
     online,
     loading: busy,
@@ -1529,18 +1551,44 @@ function StudentDashboard({
           <DashboardHero
             compact
             blend={isPhone}
-            title={`Good ${greeting()}, ${firstName}`}
-            subtitle={isPhone && !busy ? <HeroStatusChips data={data} /> : heroSubtitle}
+            title={
+              isPhone ? (
+                // Two lines on the band: a quiet "Good morning," over the name,
+                // set large — the figures are the cards right under it.
+                <>
+                  <span className="block text-[15px] font-semibold opacity-70">Good {greeting()},</span>
+                  <span className="mt-0.5 block text-[30px] leading-[1.05]">{firstName}</span>
+                </>
+              ) : (
+                `Good ${greeting()}, ${firstName}`
+              )
+            }
+            subtitle={isPhone ? phoneSubtitle : heroSubtitle}
             signals={heroSignals}
             role="Student"
             actions={
               <HeroScanAction
                 onAccent={isPhone}
-                // A phone shows Scan alone here: returning is reached from the
-                // loan itself on Transactions, and the band keeps its room for
-                // the assistant.
+                // Scan and Return on both; the phone stacks them beside the
+                // assistant.
                 secondary={
-                  isPhone ? null : (
+                  isPhone ? (
+                    // On the band, returning sits under Scan as a quieter glass
+                    // pill: the pair fills the space beside the mascot, and Scan
+                    // stays the one dark, filled button.
+                    <Link
+                      to="/return"
+                      className="inline-flex h-10 items-center rounded-full px-5 text-[13.5px] font-bold
+                                 tracking-tight ring-1 transition-transform active:scale-[0.97] motion-reduce:transition-none"
+                      style={{
+                        background: 'rgb(255 255 255 / 0.35)',
+                        color: 'rgb(var(--hero-fg))',
+                        '--tw-ring-color': 'rgb(255 255 255 / 0.55)',
+                      }}
+                    >
+                      Return a tool
+                    </Link>
+                  ) : (
                     <Link to="/return" className={HERO_ACTION.outline}>
                       <Repeat className="h-4 w-4 shrink-0" />
                       Return a tool

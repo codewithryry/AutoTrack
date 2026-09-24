@@ -40,7 +40,10 @@ export default async function handler(req, res) {
   // endpoint and simply uses its written lines.
   if (!key) return res.status(503).json({ error: 'Text generation is not configured.' })
 
-  const { line, page, role } = req.body ?? {}
+  const { line, page, role, vary } = req.body ?? {}
+  // `vary` asks for a fresh wording each time — the mascot answering a tap —
+  // so it is sampled warmer and told to say it its own way.
+  const fresh = vary === true
   if (typeof line !== 'string' || !line.trim() || line.length > 400) {
     return res.status(400).json({ error: 'A "line" to reword is required.' })
   }
@@ -58,9 +61,14 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         model: MODEL,
         max_tokens: 60,
-        temperature: 0.4,
+        temperature: fresh ? 0.9 : 0.4,
         messages: [
-          { role: 'system', content: SYSTEM },
+          {
+            role: 'system',
+            content: fresh
+              ? `${SYSTEM} Say it in your own words, friendly and a little playful, and never the same way twice.`
+              : SYSTEM,
+          },
           {
             role: 'user',
             content: `Screen: ${typeof page === 'string' ? page.slice(0, 40) : 'unknown'}\nRole: ${typeof role === 'string' ? role.slice(0, 20) : 'unknown'}\nLine: ${line}`,

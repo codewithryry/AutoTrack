@@ -1,4 +1,4 @@
-import { Children, useEffect, useId, useRef, useState } from 'react'
+import { Children, createContext, useContext, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   AlertTriangle,
@@ -173,6 +173,19 @@ export function PageHeader({
  */
 const SECTION_SURFACE = { card: 'card', panel: 'panel', quiet: 'panel-quiet' }
 
+/**
+ * Sections drawn inside something that is already a card — the phone's settings
+ * accordion — lose their own card: no surface, no border, no filled header
+ * strip, and no padding of their own, so there is never a card inside a card.
+ * Their container separates them with a rule instead. Pages that do not wrap
+ * their sections in `InsetSections` are untouched.
+ */
+const SectionInsetContext = createContext(false)
+
+export function InsetSections({ children }) {
+  return <SectionInsetContext.Provider value={true}>{children}</SectionInsetContext.Provider>
+}
+
 export function SectionCard({
   title,
   description,
@@ -187,6 +200,23 @@ export function SectionCard({
   // A quiet panel is already recessed; a heavy filled header on top of it would
   // put the ranking back the wrong way round, so it is always flat.
   const bare = flat || variant === 'quiet'
+  const inset = useContext(SectionInsetContext)
+  if (inset) {
+    return (
+      <section className={cx('py-4 first:pt-0 last:pb-0', className)} {...rest}>
+        {(title || action) && (
+          <header className="mb-3 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              {title && <h2 className="truncate text-sm font-bold tracking-tight">{title}</h2>}
+              {description && <p className="subtle mt-0.5 text-xs">{description}</p>}
+            </div>
+            {action}
+          </header>
+        )}
+        <div className={bodyClassName}>{children}</div>
+      </section>
+    )
+  }
   return (
     <section
       className={cx(SECTION_SURFACE[variant] ?? 'card', 'overflow-hidden', className)}

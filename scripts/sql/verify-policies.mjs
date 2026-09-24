@@ -10,6 +10,7 @@
  * Policies are behavioural, so reading them is not the same as testing them,
  * and testing them against production would mean creating accounts to delete.
  */
+import { readFileSync } from 'node:fs'
 import { freshDb, become, seedUser } from './harness.mjs'
 
 let pass = 0, fail = 0
@@ -595,6 +596,68 @@ await test('an instructor cannot delete a tool either', async () => {
   await asUser(db, C, 'delete from public.tools where id=$1', ['TOOL-00001'])
   const tool = await db.query('select count(*)::int c from public.tools where id=$1', ['TOOL-00001'])
   if (tool.rows[0].c !== 1) throw new Error('an instructor was able to delete a tool')
+})
+
+console.log('\n- TOBI usage limits (0037) -')
+
+/** The base migrations plus 0037 — the usage table needs only profiles and is_active(). */
+async function usageDb() {
+  const db = await freshDb()
+  await db.exec(readFileSync('supabase/migrations/0037_tobi_usage.sql', 'utf8'))
+  await seedUser(db, { id: A, email: 'a@lab.test', role: 'Admin', status: 'Active' })
+  await seedUser(db, { id: B, email: 's@lab.test', role: 'Student', status: 'Active' })
+  return db
+}
+const NONCE = 'n'.repeat(40)
+const begin = async (db, uid, daily, minute, nonce = NONCE) =>
+  (await asUser(db, uid, 'select public.tobi_usage_begin($1,$2,$3) as r', [nonce, daily, minute])).rows[0].r
+
+await test('TOBI allows requests up to the daily limit, then refuses', async () => {
+  const db = await usageDb()
+  for (let i = 1; i <= 3; i++) {
+    const r = await begin(db, B, 3, 100)
+    if (!r.allowed || r.used !== i) throw new Error(`request ${i}: ${JSON.stringify(r)}`)
+  }
+  const over = await begin(db, B, 3, 100)
+  if (over.allowed || over.reason !== 'daily' || over.used !== 3) throw new Error(JSON.stringify(over))
+})
+
+await test('TOBI refuses requests sent faster than the per-minute limit', async () => {
+  const db = await usageDb()
+  await begin(db, B, 50, 2)
+  await begin(db, B, 50, 2)
+  const r = await begin(db, B, 50, 2)
+  if (r.allowed || r.reason !== 'rate' || !(r.retryAfter >= 1)) throw new Error(JSON.stringify(r))
+})
+
+await test('a failed TOBI request gives its unit back; a wrong secret cannot', async () => {
+  const db = await usageDb()
+  const first = await begin(db, B, 2, 100)
+  const finish = (nonce, status) =>
+    asUser(db, B, 'select public.tobi_usage_finish($1,$2,$3) as ok', [first.id, nonce, status])
+  if ((await finish('x'.repeat(40), 'failed')).rows[0].ok !== false) {
+    throw new Error('a wrong secret marked the request failed')
+  }
+  if ((await finish(NONCE, 'failed')).rows[0].ok !== true) {
+    throw new Error('the server secret could not finish its own request')
+  }
+  if ((await finish(NONCE, 'ok')).rows[0].ok !== false) throw new Error('a finished request was changed again')
+  const next = await begin(db, B, 2, 100)
+  if (next.used !== 1) throw new Error(`the failed request still counted: ${JSON.stringify(next)}`)
+})
+
+await test("nobody can write TOBI usage directly or read another account's", async () => {
+  const db = await usageDb()
+  await begin(db, A, 10, 10)
+  await expectFail(() =>
+    asUser(db, B, "insert into public.tobi_usage (user_id, usage_date, nonce_hash) values ($1, current_date, 'h')", [B]),
+  )
+  await asUser(db, B, "update public.tobi_usage set status='failed'")
+  await asUser(db, B, 'delete from public.tobi_usage')
+  const seen = await asUser(db, B, 'select count(*)::int c from public.tobi_usage')
+  if (seen.rows[0].c !== 0) throw new Error("a student read an administrator's usage")
+  const kept = await db.query("select count(*)::int c from public.tobi_usage where status='pending'")
+  if (kept.rows[0].c !== 1) throw new Error('a student changed or deleted usage rows')
 })
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed')

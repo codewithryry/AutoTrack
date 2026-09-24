@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { Sparkles } from 'lucide-react'
 import { assistantLine } from '../services/assistant'
 import { cx } from '../utils/helpers'
 import { ROLE } from '../utils/constants'
@@ -1245,13 +1246,13 @@ function TalkingMascot({
       taps.current = 0
     }
 
-    // A reaction with its own words says them; everything else falls through to
-    // the page's written line and the text service, exactly as before.
-    if (reacting?.line) return
-
-    const written = lines[next % lines.length]
+    // What is said goes through the text service, so it is not the same
+    // sentence every time: the written line (or the tap's reaction) shows at
+    // once, and the reworded one replaces it when it arrives. A tap asks for a
+    // fresh wording; the greeting's own first line keeps its cached one.
+    const written = reacting?.line ?? lines[next % lines.length]
     if (!written || offline) return
-    assistantLine(written, { page: label, role, offline }).then((text) => {
+    assistantLine(written, { page: label, role, offline, fresh: fromTap }).then((text) => {
       // Only if this is still the line on screen: a second tap has its own.
       if (text !== written) setGenerated({ for: written, text })
     })
@@ -1284,8 +1285,10 @@ function TalkingMascot({
   // The connection outranks a tapped line: a stored copy is the more important
   // thing to know, and it is also the reason the rest of the screen may be stale.
   // The offline notice is never generated — it has to be right with no network.
+  const reactionLine =
+    reaction?.line && generated?.for === reaction.line ? generated.text : reaction?.line
   const line =
-    offline && !dismissed ? OFFLINE_LINE : turn >= 0 && reaction?.line ? reaction.line : spoken
+    offline && !dismissed ? OFFLINE_LINE : turn >= 0 && reaction?.line ? reactionLine : spoken
 
   // A reporting face keeps its own expression while it talks — a cheerful wave
   // over an overdue tool would misreport the situation. A tap reaction is the
@@ -1321,11 +1324,13 @@ function TalkingMascot({
     >
       {inline && line && (
         <InlineBubble
-          // Pulled down into the empty band above the helmet — the figure is
-          // drawn with headroom at the top of its box — and offset from the
-          // right so the caret lands over the head rather than the shoulder.
-          className="-mb-4 mr-4 sm:-mb-5 sm:mr-6"
+          // Just over the helmet — the figure is drawn with headroom at the top
+          // of its box — clear of the antenna, and offset from the right so the
+          // caret lands over the head rather than the shoulder.
+          className="-mb-1 mr-4 sm:-mb-4 sm:mr-6"
           text={line}
+          // TOBI is the one who can actually answer, so the bubble hands over.
+          onAsk={offline ? undefined : () => window.dispatchEvent(new CustomEvent('tobi:open'))}
           onDismiss={() => {
             if (offline && !dismissed) setDismissed(true)
             setTurn(-1)
@@ -1453,7 +1458,7 @@ export function PageMascot({ pathname, online = true, className, size = 40 }) {
  * rather than a fixed number, so a long line wraps inside the bubble and the
  * card grows a little instead of the text spilling out of it.
  */
-function InlineBubble({ text, onDismiss, className }) {
+function InlineBubble({ text, onDismiss, onAsk, className }) {
   return (
     <div
       role="status"
@@ -1474,6 +1479,20 @@ function InlineBubble({ text, onDismiss, className }) {
       >
         {shorten(text)}
       </div>
+      {onAsk && (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation()
+            onAsk()
+          }}
+          className="absolute -top-2.5 right-2 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-extrabold shadow-lift active:scale-95"
+          style={{ background: 'rgb(247 201 72)', color: 'rgb(11 18 32)' }}
+        >
+          <Sparkles className="h-3 w-3" strokeWidth={2.4} />
+          Ask TOBI
+        </button>
+      )}
       {/* The caret points down at the head standing under the bubble. */}
       <div
         aria-hidden

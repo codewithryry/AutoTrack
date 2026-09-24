@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import apiDev from './scripts/vite-api-dev.mjs'
 
 /**
  * The Android (Capacitor) build differs from the web build in exactly one way:
@@ -24,6 +25,8 @@ export default defineConfig({
   base: NATIVE ? './' : '/',
   plugins: [
     react(),
+    // `npm run dev` only: serves api/*.js like Vercel, so TOBI works locally.
+    apiDev(),
     !NATIVE &&
     VitePWA({
       registerType: 'autoUpdate',

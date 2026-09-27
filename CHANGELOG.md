@@ -12,6 +12,26 @@ About screen, `android/app/build.gradle` derives the Android `versionName` and `
 it, and `npm run verify` fails if the two drift apart. `scripts/set-version.mjs` writes all of
 them together.
 
+## Unreleased
+
+### What's new
+- **Automatic location checkpoints in the Android app.** While you have a borrowed tool, the app
+  records your phone's location on that loan when you move about 100 m and at least every 10
+  minutes. It keeps running when the app is minimised, and a notification shows the whole time.
+  It stops as soon as the tool is returned, the loan closes or you sign out. Readings taken
+  offline are kept on the phone and sent once when you're back online. They are dropped if the
+  loan closed in the meantime. The Tool Map picks the new checkpoints up as the tool's last
+  recorded location. The browser and the PWA keep their one-off location readings.
+- The Android app no longer signs you out after 30 minutes of inactivity. The browser and the
+  PWA still do.
+
+### Database
+- **`0038_loan_tracking_checkpoints.sql`** (apply before shipping the APK): adds
+  `append_loan_checkpoint()`, which adds a checkpoint only for the signed-in borrower's own open
+  loan, checked under a row lock. It also adds a trigger so a non-staff account can't change the
+  checkpoints of a closed loan. No new table or column. Without this migration the Android app
+  does not track at all.
+
 ## 0.2.8
 
 ### What's new

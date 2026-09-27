@@ -133,7 +133,7 @@ export default function TobiPage() {
             <button
               type="button"
               data-state={drawer.state}
-              className="tobi-scrim absolute inset-0 bg-slate-950/25"
+              className="tobi-scrim absolute inset-0 lg:bg-slate-950/25"
               aria-label="Close recent chats"
               onClick={() => setHistoryOpen(false)}
             />

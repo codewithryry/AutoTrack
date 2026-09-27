@@ -102,6 +102,8 @@ const toSessionUser = (user) =>
         email: user.email ?? '',
         emailVerified: !!user.email_confirmed_at,
         displayName: user.user_metadata?.full_name ?? '',
+        // Which sign-in method created the account: 'email' or 'google'.
+        provider: user.app_metadata?.provider ?? 'email',
       }
     : null
 
@@ -278,6 +280,133 @@ export async function completeAuthFromUrl(url) {
   }
 
   return false
+}
+
+/* ------------------------------------------------------------------ *
+ * Google sign-in
+ * ------------------------------------------------------------------ */
+
+/**
+ * What the person asked for before leaving for Google, kept across the
+ * redirect: `signin`, or `signup` with the role they chose. It only ever
+ * decides the role of a profile that does not exist yet, and even then the
+ * `profiles_insert` policy is what actually decides — a self-created row may
+ * only be `Student`/`Active` or `Instructor`/`Pending`, and the guard trigger
+ * refuses any later change to `role` or `status`. An account that already has
+ * a profile keeps its role whatever is stored here.
+ *
+ * localStorage rather than sessionStorage because in the APK the flow runs in
+ * a Custom Tab and the WebView can be recreated before it comes back.
+ */
+const OAUTH_PENDING_KEY = 'stms.oauth.pending'
+// Long enough to finish the student details form after coming back.
+const OAUTH_PENDING_TTL_MS = 30 * 60 * 1000
+
+function savePendingOAuth(pending) {
+  try {
+    localStorage.setItem(OAUTH_PENDING_KEY, JSON.stringify({ ...pending, at: Date.now() }))
+  } catch {
+    // Storage unavailable: a new account cannot be set up, a sign-in still works.
+  }
+}
+
+export function readPendingOAuth() {
+  try {
+    const pending = JSON.parse(localStorage.getItem(OAUTH_PENDING_KEY) ?? 'null')
+    if (!pending || Date.now() - Number(pending.at) > OAUTH_PENDING_TTL_MS) return null
+    return pending
+  } catch {
+    return null
+  }
+}
+
+export function clearPendingOAuth() {
+  try {
+    localStorage.removeItem(OAUTH_PENDING_KEY)
+  } catch {
+    // Nothing stored.
+  }
+}
+
+/** Whether a Google sign-in was started on this device and has not finished. */
+export const hasPendingOAuth = () => !!readPendingOAuth()
+
+/**
+ * Start "Continue with Google".
+ *
+ * In a browser (tab or installed PWA) the page itself goes to Google and comes
+ * back to `/auth/callback`. In the APK the flow opens in a Custom Tab and
+ * comes back on the app's own scheme, where `services/deepLinks.js` exchanges
+ * the PKCE code for the session.
+ *
+ * @param {{ intent: 'signin' | 'signup', role?: string }} request
+ */
+export async function signInWithGoogle({ intent, role }) {
+  savePendingOAuth(intent === 'signup' ? { intent, role } : { intent: 'signin' })
+
+  const native = isNative()
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: native ? NATIVE_REDIRECT_URL : `${window.location.origin}/auth/callback`,
+      // Let a shared workshop device pick the right Google account every time.
+      queryParams: { prompt: 'select_account' },
+      skipBrowserRedirect: native,
+    },
+  })
+  if (error) {
+    clearPendingOAuth()
+    throw toAuthError(error)
+  }
+
+  if (native) {
+    if (!data?.url) {
+      clearPendingOAuth()
+      throw new AuthError('Google sign-in could not be started. Please try again.')
+    }
+    const { Browser } = await import('@capacitor/browser')
+    await Browser.open({ url: data.url })
+  }
+}
+
+/**
+ * The plain-language reason a callback carries an error instead of a
+ * session, or null when it carries none. Supabase puts it in the query or the
+ * fragment depending on the flow, so both are read.
+ */
+export function oauthErrorFrom(url) {
+  let parsed
+  try {
+    parsed = new URL(url)
+  } catch {
+    return null
+  }
+  const hash = new URLSearchParams(parsed.hash.replace(/^#/, ''))
+  const code = parsed.searchParams.get('error') ?? hash.get('error')
+  const description =
+    parsed.searchParams.get('error_description') ?? hash.get('error_description') ?? ''
+  if (!code && !description) return null
+  if (code === 'access_denied' || /cancel|denied/i.test(description)) {
+    return 'Google sign-in was cancelled. Please try again.'
+  }
+  console.warn('[auth] the Google sign-in failed', code, description)
+  return 'Google sign-in could not be completed. Please try again.'
+}
+
+/**
+ * Where a failed Google sign-in reports itself when it comes back as a deep
+ * link rather than a page load — the sign-in screens listen for it.
+ */
+export const OAUTH_ERROR_EVENT = 'stms:oauth-error'
+
+/**
+ * The signed-in account as the auth server reports it right now, rather than
+ * as the stored session claims — used before a new profile is created.
+ */
+export async function verifiedUser() {
+  const { data, error } = await supabase.auth.getUser()
+  if (error || !data?.user) return null
+  return data.user
 }
 
 /**

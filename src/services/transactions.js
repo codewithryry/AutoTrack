@@ -142,13 +142,13 @@ export function filterTransactions(
  * A loan carries three separate things, and they are never merged:
  *
  *   borrowLocation        where the tool changed hands, at the moment it did
- *   locationCheckpoints   readings the borrower chose to record while it was out
+ *   locationCheckpoints   readings taken while it was out — by the borrower on
+ *                         the tool page or at a return request, and by the
+ *                         Android app's loan tracker (`services/loanTracking`)
  *   returnLocation        where it was handed back, at the moment it was
  *
  * Each one is a single fix with its own timestamp. None of them describes where
- * the tool was at any other time, and nothing here is ever written without a
- * person having just pressed something — there is no sweep, no timer and no
- * background write anywhere in this module.
+ * the tool was at any other time. This module never takes a reading itself.
  * ------------------------------------------------------------------ */
 
 /** Columns added by `0008_location_checkpoints.sql`. */
@@ -191,9 +191,9 @@ function toStoredLocation(location, actor, note) {
 
 // Where a loan's tool was last recorded. The rule lives in `utils/loanLocation`
 // so TOBI's server functions read locations exactly the way the Tool Map does.
-import { checkpointsOf, lastKnownLocation } from '../utils/loanLocation'
+import { checkpointsOf, lastKnownLocation, resolveToolLocation } from '../utils/loanLocation'
 
-export { checkpointsOf, lastKnownLocation }
+export { checkpointsOf, lastKnownLocation, resolveToolLocation }
 
 /**
  * Record where the tool is right now, on a loan that is still open.
@@ -239,12 +239,35 @@ export async function addLocationCheckpoint(
     )
   }
 
-  // Append only — the guard trigger rejects an update that drops or rewrites an
-  // entry, so the list can only ever grow.
-  const updated = await db.update(COLLECTIONS.transactions, txn.id, {
-    locationCheckpoints: [...existing, entry],
-    updatedAt: nowISO(),
-  })
+  // The borrower's own point goes through the database function from `0038`,
+  // which re-checks the loan under a row lock, so a return confirmed a moment
+  // ago cannot be followed by a point on the closed loan. Staff correcting a
+  // loan, a database without `0038`, and a device that is offline (the function
+  // needs the server; the outbox does not) keep the original append.
+  let updated = null
+  const own = txn.userId === actor?.id
+  const reached = own ? await appendCheckpointOnServer(txn.id, entry) : null
+  if (reached) {
+    if (reached.status === 'closed') {
+      throw new Error('This loan is closed, so its location can no longer be updated.')
+    }
+    if (reached.status === 'full') {
+      throw new Error(
+        `This loan already has the maximum of ${MAX_CHECKPOINTS} location checkpoints.`,
+      )
+    }
+    if (reached.status !== 'saved' && reached.status !== 'duplicate') {
+      throw new Error('This location checkpoint could not be saved.')
+    }
+    updated = (await getById(txn.id)) ?? txn
+  } else {
+    // Append only — the guard trigger rejects an update that drops or rewrites
+    // an entry, so the list can only ever grow.
+    updated = await db.update(COLLECTIONS.transactions, txn.id, {
+      locationCheckpoints: [...existing, entry],
+      updatedAt: nowISO(),
+    })
+  }
 
   await afterWrite('location checkpoint follow-up', async () => {
     await activity.log({
@@ -260,6 +283,92 @@ export async function addLocationCheckpoint(
   })
 
   return updated
+}
+
+/**
+ * The server-side append from `0038`: `append_loan_checkpoint()` locks the loan
+ * and checks the caller, the borrower and the open status before storing
+ * anything. Resolves with `{ status, count }`, or `null` when the function is not
+ * there (migration not applied) or the device is offline — the two cases where
+ * the caller has to decide what to do instead.
+ */
+async function appendCheckpointOnServer(transactionId, location, note = null) {
+  try {
+    return await db.rpc('append_loan_checkpoint', {
+      p_transaction_id: transactionId,
+      p_lat: location.lat,
+      p_lng: location.lng,
+      p_accuracy: Number.isFinite(location.accuracy) ? location.accuracy : null,
+      p_captured_at: location.capturedAt ?? nowISO(),
+      p_note: note || location.note || null,
+    })
+  } catch (err) {
+    if (isMissingFunction(err) || isOfflineError(err)) return null
+    throw err
+  }
+}
+
+/** PostgREST's "no such function" (schema cache) and Postgres's own. */
+const isMissingFunction = (err) =>
+  err?.code === 'PGRST202' || err?.code === '42883' || /could not find the function/i.test(err?.message ?? '')
+
+/** `db.rpc` refuses up front while offline; a dropped request has no code. */
+const isOfflineError = (err) =>
+  db.isNetworkError(err?.cause ?? err) || /while offline/i.test(err?.message ?? '')
+
+/**
+ * A checkpoint recorded automatically by the Android app's loan tracker.
+ *
+ * Unlike `addLocationCheckpoint()` this never falls back to a client-side write:
+ * every decision is the database's, taken under the loan's row lock, and the
+ * answer is handed back for the tracker to act on —
+ *
+ *   saved | duplicate   stored (now, or on an earlier sync of the same point)
+ *   closed | missing    the loan is over — stop tracking it, drop its points
+ *   forbidden           not this account's loan, or the account is not active
+ *   full                the 100-checkpoint cap is reached
+ *   invalid             the reading was refused as impossible
+ *   offline             not reached — keep the point and try again later
+ *   unsupported         `0038` is not applied — automatic tracking cannot run
+ */
+export async function recordTrackedCheckpoint({ transactionId, location }) {
+  try {
+    const result = await db.rpc('append_loan_checkpoint', {
+      p_transaction_id: transactionId,
+      p_lat: location.lat,
+      p_lng: location.lng,
+      p_accuracy: Number.isFinite(location.accuracy) ? location.accuracy : null,
+      p_captured_at: location.capturedAt,
+      p_note: null,
+    })
+    return result?.status ? result : { status: 'invalid' }
+  } catch (err) {
+    if (isMissingFunction(err)) return { status: 'unsupported' }
+    if (isOfflineError(err)) return { status: 'offline' }
+    throw err
+  }
+}
+
+/**
+ * The signed-in account's own open loans, read from the server.
+ *
+ * What the loan tracker starts and stops on. Deliberately not the page cache:
+ * a loan closed on the counter's machine must stop this phone's tracking, and
+ * only the server knows that. Resolves with `null` when the server could not be
+ * reached, so the caller can tell "no loans" from "don't know".
+ */
+export async function listOwnOpenLoans(actor) {
+  if (!actor?.id) return []
+  try {
+    const rows = await db.findWhere(COLLECTIONS.transactions, [
+      ['userId', '==', actor.id],
+      ['status', 'in', ACTIVE_TXN_STATUSES],
+    ])
+    return rows.filter((txn) => txn.userId === actor.id && ACTIVE_TXN_STATUSES.includes(txn.status))
+  } catch (err) {
+    if (isOfflineError(err)) return null
+    throw err
+  }
 }
 
 /* ------------------------------------------------------------------ *

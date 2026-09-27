@@ -50,7 +50,7 @@ export function setOfflineMode(value) {
 }
 
 /** True when nothing should be asked of the network. */
-const isOffline = () =>
+export const isOffline = () =>
   offlineMode || (typeof navigator !== 'undefined' && navigator.onLine === false)
 
 /**

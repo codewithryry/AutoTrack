@@ -39,6 +39,9 @@ export const PERM = {
   // Messaging
   MESSAGE_SEND: 'message:send',
 
+  // Announcements — post, edit and publish notices for every account
+  ANNOUNCEMENT_MANAGE: 'announcement:manage',
+
   // Users
   USER_VIEW: 'user:view', // read the directory (borrower pickers, loan owners)
   USER_MANAGE: 'user:manage', // reach the Users page at all
@@ -89,6 +92,7 @@ const INSTRUCTOR_PERMS = [
   PERM.REQUEST_DECIDE,
   PERM.RESERVATION_MANAGE,
   PERM.MESSAGE_SEND,
+  PERM.ANNOUNCEMENT_MANAGE,
   // The directory, and the account work that goes with running a laboratory:
   // adding a student who has not registered, correcting a record, approving a
   // profile change, removing an account that has left. Never an `Admin` — see

@@ -16,11 +16,12 @@ import {
 import { useDebounced, useTools, useTransactions } from '../hooks'
 import { useApp } from '../context/AppContext'
 import * as toolService from '../services/tools'
-import { checkpointsOf } from '../services/transactions'
+import { checkpointsOf, resolveToolLocation } from '../services/transactions'
+import { isOpenLoan, isValidPoint, pointTime } from '../utils/loanLocation'
 import { PERM, can } from '../utils/permissions'
-import { ACTIVE_TXN_STATUSES, TOOL_STATUS, TOOL_STATUSES, TXN_STATUS } from '../utils/constants'
+import { TOOL_STATUS, TOOL_STATUSES, TXN_STATUS } from '../utils/constants'
 import { cx } from '../utils/helpers'
-import { formatDateTime, timeAgo, toDate } from '../utils/dates'
+import { formatDateTime, timeAgo } from '../utils/dates'
 import { formatAccuracy, formatCoords } from '../utils/geo'
 
 /**
@@ -29,10 +30,11 @@ import { formatAccuracy, formatCoords } from '../utils/geo'
  *
  * Two questions, kept apart in the data and on screen:
  *
- *   Current location   only a tool with an open loan (`Borrowed` / `Overdue`)
- *                      has one: the newest valid point of *that* loan — its
- *                      latest checkpoint, or the borrow point if none was
- *                      recorded yet. That is the marker.
+ *   Last recorded      only a tool with an open loan (`Borrowed` / `Overdue`)
+ *   location           has one: `lastKnownLocation()` of *that* loan — its
+ *                      checkpoint with the newest `capturedAt`, or the borrow
+ *                      point if none was recorded yet. That is the marker. The
+ *                      same helper answers for the tool page and TOBI.
  *   Location history   every point of every loan the viewer may read, including
  *                      return points of closed loans. Listed per tool, never
  *                      drawn as a live marker.
@@ -51,8 +53,10 @@ import { formatAccuracy, formatCoords } from '../utils/geo'
  * before anything reaches this page. A student's map is further narrowed to the
  * tools currently out with them.
  *
- * These are recorded events, not a GPS feed: a marker moves only when somebody
- * records a checkpoint.
+ * These are recorded events, not a GPS feed, and this page takes no reading of
+ * its own. A marker moves when a checkpoint is saved on the loan — by the
+ * Android app's loan tracker or by the borrower — and reaches this page through
+ * the transactions realtime feed.
  */
 
 const SOURCE_LABELS = {
@@ -61,15 +65,7 @@ const SOURCE_LABELS = {
   return: 'Returned',
 }
 
-const isValidPoint = (point) =>
-  Number.isFinite(point?.lat) &&
-  Number.isFinite(point?.lng) &&
-  Math.abs(point.lat) <= 90 &&
-  Math.abs(point.lng) <= 180 &&
-  !!toDate(point.capturedAt)
-
-const stamp = (point) => toDate(point.capturedAt)?.getTime() ?? 0
-const newestFirst = (a, b) => stamp(b) - stamp(a)
+const newestFirst = (a, b) => pointTime(b) - pointTime(a)
 
 /** Every valid recorded point of one loan, labelled with where it came from. */
 function pointsOf(txn) {
@@ -83,7 +79,7 @@ function pointsOf(txn) {
     .map((point, index) => ({ ...point, key: `${txn.id}-${point.source}-${index}`, txnId: txn.id }))
 }
 
-const isActiveLoan = (txn) => ACTIVE_TXN_STATUSES.includes(txn.status)
+const isActiveLoan = isOpenLoan
 
 export default function ToolMapPage() {
   const { user } = useApp()
@@ -129,33 +125,13 @@ export default function ToolMapPage() {
     const map = new Map()
     for (const tool of authorizedTools) {
       const loans = loansByTool.get(tool.id) ?? []
-      const activeLoan = loans.find(isActiveLoan) ?? null
-      // The open loan's points in the order they were recorded — borrow point
-      // first, then checkpoints as they were appended — and the last valid one
-      // wins. Recording order rather than `capturedAt`: the borrow point of a
-      // loan issued from a request was stamped by the borrower's device when
-      // they asked, and a checkpoint by whichever device recorded it, so their
-      // clocks need not agree.
-      const current = activeLoan
-        ? (pointsOf(activeLoan)
-            .filter((point) => point.source !== 'return')
-            .at(-1) ?? null)
-        : null
+      // The same rule the tool page and TOBI use (`utils/loanLocation`): the open
+      // loan's checkpoint with the newest `capturedAt`, else its borrow point;
+      // for an available tool, its latest closed loan's return point.
+      const { activeLoan, current, resting } = resolveToolLocation(loans, {
+        available: tool.status === TOOL_STATUS.AVAILABLE,
+      })
       const history = loans.flatMap(pointsOf).sort(newestFirst)
-      // An available tool's pin: where its latest closed loan was handed back.
-      // Only that loan's return point — an older one may predate a later loan
-      // that went back without a reading.
-      let resting = null
-      if (!activeLoan && tool.status === TOOL_STATUS.AVAILABLE) {
-        const closedAt = (txn) => toDate(txn.returnDate ?? txn.borrowDate)?.getTime() ?? 0
-        const lastClosed = loans.reduce(
-          (latest, txn) => (!latest || closedAt(txn) > closedAt(latest) ? txn : latest),
-          null,
-        )
-        resting = lastClosed
-          ? (pointsOf(lastClosed).find((point) => point.source === 'return') ?? null)
-          : null
-      }
       map.set(tool.id, { activeLoan, current, resting, history })
     }
     return map
@@ -587,7 +563,8 @@ function LeafletMap({ tools, tracking, selectedId, focusPoint, onSelect }) {
         title: label,
         keyboard: true,
       })
-      marker.bindTooltip(escapeHtml(`${label} · ${PIN_LABELS[state]}`), {
+      const when = current ? ` · Last recorded ${formatDateTime(point.capturedAt)} · ${formatAccuracy(point)}` : ''
+      marker.bindTooltip(escapeHtml(`${label} · ${PIN_LABELS[state]}${when}`), {
         direction: 'top',
         offset: [0, -28],
       })
@@ -745,10 +722,11 @@ function SelectedToolPanel({ tool, info, focusKey, onFocus, onClose }) {
           <StatusBadge status={tool.status} />
         </DetailItem>
         <DetailItem label="Assigned to">{activeLoan?.userName || '—'}</DetailItem>
-        <DetailItem label={current ? 'Current location' : 'Last returned here'} mono>
+        <DetailItem label={current ? 'Last Recorded Location' : 'Last returned here'} mono>
           {formatCoords(point)}
           <span className="subtle block font-sans text-xs">
             {SOURCE_LABELS[point.source]}
+            {point.note ? ` — “${point.note}”` : ''}
             {point.capturedByName ? ` by ${point.capturedByName}` : ''} · {formatAccuracy(point)}
           </span>
         </DetailItem>

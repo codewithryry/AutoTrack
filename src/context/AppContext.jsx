@@ -17,6 +17,8 @@ import {
 } from '../utils/constants'
 import { PERM, can as hasPermission, isStaff } from '../utils/permissions'
 import { clearTobiHistory } from '../hooks/useTobi'
+import * as loanTracking from '../services/loanTracking'
+import { isNative } from '../utils/native'
 
 /**
  * Application shell state: the local session, the signed-in user's stored
@@ -67,6 +69,8 @@ export function AppProvider({ children }) {
   const [user, setUser] = useState(null)
   /** Why a session was rejected — surfaced on the login screen. */
   const [sessionError, setSessionError] = useState(null)
+  /** A new Google student account that still needs its details (see `ProfileSetupDialog`). */
+  const [profileSetup, setProfileSetup] = useState(null)
   /** A hard failure that leaves the app unusable. */
   const [bootError, setBootError] = useState(null)
   const [bootWarnings, setBootWarnings] = useState([])
@@ -134,6 +138,7 @@ export function AppProvider({ children }) {
         clearAsyncCache()
         if (!active) return
         setUser(null)
+        setProfileSetup(null)
         setAuthReady(true)
         return
       }
@@ -147,8 +152,19 @@ export function AppProvider({ children }) {
         db.setScope({ uid: profile.id, role: profile.role })
         if (!active) return
         setSessionError(null)
+        setProfileSetup(null)
         setUser(profile)
       } catch (err) {
+        if (err?.code === authService.PROFILE_SETUP_REQUIRED) {
+          // Signed in with Google, no account yet: the session is kept so the
+          // student can finish their details, and nothing is authorised
+          // until the profile exists.
+          if (!active) return
+          setSessionError(null)
+          setUser(null)
+          setProfileSetup(err.setup)
+          return
+        }
         console.error('[app] the signed-in account cannot be used', err)
         if (!active) return
         if (err?.name === 'TimeoutError') {
@@ -335,6 +351,9 @@ export function AppProvider({ children }) {
 
   const logout = useCallback(async () => {
     const uid = user?.id
+    // Location tracking for a borrowed tool ends with the session, and before
+    // it: nothing may be recorded against the account once it has signed out.
+    await loanTracking.detach({ reason: 'signedOut' })
     await authService.logout()
     clearAsyncCache()
     clearIdleStamp(uid)
@@ -361,7 +380,8 @@ export function AppProvider({ children }) {
    * existing channel the login screen reads, so the person lands on a form that
    * explains what happened rather than on a silent sign-out.
    *
-   * Students and instructors only; an administrator's session is unchanged.
+   * Students and instructors only, and only in a browser or the PWA; an
+   * administrator's session, and every session in the Android app, is unchanged.
    */
   const expireIdleSession = useCallback(async () => {
     try {
@@ -376,8 +396,11 @@ export function AppProvider({ children }) {
     )
   }, [logout])
 
+  // Browser and PWA only. The Android app stays signed in the way installed
+  // apps do — and it has to, since a borrowed tool's location is recorded in
+  // the background and signing out stops that.
   useIdleTimeout({
-    enabled: !!user && user.role !== ROLE.ADMIN,
+    enabled: !!user && user.role !== ROLE.ADMIN && !isNative(),
     timeoutMs: SESSION_IDLE_LIMIT_MS,
     uid: user?.id ?? null,
     onExpire: expireIdleSession,
@@ -403,6 +426,23 @@ export function AppProvider({ children }) {
     db.setScope({ uid: profile.id, role: profile.role })
     setUser(profile)
     return profile
+  }, [])
+
+  /** Create the new Google student account from the setup dialog, then sign in. */
+  const finishProfileSetup = useCallback(
+    async (details) => {
+      await authService.completeStudentGoogleSignUp(details)
+      const profile = await refreshUser()
+      setProfileSetup(null)
+      return profile
+    },
+    [refreshUser],
+  )
+
+  /** Leave the setup dialog: no account is created and the session ends. */
+  const cancelProfileSetup = useCallback(async () => {
+    await authService.cancelGoogleSignUp().catch(() => {})
+    setProfileSetup(null)
   }, [])
 
   const retryBoot = useCallback(() => {
@@ -446,6 +486,9 @@ export function AppProvider({ children }) {
       bootWarnings,
       sessionError,
       clearSessionError: () => setSessionError(null),
+      profileSetup,
+      finishProfileSetup,
+      cancelProfileSetup,
       retryBoot,
       continueWithoutBoot,
       user,
@@ -471,6 +514,9 @@ export function AppProvider({ children }) {
       bootError,
       bootWarnings,
       sessionError,
+      profileSetup,
+      finishProfileSetup,
+      cancelProfileSetup,
       retryBoot,
       continueWithoutBoot,
       user,

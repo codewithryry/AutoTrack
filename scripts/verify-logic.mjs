@@ -8,6 +8,7 @@ import * as perms from '../src/utils/permissions.js'
 import * as helpers from '../src/utils/helpers.js'
 import * as qr from '../src/utils/qr.js'
 import * as K from '../src/utils/constants.js'
+import * as loc from '../src/utils/loanLocation.js'
 
 assert.ok(globalThis.crypto?.getRandomValues, 'crypto.getRandomValues available')
 
@@ -287,6 +288,87 @@ check('every non-available status explains why it blocks borrowing', () => {
 
 check('return conditions are a subset of conditions', () => {
   for (const c of K.RETURN_CONDITIONS) assert.ok(K.CONDITIONS.includes(c))
+})
+
+console.log('\n— last recorded location (Tool Map, tool page, TOBI) —')
+
+const at = (hhmm) => `2026-09-27T${hhmm}:00.000Z`
+const point = (name, hhmm, extra = {}) => ({ name, lat: 14.5, lng: 121, accuracy: 9, capturedAt: at(hhmm), ...extra })
+
+check('the newest capturedAt wins, whatever the array order', () => {
+  const txn = {
+    status: 'Borrowed',
+    borrowLocation: point('Workshop A', '08:00'),
+    locationCheckpoints: [point('Workshop B', '08:20'), point('Workshop C', '08:10'), point('Workshop D', '08:30')],
+  }
+  const last = loc.lastKnownLocation(txn)
+  assert.equal(last.name, 'Workshop D')
+  assert.equal(last.capturedAt, at('08:30'))
+  assert.equal(last.source, 'checkpoint')
+  // The map resolves through the same helper, so it draws the same point.
+  assert.equal(loc.resolveToolLocation([txn]).current.name, 'Workshop D')
+})
+
+check('borrow → A 08:10 → B 08:20 → C 08:30: the map shows C; after return, the return point', () => {
+  const loan = {
+    id: 'TXN-1',
+    status: 'Borrowed',
+    borrowDate: at('07:59'),
+    borrowLocation: point('Borrowed', '08:00'),
+    locationCheckpoints: [],
+  }
+  let view = loc.resolveToolLocation([loan], { available: false })
+  assert.equal(view.current.name, 'Borrowed', 'before any checkpoint, the borrow point')
+  assert.equal(view.current.source, 'borrow')
+
+  loan.locationCheckpoints = [point('A', '08:10'), point('B', '08:20'), point('C', '08:30')]
+  view = loc.resolveToolLocation([loan], { available: false })
+  assert.equal(view.activeLoan, loan)
+  assert.equal(view.current.name, 'C')
+
+  // Returned: the loan closes and the tool is available again.
+  const closed = { ...loan, status: 'Returned', returnDate: at('09:00'), returnLocation: point('Counter', '09:00') }
+  view = loc.resolveToolLocation([closed], { available: true })
+  assert.equal(view.activeLoan, null)
+  assert.equal(view.current, null, 'checkpoint C is no longer a current location')
+  assert.equal(view.resting.name, 'Counter')
+  assert.equal(view.resting.source, 'return')
+})
+
+check('a returned tool with no return point has no pin — never an old checkpoint', () => {
+  const closed = { status: 'Returned', returnDate: at('09:00'), locationCheckpoints: [point('C', '08:30')], returnLocation: null }
+  const view = loc.resolveToolLocation([closed], { available: true })
+  assert.equal(view.current, null)
+  assert.equal(view.resting, null)
+})
+
+check("only the latest closed loan's return point is used", () => {
+  const older = { status: 'Returned', returnDate: at('06:00'), returnLocation: point('Old counter', '06:00') }
+  const newer = { status: 'Returned', returnDate: at('09:00'), returnLocation: null }
+  assert.equal(loc.resolveToolLocation([older, newer], { available: true }).resting, null)
+})
+
+check('an open loan with no valid point is unlocated', () => {
+  const view = loc.resolveToolLocation(
+    [{ status: 'Overdue', borrowLocation: null, locationCheckpoints: [{ lat: 'x', lng: 1, capturedAt: at('08:00') }] }],
+    { available: false },
+  )
+  assert.ok(view.activeLoan)
+  assert.equal(view.current, null)
+})
+
+check('invalid checkpoints are skipped, falling back to the next newest or the borrow point', () => {
+  const txn = {
+    status: 'Borrowed',
+    borrowLocation: point('Borrowed', '08:00'),
+    locationCheckpoints: [
+      point('Good', '08:10'),
+      point('Off the globe', '09:00', { lat: 95 }),
+      point('No time', '09:30', { capturedAt: null }),
+    ],
+  }
+  assert.equal(loc.lastKnownLocation(txn).name, 'Good')
+  assert.equal(loc.lastKnownLocation({ ...txn, locationCheckpoints: [txn.locationCheckpoints[1]] }).source, 'borrow')
 })
 
 console.log(`\n${passed} checks passed${process.exitCode ? ' — with failures above' : ''}\n`)

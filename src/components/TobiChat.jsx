@@ -910,7 +910,7 @@ export default function TobiChat({ open, onClose, originRef }) {
         type="button"
         aria-label="Close TOBI"
         data-state={state}
-        className="tobi-scrim absolute inset-0 bg-slate-950/25"
+        className="tobi-scrim absolute inset-0 lg:bg-slate-950/25"
         onClick={onClose}
       />
       {/* Compact while empty, growing with the conversation up to most of the

@@ -4,6 +4,10 @@ import { AlertTriangle, ShieldOff } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import AppLayout, { useStandalonePage } from './layouts/AppLayout'
 import InstallPrompt from './components/InstallPrompt'
+import UpdatePrompt from './components/UpdatePrompt'
+import NotificationCenter from './components/NotificationCenter'
+import ProfileSetupDialog from './components/ProfileSetupDialog'
+import LoanTrackingManager from './components/LoanTrackingManager'
 import { ErrorState } from './components/ui'
 import { useApp } from './context/AppContext'
 import { useAndroidBack } from './hooks/useAndroidBack'
@@ -25,6 +29,7 @@ import { PERM } from './utils/permissions'
  */
 import LoginPage from './pages/LoginPage'
 import SignUpPage from './pages/SignUpPage'
+import AuthCallbackPage from './pages/AuthCallbackPage'
 
 const DashboardPage = lazy(() => import('./pages/DashboardPage'))
 const ToolsPage = lazy(() => import('./pages/ToolsPage'))
@@ -249,6 +254,8 @@ export default function App() {
           path="/signup"
           element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <SignUpPage />}
         />
+        {/* Where Google sign-in returns in a browser; it redirects on its own. */}
+        <Route path="/auth/callback" element={<AuthCallbackPage />} />
 
         {/* ---------------------------- protected ---------------------------- */}
         {/* One boundary around the whole protected tree, inside the shell: the
@@ -443,6 +450,10 @@ export default function App() {
       </Routes>
 
       <InstallPrompt />
+      <UpdatePrompt />
+      <NotificationCenter />
+      <ProfileSetupDialog />
+      <LoanTrackingManager />
     </>
   )
 }

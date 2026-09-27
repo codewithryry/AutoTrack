@@ -16,6 +16,7 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react'
+import AnnouncementsManager from '../components/AnnouncementsManager'
 import { DeviceAccessControl } from '../components/DeviceAccess'
 import { resetTours } from '../components/Walkthrough'
 import {
@@ -32,6 +33,7 @@ import { useMediaQuery } from '../hooks'
 import * as db from '../services/db'
 import { getLatestRelease, RELEASES_PAGE } from '../services/releases'
 import * as settingsService from '../services/settings'
+import { ANNOUNCEMENTS_PREVIEW } from '../services/announcements'
 import { seedDatabase } from '../data/seed'
 import { PERM } from '../utils/permissions'
 import { cx, downloadBlob, downloadCSV, readFileAsText } from '../utils/helpers'
@@ -79,6 +81,8 @@ export default function SettingsPage() {
   // Everyone reaches this page for their own preferences; the laboratory
   // configuration below is still staff-only.
   const canViewLab = can(PERM.SETTINGS_VIEW)
+  // Admin and Instructor post the announcements in the notification centre.
+  const canManageAnnouncements = ANNOUNCEMENTS_PREVIEW && can(PERM.ANNOUNCEMENT_MANAGE)
 
   /** Clears the walkthrough state for this account and starts the tour again. */
   const restartTours = () => {
@@ -693,7 +697,17 @@ export default function SettingsPage() {
               <p className="text-sm font-bold">Current version</p>
               {/* The version reads as data rather than prose, matching the
                   record identifiers everywhere else in the app. */}
-              <p className="subtle mt-0.5 font-mono text-xs">v{APP_VERSION}</p>
+              <p className="subtle mt-0.5 font-mono text-xs" aria-live="polite">
+                {updateState === 'uptodate' ? (
+                  <span className="font-sans font-semibold text-emerald-700 dark:text-emerald-300">
+                    You're up to date
+                  </span>
+                ) : updateState === 'available' ? (
+                  `v${latestRelease?.version}`
+                ) : (
+                  `v${APP_VERSION}`
+                )}
+              </p>
             </div>
             {updateState === 'available' ? (
               <a
@@ -731,17 +745,6 @@ export default function SettingsPage() {
               focus having to move, while the coloured frames below speak the
               same message to sighted users. */}
           <div aria-live="polite">
-            {updateState === 'uptodate' && (
-              <div className="flex items-start gap-2.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-3 text-sm text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200">
-                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-                <div className="min-w-0">
-                  <p className="font-bold">You're up to date</p>
-                  <p className="mt-0.5 text-xs leading-snug opacity-80">
-                    You're using the latest version.
-                  </p>
-                </div>
-              </div>
-            )}
             {updateState === 'available' && (
               <div className="flex items-start gap-2.5 rounded-xl border border-blue-200 bg-blue-50 px-3.5 py-3 text-sm text-blue-800 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-200">
                 <Download className="mt-0.5 h-4 w-4 shrink-0" />
@@ -785,6 +788,11 @@ export default function SettingsPage() {
       slug: 'notifications',
       label: 'Notifications',
       content: notificationsSection,
+    },
+    canManageAnnouncements && {
+      slug: 'announcements',
+      label: 'Announcements',
+      content: <AnnouncementsManager />,
     },
     canManageData && {
       slug: 'data',

@@ -17,6 +17,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
+import { trackingFakes } from './verify-tracking.fakes.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const cache = join(root, 'node_modules', '.cache')
@@ -29,6 +30,12 @@ const SUITES = [
     name: 'offline-first',
     entry: 'scripts/verify-offline.mjs',
     out: 'verify-offline.mjs',
+  },
+  {
+    name: 'loan tracking',
+    entry: 'scripts/verify-tracking.mjs',
+    out: 'verify-tracking.mjs',
+    plugins: [trackingFakes],
   },
 ]
 
@@ -47,6 +54,7 @@ for (const suite of SUITES) {
       outfile,
       logLevel: 'error',
       jsx: 'automatic',
+      plugins: suite.plugins ?? [],
       // Node-only test rigs stay external: jsdom loads JSON data files at
       // runtime that a bundle cannot resolve.
       external: ['jsdom', 'fake-indexeddb', 'fake-indexeddb/auto'],

@@ -5,6 +5,7 @@ import { useApp } from '../context/AppContext'
 import { useToast } from '../context/ToastContext'
 import * as pushService from '../services/push'
 import * as nativePermissions from '../services/nativePermissions'
+import { isTrackingPlatform } from '../services/loanTracking'
 import { isNative } from '../utils/native'
 
 /**
@@ -296,9 +297,11 @@ export function DeviceAccessControl() {
         icon={MapPin}
         title="Location"
         description={
-          secure
-            ? 'Used to record where a tool was taken out or handed back.'
-            : 'Needs a secure (https) connection — the browser will not answer over http.'
+          !secure
+            ? 'Needs a secure (https) connection — the browser will not answer over http.'
+            : isTrackingPlatform()
+              ? "Used to record where a tool was taken out or handed back, and your borrowed tool's location while it is out with you."
+              : 'Used to record where a tool was taken out or handed back.'
         }
         state={location}
         stateLabel={secure ? undefined : 'Needs HTTPS'}

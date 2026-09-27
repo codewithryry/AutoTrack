@@ -53,6 +53,17 @@
             android:name="com.capacitorjs.plugins.localnotifications.LocalNotificationRestoreReceiver"
             tools:node="remove" />
 
+        <!--
+            The loan tracker: one foreground service of type `location`, running
+            only while the signed-in account has a borrowed tool (the web app
+            starts and stops it — see src/services/loanTracking.js). Not exported,
+            so nothing outside the app can start it.
+        -->
+        <service
+            android:name=".tracking.LoanTrackingService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -73,18 +84,30 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <!--
-        Location. A borrowing or return may record where it happened, as a single
-        fix taken when somebody presses the button — there is no tracking and no
-        background location, which is why neither ACCESS_BACKGROUND_LOCATION nor
-        a foreground-location service type is declared.
+        Location. A borrow or return records where it happened as a single fix,
+        and while the account has a borrowed tool the loan tracker records the
+        phone's location as checkpoints on that loan.
 
         Both precision levels are requested: Android 12 and later let the person
         grant only the approximate one, and a coarse fix is still worth recording
         (`isApproximate` labels it wherever it is shown) rather than refusing.
+
+        ACCESS_BACKGROUND_LOCATION is deliberately NOT declared. The tracker is a
+        foreground service of type `location`, started while the app is on
+        screen, and a foreground service keeps "while in use" location access
+        when the app is minimised — with its notification always showing.
     -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+
+    <!--
+        The loan tracker's foreground service. Android 9+ needs FOREGROUND_SERVICE
+        to run one at all; Android 14+ (this app targets 36) also needs the
+        permission matching its type, FOREGROUND_SERVICE_LOCATION.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
     <!--
         Notifications. Android 13 (API 33) made this a runtime permission: without

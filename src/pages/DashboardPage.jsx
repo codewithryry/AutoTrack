@@ -25,6 +25,7 @@ import {
 import Walkthrough, { usePageTour } from '../components/Walkthrough'
 import { MascotGreeter } from '../components/Mascot'
 import StatCard from '../components/StatCard'
+import { NotificationBanner } from '../components/NotificationCenter'
 import TransactionTable from '../components/TransactionTable'
 import TransactionDetail from '../components/TransactionDetail'
 import {
@@ -682,6 +683,7 @@ function StaffDashboard({
       })()}
 
       <PhoneSheet enabled={isPhone}>
+      {isPhone && <NotificationBanner />}
 
       {/* ----------------------- what needs a decision ----------------------- */}
       {/* The one band above the counters, and the reason this screen opens on a
@@ -1604,6 +1606,7 @@ function StudentDashboard({
       })()}
 
       <PhoneSheet enabled={isPhone}>
+      {isPhone && <NotificationBanner />}
 
       {/* ----------------------------- middle: statistics -----------------------------
           Four compact tiles, full width above the content grid. They are `tile`

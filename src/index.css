@@ -847,6 +847,20 @@
     }
   }
 
+  /* The phone and tablet layout (below `lg`, where the bottom bar and the
+     floating TOBI card live) uses no blurred backgrounds at all: every glass
+     surface is solid, keeping only its rim and shadow. The desktop keeps the
+     glass. */
+  @media (max-width: 1023.98px) {
+    .liquid-glass,
+    .liquid-glass-orb,
+    .tobi-card.liquid-glass {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+      background: rgb(var(--glass-solid));
+    }
+  }
+
 }
 
 @layer utilities {

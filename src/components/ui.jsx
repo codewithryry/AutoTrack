@@ -755,13 +755,27 @@ const SIZES = {
  * scroll container, so a long form never pushes the page sideways or traps the
  * submit button off-screen.
  */
-export function Modal({ open, onClose, title, description, children, footer, size = 'md' }) {
+// `dismissible={false}` for a step that must be finished: no close button,
+// and neither Escape nor the backdrop closes it.
+export function Modal({
+  open,
+  onClose,
+  title,
+  description,
+  children,
+  footer,
+  size = 'md',
+  dismissible = true,
+  // A floating card dropped just under the top bar on a phone too, instead of
+  // a sheet rising from the bottom edge. For short, glanceable dialogs.
+  centered = false,
+}) {
   const panelRef = useRef(null)
 
   useEffect(() => {
     if (!open) return
     const onKey = (e) => {
-      if (e.key === 'Escape') onClose?.()
+      if (e.key === 'Escape' && dismissible) onClose?.()
     }
     document.addEventListener('keydown', onKey)
     const previousOverflow = document.body.style.overflow
@@ -770,7 +784,7 @@ export function Modal({ open, onClose, title, description, children, footer, siz
       document.removeEventListener('keydown', onKey)
       document.body.style.overflow = previousOverflow
     }
-  }, [open, onClose])
+  }, [open, onClose, dismissible])
 
   useEffect(() => {
     if (!open) return
@@ -791,10 +805,15 @@ export function Modal({ open, onClose, title, description, children, footer, siz
     // padding, so it takes the safe-area insets itself: the sheet's top edge
     // stays clear of a notch and its sides clear of a curved edge. The backdrop
     // below is `inset-0` and still covers the window corner to corner.
-    <div className="dialog-safe fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+    <div
+      className={cx(
+        'dialog-safe fixed inset-0 z-50 flex justify-center',
+        centered ? 'items-start px-4 pt-16' : 'items-end sm:items-center',
+      )}
+    >
       <div
-        className="absolute inset-0 bg-navy-950/60 animate-fade-in"
-        onClick={onClose}
+        className="absolute inset-0 animate-fade-in lg:bg-navy-950/60"
+        onClick={dismissible ? onClose : undefined}
         aria-hidden="true"
       />
       <div
@@ -803,8 +822,10 @@ export function Modal({ open, onClose, title, description, children, footer, siz
         aria-modal="true"
         aria-label={title}
         className={cx(
-          'card relative flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-b-none',
-          'rounded-t-2xl shadow-panel animate-slide-up sm:rounded-2xl',
+          'card relative flex w-full flex-col overflow-hidden shadow-panel animate-slide-up',
+          centered
+            ? 'max-h-[calc(100dvh-6rem)] rounded-2xl'
+            : 'max-h-[92dvh] rounded-b-none rounded-t-2xl sm:rounded-2xl',
           SIZES[size],
         )}
       >
@@ -813,14 +834,16 @@ export function Modal({ open, onClose, title, description, children, footer, siz
             <h2 className="truncate text-base font-bold">{title}</h2>
             {description && <p className="muted mt-0.5 text-xs">{description}</p>}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="btn btn-ghost btn-icon -mr-1 shrink-0"
-            aria-label="Close dialog"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          {dismissible && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="btn btn-ghost btn-icon -mr-1 shrink-0"
+              aria-label="Close dialog"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 sm:px-5">

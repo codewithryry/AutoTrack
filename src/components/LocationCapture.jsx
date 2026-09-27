@@ -24,6 +24,7 @@ import {
 import { cx } from '../utils/helpers'
 import { formatDateTime } from '../utils/dates'
 import { externalLinkProps } from '../utils/native'
+import { isTrackingPlatform } from '../services/loanTracking'
 
 /* ------------------------------------------------------------------ *
  * Location capture and display
@@ -150,6 +151,12 @@ export function AutoLocationNotice({ location, failure, className }) {
         </span>
       ) : failure ? (
         <span>{failure.message} This will be saved without a location.</span>
+      ) : isTrackingPlatform() ? (
+        <span>
+          Your location is recorded with this record when you submit it. While you have a borrowed
+          tool, the app also records your phone's location on that loan, and stops when it is
+          returned.
+        </span>
       ) : (
         <span>
           Your location is recorded once with this record, when you submit it. Nothing is tracked
@@ -333,7 +340,7 @@ export function LocationCaptureField({
               ? 'This device cannot report a location. The record will show that none was captured.'
               : blocked
                 ? 'Location is blocked for this site. You can continue — the record will show that no location was captured.'
-                : 'Optional. One reading is taken when you press this, and nothing is tracked before or after it. Leave it and the record will say no location was captured.'}
+                : 'Optional. One reading is taken when you press this. Leave it and the record will say no location was captured.'}
           </p>
           )}
         </div>
@@ -441,8 +448,8 @@ export function LocationTrail({ transaction, className }) {
               label={`Usage checkpoint ${index + 1} of ${checkpoints.length}`}
               meaning={
                 point.note
-                  ? `Confirmed by the borrower while the tool was out — “${point.note}”`
-                  : 'Confirmed by the borrower while the tool was still out.'
+                  ? `Recorded by the borrower's phone while the tool was out — “${point.note}”`
+                  : "Recorded by the borrower's phone while the tool was out."
               }
               location={point}
             />
@@ -461,8 +468,10 @@ export function LocationTrail({ transaction, className }) {
       )}
 
       <p className="subtle mt-3 border-t pt-3 text-[11px] leading-relaxed">
-        Each entry above is a single reading taken at the timestamp shown. Where the tool was
-        between two readings was not measured and is not recorded — the borrower is not tracked.
+        Each entry above is a single reading taken at the timestamp shown. While a tool is out,
+        the Tool Track Android app records the borrower's phone location on the loan — when the
+        phone moves, and at least every 10 minutes. Where the tool was between two readings is not
+        recorded.
       </p>
     </div>
   )

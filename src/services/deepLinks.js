@@ -21,7 +21,13 @@
  * off-native, so the ordinary web callback is exactly as it was.
  */
 
-import { completeAuthFromUrl } from './localAuth'
+import {
+  OAUTH_ERROR_EVENT,
+  clearPendingOAuth,
+  completeAuthFromUrl,
+  hasPendingOAuth,
+  oauthErrorFrom,
+} from './localAuth'
 import { APP_SCHEME, NATIVE_REDIRECT_URL, isNative } from '../utils/native'
 
 export { APP_SCHEME, NATIVE_REDIRECT_URL }
@@ -41,7 +47,16 @@ export function registerDeepLinks() {
     // Only this app's own scheme. Anything else was not addressed to us.
     if (!url || !url.startsWith(`${APP_SCHEME}://`)) return
 
+    // Read before the exchange: a Google sign-in in progress is what makes a
+    // failed callback worth reporting on screen.
+    const googlePending = hasPendingOAuth()
     const signedIn = await completeAuthFromUrl(url)
+
+    if (!signedIn && googlePending) {
+      clearPendingOAuth()
+      const message = oauthErrorFrom(url) ?? 'Google sign-in could not be completed. Please try again.'
+      window.dispatchEvent(new CustomEvent(OAUTH_ERROR_EVENT, { detail: message }))
+    }
 
     // The browser that handled the link is still on screen over the app. Close
     // it so the person lands back where they started, session or not.

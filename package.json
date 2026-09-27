@@ -13,7 +13,7 @@
     "serve:dist": "node scripts/serve-static.mjs 4180",
     "verify": "node scripts/verify.mjs",
     "verify:browser": "node scripts/verify-browser.mjs",
-    "verify:sql": "node scripts/sql/verify-policies.mjs"
+    "verify:sql": "node scripts/sql/verify-policies.mjs && node scripts/sql/verify-loan-tracking.mjs"
   },
   "dependencies": {
     "@capacitor/app": "^8.1.1",

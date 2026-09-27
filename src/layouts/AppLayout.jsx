@@ -16,6 +16,7 @@ import { AppearanceToggleButton } from '../components/AccountSettings'
 import ErrorBoundary from '../components/ErrorBoundary'
 import Avatar from '../components/Avatar'
 import TobiChat from '../components/TobiChat'
+import { NotificationCenterButton } from '../components/NotificationCenter'
 import { PageLoading } from '../components/ui'
 
 import {
@@ -832,36 +833,6 @@ export default function AppLayout() {
             `settings.labName` and `labLocation` are still set and read on the
             Settings page and on the printed QR labels. */}
 
-        {/* TOBI, pinned under the navigation: the assistant is not one more
-            place in the list but something reached from anywhere, so it gets
-            its own tile — the amber orb, its name, and what it is for. Opens
-            the full page; lit while it is open. */}
-        <div className="shrink-0 px-3 pb-4 pt-2">
-          <NavLink
-            to="/tobi"
-            state={{ from: location.pathname }}
-            className={({ isActive }) =>
-              cx(
-                'group flex items-center gap-3 rounded-2xl p-2.5 ring-1 transition-colors',
-                isActive
-                  ? 'bg-white/[0.10] ring-amberline-400/40'
-                  : 'bg-white/[0.04] ring-white/10 hover:bg-white/[0.08]',
-              )
-            }
-          >
-            <span className="liquid-glass-orb grid h-10 w-10 shrink-0 place-items-center rounded-full transition-transform group-hover:scale-105">
-              <Sparkles className="h-5 w-5" />
-            </span>
-            <span className="min-w-0">
-              <span className="block text-[14px] font-extrabold" style={{ color: 'rgb(var(--rail-text))' }}>
-                Ask TOBI
-              </span>
-              <span className="block truncate text-[11.5px]" style={{ color: 'rgb(var(--rail-muted))' }}>
-                Your Tool Track assistant
-              </span>
-            </span>
-          </NavLink>
-        </div>
       </aside>
       )}
 
@@ -872,7 +843,7 @@ export default function AppLayout() {
       {!bare && drawerOpen && hasDrawer && (
         <div className="fixed inset-0 z-50 lg:hidden">
           <div
-            className="absolute inset-0 bg-navy-950/70 animate-fade-in"
+            className="absolute inset-0 animate-fade-in lg:bg-navy-950/70"
             onClick={() => setDrawerOpen(false)}
             aria-hidden="true"
           />
@@ -1058,6 +1029,9 @@ export default function AppLayout() {
             >
               <Sparkles className="h-5 w-5" />
             </button>
+
+            {/* The notification centre: the system update and announcements. */}
+            <NotificationCenterButton className={cx(notice && 'hidden')} />
 
             {(isInstructor || isAdmin || isStudent) && (
               <NavLink

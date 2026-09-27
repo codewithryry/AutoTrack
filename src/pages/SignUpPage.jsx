@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   Check,
@@ -16,6 +16,7 @@ import {
 import {
   AuthBrandLockup,
 } from '../components/AuthBranding'
+import { GoogleSignInButton, useGoogleSignIn } from '../components/GoogleSignIn'
 import Mascot from '../components/Mascot'
 import { SelectField, Spinner, TextField } from '../components/ui'
 import { useToast } from '../context/ToastContext'
@@ -93,6 +94,27 @@ export default function SignUpPage() {
   const [errors, setErrors] = useState({})
   const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+
+  const google = useGoogleSignIn()
+
+  useEffect(() => {
+    if (google.error) setErrors({ form: google.error })
+  }, [google.error])
+
+  /**
+   * A new account through Google, with the role chosen above. It only applies
+   * if this Google account has no Tool Track profile yet — an existing one
+   * keeps its role — and the database accepts only Student, or Instructor
+   * waiting for approval.
+   */
+  const continueWithGoogle = () => {
+    if (!userService.SIGNUP_ROLES.includes(form.role)) {
+      setErrors({ role: 'Please choose whether you are a student or an instructor.' })
+      return
+    }
+    setErrors({})
+    google.start('signup', form.role)
+  }
 
   const isStudent = form.role === ROLE.STUDENT
   const isOther = form.department === OTHER_OPTION
@@ -503,12 +525,27 @@ export default function SignUpPage() {
               className="btn btn-lg !mt-6 h-12 w-full rounded-2xl text-[15px] font-bold shadow-lift
                          transition-transform active:scale-[0.98]"
               style={{ background: 'rgb(var(--hero-cta-bg))', color: 'rgb(var(--hero-cta-fg))' }}
-              disabled={submitting}
+              disabled={submitting || google.connecting}
             >
               {submitting ? <Spinner /> : <UserPlus className="h-4 w-4" />}
               {submitting ? 'Creating account…' : 'Create account'}
             </button>
           </form>
+
+          <div className="my-4 flex items-center gap-3">
+            <span className="h-px flex-1" style={{ background: 'rgb(var(--border))' }} />
+            <span className="subtle text-[12px] font-semibold">or</span>
+            <span className="h-px flex-1" style={{ background: 'rgb(var(--border))' }} />
+          </div>
+          <GoogleSignInButton
+            onClick={continueWithGoogle}
+            connecting={google.connecting}
+            disabled={submitting}
+          />
+          <p className="subtle mt-2 text-center text-[11.5px] leading-relaxed">
+            Signs up as {form.role === ROLE.INSTRUCTOR ? 'an Instructor' : 'a Student'}, the role
+            chosen above.
+          </p>
 
           {/* ------------------------ existing account ------------------------ */}
           <div className="my-6 flex items-center gap-3">

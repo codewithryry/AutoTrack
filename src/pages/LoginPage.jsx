@@ -16,6 +16,7 @@ import {
   BRAND_NAME,
   InstitutionLogos,
 } from '../components/AuthBranding'
+import { GoogleSignInButton, useGoogleSignIn } from '../components/GoogleSignIn'
 import Mascot from '../components/Mascot'
 import { Spinner } from '../components/ui'
 import { useApp } from '../context/AppContext'
@@ -75,7 +76,11 @@ export default function LoginPage() {
   // Arriving from sign-up carries a confirmation and the new email address.
   const [notice, setNotice] = useState(location.state?.notice ?? null)
   const [form, setForm] = useState({ email: location.state?.email ?? '', password: '' })
-  const [errors, setErrors] = useState({})
+  // A Google sign-in that came back cancelled or failed says so here.
+  const [errors, setErrors] = useState(
+    location.state?.oauthError ? { form: location.state.oauthError } : {},
+  )
+  const google = useGoogleSignIn()
   const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [resetting, setResetting] = useState(false)
@@ -88,6 +93,20 @@ export default function LoginPage() {
       setNotice(null)
     }
   }, [sessionError])
+
+  useEffect(() => {
+    if (google.error) {
+      setErrors({ form: google.error })
+      setNotice(null)
+    }
+  }, [google.error])
+
+  /** An existing account only — a new one starts from Create an account. */
+  const continueWithGoogle = () => {
+    setErrors({})
+    if (sessionError) clearSessionError()
+    google.start('signin')
+  }
 
   const setField = (field) => (event) => {
     setForm((f) => ({ ...f, [field]: event.target.value }))
@@ -333,12 +352,23 @@ export default function LoginPage() {
               className="btn btn-lg !mt-6 h-12 w-full rounded-2xl text-[15px] font-bold shadow-lift
                          transition-transform active:scale-[0.98]"
               style={{ background: 'rgb(var(--hero-cta-bg))', color: 'rgb(var(--hero-cta-fg))' }}
-              disabled={submitting}
+              disabled={submitting || google.connecting}
             >
               {submitting ? <Spinner /> : <LogIn className="h-4 w-4" />}
               {submitting ? 'Signing in…' : 'Sign in'}
             </button>
           </form>
+
+          <div className="my-4 flex items-center gap-3">
+            <span className="h-px flex-1" style={{ background: 'rgb(var(--border))' }} />
+            <span className="subtle text-[12px] font-semibold">or</span>
+            <span className="h-px flex-1" style={{ background: 'rgb(var(--border))' }} />
+          </div>
+          <GoogleSignInButton
+            onClick={continueWithGoogle}
+            connecting={google.connecting}
+            disabled={submitting}
+          />
 
           {/* ------------------------ new account ------------------------ */}
           <div className="my-6 flex items-center gap-3">

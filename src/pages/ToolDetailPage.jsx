@@ -40,6 +40,7 @@ import { useMediaQuery, useTool, useToolMaintenance, useToolTransactions } from 
 import * as maintenanceService from '../services/maintenance'
 import * as toolService from '../services/tools'
 import * as txnService from '../services/transactions'
+import * as loanTracking from '../services/loanTracking'
 import { AutoLocationNotice, LocationTrail, useAutoLocation } from '../components/LocationCapture'
 import { canReturnTransaction, isStaff, isStudent, PERM } from '../utils/permissions'
 import { MAINTENANCE_TYPES, TOOL_STATUS, SERIAL_CRITICAL_CATEGORIES } from '../utils/constants'
@@ -1300,11 +1301,32 @@ const RECHECK_MS = 10 * 60 * 1000
 
 function ToolLocationCheckpoint({ loan, actor, onRecorded }) {
   const toast = useToast()
-  const { location: reading, failure: locationFailure, ensure: ensureLocation } = useAutoLocation()
+  // In the Android app, while the loan tracker is recording this loan, opening
+  // the page adds nothing: the tracker already takes a fix on its own cadence,
+  // and a second GPS reading here would only duplicate its checkpoint.
+  const tracked = useMemo(
+    () =>
+      loanTracking.getSnapshot().status === loanTracking.TRACKING_STATE.TRACKING &&
+      loanTracking.getSnapshot().loans.includes(loan.id),
+    [loan.id],
+  )
+  const { location: reading, failure: locationFailure, ensure: ensureLocation } = useAutoLocation({
+    enabled: !tracked,
+  })
   const [saving, setSaving] = useState(false)
   // The loan as last written, so a checkpoint appears in the list immediately
   // rather than waiting for the next refresh of the tool's transactions.
   const [record, setRecord] = useState(loan)
+  // Checkpoints the tracker writes arrive through realtime as a newer copy of
+  // the same loan; take it whenever it carries at least as many points.
+  useEffect(() => {
+    setRecord((current) =>
+      current?.id !== loan.id ||
+      txnService.checkpointsOf(loan).length >= txnService.checkpointsOf(current).length
+        ? loan
+        : current,
+    )
+  }, [loan])
 
   const checkpoints = txnService.checkpointsOf(record)
 
@@ -1372,9 +1394,9 @@ function ToolLocationCheckpoint({ loan, actor, onRecorded }) {
       description="Record where this tool is right now, while it is still out"
     >
       <p className="muted text-xs leading-relaxed">
-        One reading is recorded when you open this page while the tool is out with you, and each is
-        stored on its own with the time it was taken — the app does not follow the tool or you in
-        between.
+        {tracked
+          ? "Your phone's location is being recorded on this loan automatically — when you move, and at least every 10 minutes — until the tool is returned. Each reading is stored with the time it was taken."
+          : 'One reading is recorded when you open this page while the tool is out with you, and each is stored on its own with the time it was taken — the app does not follow the tool or you in between.'}
       </p>
 
       {/* The tool's own last recorded whereabouts on this loan, resolved from
@@ -1389,7 +1411,7 @@ function ToolLocationCheckpoint({ loan, actor, onRecorded }) {
             <p className="mono mt-1.5 text-xs font-bold">{formatCoords(known)}</p>
             <p className="subtle mt-1 text-[11px] leading-relaxed">
               {known.source === 'checkpoint'
-                ? `Confirmed by ${known.capturedByName ?? record.userName} while the tool was out`
+                ? `Recorded by ${known.capturedByName ?? record.userName}'s phone while the tool was out`
                 : `Where ${record.userName} collected the tool`}
               {' · '}
               {/* Both, and in this order: how long ago answers "is this still

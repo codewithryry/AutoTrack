@@ -432,7 +432,15 @@ jobs:
 
           # Asked for by this app, in its own manifest, each backed by a feature:
           #   ACCESS_FINE_LOCATION / ACCESS_COARSE_LOCATION
-          #     one-shot fix recorded with a borrow or return (utils/geo.js)
+          #     one-shot fix recorded with a borrow or return (utils/geo.js),
+          #     and the loan tracker's checkpoints while a tool is borrowed
+          #   FOREGROUND_SERVICE / FOREGROUND_SERVICE_LOCATION
+          #     the loan tracker, tracking/LoanTrackingService.java: a
+          #     foreground service of type `location` that runs only while the
+          #     account has a borrowed tool. Android 9+ needs FOREGROUND_SERVICE
+          #     to start one; Android 14+ also needs the permission matching its
+          #     type. Normal protection level — no prompt; the service's own
+          #     notification is what the person sees.
           #   CAMERA          the QR scanner
           #   INTERNET        Supabase, and the app's own /api/* endpoints
           #   POST_NOTIFICATIONS  Android 13+ runtime permission for the alerts
@@ -465,6 +473,8 @@ jobs:
           android.permission.ACCESS_FINE_LOCATION
           android.permission.ACCESS_NETWORK_STATE
           android.permission.CAMERA
+          android.permission.FOREGROUND_SERVICE
+          android.permission.FOREGROUND_SERVICE_LOCATION
           android.permission.INTERNET
           android.permission.POST_NOTIFICATIONS
           ph.edu.autolab.tooltrack.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION

@@ -396,7 +396,14 @@ export async function getDirect(name, id) {
   // sign-in — that is the whole reason this function exists — so the cache is
   // read under the record's own id, which for the signed-in user's profile *is*
   // their account id, the key the cache is partitioned by.
-  if (isOffline()) return cachedRecordFor(name, id, id)
+  if (isOffline()) {
+    const cached = await cachedRecordFor(name, id, id)
+    // Offline mode is a device setting that outlives sign-out, so an account
+    // signing in on this device for the first time has no copy here yet. With
+    // a real connection that is not an answer: ask the server, as the web
+    // does. Only a device that is actually offline stops at the cache.
+    if (cached || (typeof navigator !== 'undefined' && navigator.onLine === false)) return cached
+  }
   try {
     const { data, error } = await supabase
       .from(tableFor(name))

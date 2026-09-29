@@ -101,6 +101,13 @@ export async function loadProfile(sessionUser) {
   // Registration writes the profile with the account, so a session without one
   // is a fault rather than a step somebody has to finish by hand.
   if (!document) {
+    // No connection and no copy on this device is not a problem with the
+    // account, so it is not reported as one.
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      throw new AuthError(
+        'Your laboratory profile is not stored on this device yet. Connect to the internet once to finish signing in.',
+      )
+    }
     throw new AuthError('This account cannot be used right now. Contact the laboratory administrator.')
   }
 
